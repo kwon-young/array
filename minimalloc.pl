@@ -251,10 +251,6 @@ section_inference(Buffer, C, X, X2) :-
    section_u(X, U),
    section_total(X, Total),
    section_floor(X, Floor),
-   % (  Floor == 66560, Total == 155648
-   % -> gtrace
-   % ;  true
-   % ),
    (  ord_memberchk(Buffer, U)
    -> ord_del_element(U, Buffer, U1),
       maplist(update_buffer(Buffer), U1),
@@ -264,7 +260,6 @@ section_inference(Buffer, C, X, X2) :-
 
       b_size(Buffer, Size),
       Total1 is Total - Size,
-      % format("total ~p~n", [Total2]),
       b_height(Buffer, Height),
       Floor1 is max(Floor, Height),
       set_section_fields([u(U1), s(S1), total(Total1), floor(Floor1)], X, X1)
@@ -274,7 +269,6 @@ section_inference(Buffer, C, X, X2) :-
 
    b_offset(Buffer, Offset),
    % monotonic floor
-   % Floor2 is max(Floor1, Offset),
    MonotonicFloor is max(Floor1, Offset),
 
    maplist(b_offset, U, Offsets),
@@ -286,13 +280,6 @@ section_inference(Buffer, C, X, X2) :-
    Floor2 is max(MonotonicFloor, EffectiveHeight),
    set_floor_of_section(Floor2, X1, X2),
 
-   % format("floor ~p~n", [Floor2]),
-
-   % (  max(Offset, Floor2) + Total2 > C
-   % -> gtrace
-   % ;  true
-   % ),
-   % max(EffectiveHeight, (Floor2 + Total1)) =< C.
    Floor2 + Total1 =< C.
 
 
