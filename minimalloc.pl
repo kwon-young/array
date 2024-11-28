@@ -157,23 +157,16 @@ b_sort([Key-Op | Keys], Order, B1, B2) :-
    ;  b_sort(Keys, Order, B1, B2)
    ).
 
-preordering_heuristics([
-   [width-(>), area-(>), total-(>), id-(<)],
-   [total-(>), area-(>), width-(>), id-(<)],
-   [total-(>), width-(>), area-(>), id-(<)]
-]).
-
-round_robin(Hs, C, Partitions) :-
-   round_robin_(Hs, Hs, C, Partitions, 33554432).
+round_robin(Hs, C, Limit, Partitions) :-
+   round_robin_(Hs, Hs, C, Partitions, Limit).
 
 round_robin_([], Hs, C, Partitions, NodeLimit) :-
-   preordering_heuristics(Hs),
    NodeLimit2 is NodeLimit*2,
    round_robin_(Hs, Hs, C, Partitions, NodeLimit2).
 round_robin_([Heuristic | Heuristics], Hs, C, Partitions, NodeLimit) :-
    % format("~p, ~p~n", [NodeLimit, Heuristic]),
    call_with_inference_limit(
-      maplist(partition_inference(C, Heuristic), Partitions),
+      time(maplist(partition_inference(C, Heuristic), Partitions)),
       NodeLimit,
       Result),
    (  Result == inference_limit_exceeded
@@ -264,6 +257,7 @@ section_inference(Buffer, C, X, X2) :-
    % ),
    (  ord_memberchk(Buffer, U)
    -> ord_del_element(U, Buffer, U1),
+      maplist(update_buffer(Buffer), U1),
 
       section_s(X, S),
       ord_add_element(S, Buffer, S1),
@@ -274,10 +268,9 @@ section_inference(Buffer, C, X, X2) :-
       b_height(Buffer, Height),
       Floor1 is max(Floor, Height),
       set_section_fields([u(U1), s(S1), total(Total1), floor(Floor1)], X, X1)
-   ;  U1 = U, X1 = X, Total1 = Total, Floor1 = Floor
+   ;  X1 = X, Total1 = Total, Floor1 = Floor
    ),
 
-   maplist(update_buffer(Buffer), U1),
 
    b_offset(Buffer, Offset),
    % monotonic floor
@@ -329,8 +322,9 @@ minimalloc(Buffers, Options) :-
       [total-(>), area-(>), width-(>), id-(<)],
       [total-(>), width-(>), area-(>), id-(<)]
    ]),
+   option(limit(Limit), Options, 33554432),
    buffers_partitions(Buffers, Partitions),
-   round_robin(Hs, C, Partitions),
+   round_robin(Hs, C, Limit, Partitions),
    (  option(validate(true), Options)
    -> time(validate_solution(Buffers))
    ;  true
@@ -366,10 +360,12 @@ write_solutions(Buffers, File) :-
 :- begin_tests(minimalloc).
 :- set_test_options([format(log)]).
 
+challenging("C.1048576.csv", [
+   limit(586870912), check("C.1048576.out.csv"),
+   heuristics([[total-(>), area-(>), width-(>), id-(<)]])], 40).
 challenging("K.1048576.csv", [check("K.1048576.out.csv")], 10).
 challenging("A.1048576.csv", [head(140)], 10).
 challenging("B.1048576.csv", [head(150)], 10).
-challenging("C.1048576.csv", [head(170)], 10).
 challenging("D.1048576.csv", [head(190)], 10).
 challenging("E.1048576.csv", [head(180)], 10).
 challenging("F.1048576.csv", [head(250)], 10).
@@ -380,7 +376,7 @@ challenging("J.1048576.csv", [head(280)], 10).
 
 test(challenging, [forall(challenging(File, Options, Timeout))]) :-
    rows(File, Buffers, Options),
-   call_with_time_limit(Timeout, time(minimalloc(Buffers))),
+   call_with_time_limit(Timeout, time(minimalloc(Buffers, Options))),
    (  option(check(Out), Options)
    -> csv_read_file(Out, [_Header | Rows]),
       maplist(arg(5), Rows, TrueOffsets),
