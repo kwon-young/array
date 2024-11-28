@@ -354,3 +354,10 @@ b_row(B, row(Id, Low, Upper, Size, Offset)) :-
 write_solutions(Buffers, File) :-
    maplist(b_row, Buffers, Rows),
    csv_write_file(File, [row(id, lower, upper, size, offset) | Rows]).
+
+:- begin_tests(minimalloc).
+
+test("K.1048576.csv", [timeout(10)]) :-
+   main("K.1048576.csv", 1048576, "K.1048576.out.csv").
+
+:- end_tests(minimalloc).
