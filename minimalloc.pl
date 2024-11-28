@@ -163,22 +163,21 @@ preordering_heuristics([
    [total-(>), width-(>), area-(>), id-(<)]
 ]).
 
-round_robin(C, Partitions) :-
-   preordering_heuristics(Hs),
-   round_robin_(Hs, C, Partitions, 33554432).
+round_robin(Hs, C, Partitions) :-
+   round_robin_(Hs, Hs, C, Partitions, 33554432).
 
-round_robin_([], C, Partitions, NodeLimit) :-
+round_robin_([], Hs, C, Partitions, NodeLimit) :-
    preordering_heuristics(Hs),
    NodeLimit2 is NodeLimit*2,
-   round_robin_(Hs, C, Partitions, NodeLimit2).
-round_robin_([Heuristic | Heuristics], C, Partitions, NodeLimit) :-
+   round_robin_(Hs, Hs, C, Partitions, NodeLimit2).
+round_robin_([Heuristic | Heuristics], Hs, C, Partitions, NodeLimit) :-
    % format("~p, ~p~n", [NodeLimit, Heuristic]),
    call_with_inference_limit(
       maplist(partition_inference(C, Heuristic), Partitions),
       NodeLimit,
       Result),
    (  Result == inference_limit_exceeded
-   -> round_robin_(Heuristics, C, Partitions, NodeLimit)
+   -> round_robin_(Heuristics, Hs, C, Partitions, NodeLimit)
    ;  true
    ).
 
@@ -321,10 +320,6 @@ update_buffer(B1, B2) :-
    ;  true
    ).
 
-main(In, C, Out) :-
-   rows(In, Buffers),
-   minimalloc(Buffers).
-
 minimalloc(Buffers) :-
    minimalloc(Buffers, []).
 minimalloc(Buffers, Options) :-
@@ -335,7 +330,7 @@ minimalloc(Buffers, Options) :-
       [total-(>), width-(>), area-(>), id-(<)]
    ]),
    buffers_partitions(Buffers, Partitions),
-   round_robin(C, Partitions),
+   round_robin(Hs, C, Partitions),
    (  option(validate(true), Options)
    -> time(validate_solution(Buffers))
    ;  true
