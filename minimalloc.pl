@@ -13,10 +13,16 @@
 :- record section(floor, total, start, end, u, s).
 
 rows(In, Buffers) :-
-   csv_read_file(In, [_Header | Rows]),
+   rows(In, Buffers, []).
+
+rows(In, Buffers, Options) :-
+   csv_read_file(In, [_Header | AllRows]),
+   (  option(head(Head), Options)
+   -> length(Rows, Head),
+      append(Rows, _, AllRows)
+   ;  Rows = AllRows
+   ),
    maplist(row_b, Rows, Buffers).
-   % length(First, 120),
-   % append(First, _, Buffers).
 
 row_b(Row, B) :-
    row_id(Row, Id),
@@ -317,16 +323,23 @@ update_buffer(B1, B2) :-
 
 main(In, C, Out) :-
    rows(In, Buffers),
+   minimalloc(Buffers).
+
+minimalloc(Buffers) :-
+   minimalloc(Buffers, []).
+minimalloc(Buffers, Options) :-
+   option(capacity(C), Options, 1048576),
+   option(heuristics(Hs), Options, [
+      [width-(>), area-(>), total-(>), id-(<)],
+      [total-(>), area-(>), width-(>), id-(<)],
+      [total-(>), width-(>), area-(>), id-(<)]
+   ]),
    buffers_partitions(Buffers, Partitions),
-   % open("/tmp/trace_10.txt", write, Stream),
-   % with_output_to(Stream, 
-   %    time(round_robin(C, Partitions))
-   % ),
-   % close(Stream),
-   time(round_robin(C, Partitions)),
-   % print_solution(Buffers),
-   % time(validate_solution(Buffers)),
-   write_solutions(Buffers, Out).
+   round_robin(C, Partitions),
+   (  option(validate(true), Options)
+   -> time(validate_solution(Buffers))
+   ;  true
+   ).
 
 b_rect(Buffer, rect(Low, Width, Offset, Size)) :-
    b_low(Buffer, Low),
@@ -356,8 +369,29 @@ write_solutions(Buffers, File) :-
    csv_write_file(File, [row(id, lower, upper, size, offset) | Rows]).
 
 :- begin_tests(minimalloc).
+:- set_test_options([format(log)]).
 
-test("K.1048576.csv", [timeout(10)]) :-
-   main("K.1048576.csv", 1048576, "K.1048576.out.csv").
+challenging("K.1048576.csv", [check("K.1048576.out.csv")], 10).
+challenging("A.1048576.csv", [head(140)], 10).
+challenging("B.1048576.csv", [head(150)], 10).
+challenging("C.1048576.csv", [head(170)], 10).
+challenging("D.1048576.csv", [head(190)], 10).
+challenging("E.1048576.csv", [head(180)], 10).
+challenging("F.1048576.csv", [head(250)], 10).
+challenging("G.1048576.csv", [head(270)], 10).
+challenging("H.1048576.csv", [head(280)], 10).
+challenging("I.1048576.csv", [head(280)], 10).
+challenging("J.1048576.csv", [head(280)], 10).
+
+test(challenging, [forall(challenging(File, Options, Timeout))]) :-
+   rows(File, Buffers, Options),
+   call_with_time_limit(Timeout, time(minimalloc(Buffers))),
+   (  option(check(Out), Options)
+   -> csv_read_file(Out, [_Header | Rows]),
+      maplist(arg(5), Rows, TrueOffsets),
+      maplist(b_offset, Buffers, PredOffsets),
+      TrueOffsets == PredOffsets
+   ;  true
+   ).
 
 :- end_tests(minimalloc).
