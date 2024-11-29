@@ -225,28 +225,6 @@ inference(Buffers, Sections, C, Heuristic, MinOffset, MinIndex) :-
    ;  maplist(partition_inference(C, Heuristic), Partitions)
    ).
 
-verify_section(X) :-
-   section_floor(X, Floor),
-   section_total(X, Total),
-   section_u(X, U),
-   maplist(b_size, U, Sizes),
-   sum_list(Sizes, Total1),
-   (  Total == Total1
-   -> true
-   ;  gtrace
-   ),
-   % section_s(X, S),
-   % maplist(b_height, S, Heights),
-   % (  Heights = []
-   % -> Floor1 = 0
-   % ;  max_list(Heights, Floor1)
-   % ),
-   % (  Floor \== 0
-   % -> true
-   % ;  gtrace
-   % ),
-   format("check ~p ~p~n", [Floor, Total]).
-   
 section_inference(Buffer, C, X, X2) :-
    section_u(X, U),
    section_total(X, Total),
@@ -262,10 +240,9 @@ section_inference(Buffer, C, X, X2) :-
       Total1 is Total - Size,
       b_height(Buffer, Height),
       Floor1 is max(Floor, Height),
-      set_section_fields([u(U1), s(S1), total(Total1), floor(Floor1)], X, X1)
+      set_section_fields([u(U1), s(S1), total(Total1)], X, X1)
    ;  X1 = X, Total1 = Total, Floor1 = Floor
    ),
-
 
    b_offset(Buffer, Offset),
    % monotonic floor
