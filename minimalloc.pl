@@ -43,10 +43,10 @@ inside(Point, B) :-
 
 buffers_cuts(Buffers, Cuts) :-
    maplist(b_low, Buffers, Low),
-   % min_list(Low, MinLow),
+   min_list(Low, MinLow),
    maplist(b_upper, Buffers, Upper),
-   append(Low, Upper, LowUpper),
-   % LowUpper = [MinLow | Upper],
+   % append(Low, Upper, LowUpper),
+   LowUpper = [MinLow | Upper],
    list_to_ord_set(LowUpper, Cuts).
 
 overlap(L1, U1, B2) :-
