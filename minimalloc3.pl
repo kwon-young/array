@@ -7,15 +7,12 @@
 :- record wat(width, area, total, id).
 :- record taw(total, area, width, id).
 :- record twa(total, width, area, id).
-:- record section(id, floor, total, offsets).
+:- record section(id, floor, total, buffers, end).
 
 #define(offset, 1).
+#define(id, 3).
 #define(static, 4).
 #define(height, 5).
-
-ord_replace(Set1, X1, Set2, X2) :-
-   ord_del_element(Set1, X1, Set),
-   ord_add_element(Set, X2, Set2).
 
 rows(File, Rows, Options) :-
    csv_read_file(File, [_Header | AllRows]),
@@ -52,12 +49,13 @@ allocate_buffer(C, Buffer, Overlaps, Sections, SectionList) :-
    buffer_id(Buffer, Id),
    arg(Id, Sections, BufferSections),
    arg(Id, Overlaps, BufferOverlaps),
-   maplist(update_buffer(Height, Sections), BufferOverlaps),
+   foldl(update_buffer(Height, Sections), BufferOverlaps, [], AffectedSections),
    buffer_size(Buffer, Size),
-   maplist(update_section_floor(Offset-Id, Height, Size), BufferSections),
+   maplist(update_section_floor(Buffer, Height, Size), BufferSections),
+   maplist(update_section, AffectedSections),
    maplist(check_section(C, Offset), SectionList).
 
-update_buffer(Height1, Sections, B2) :-
+update_buffer(Height1, Sections, B2, Sections1, Sections2) :-
    buffer_offset(B2, Offset2),
    (  integer(Offset2), Offset2 < Height1
    -> buffer_size(B2, Size2),
@@ -66,12 +64,17 @@ update_buffer(Height1, Sections, B2) :-
       set_height_of_buffer(NewHeight2, B2),
       buffer_id(B2, Id),
       arg(Id, Sections, B2Sections),
-      maplist(update_section(Offset2-Id, Height1-Id), B2Sections)
-   ;  true
+      ord_union(Sections1, B2Sections, Sections2)
+      % maplist(section_id, Sections2, SectionIds),
+      % (  memberchk(215, SectionIds)
+      % -> gtrace
+      % ;  true
+      % )
+   ;  Sections2 = Sections1
    ).
    
-update_section_floor(Offset, Height, Size, Section) :-
-   % (  section_id(Section, 10)
+update_section_floor(Buffer, Height, Size, Section) :-
+   % (  section_id(Section, 38)
    % -> gtrace
    % ;  true
    % ),
@@ -79,40 +82,50 @@ update_section_floor(Offset, Height, Size, Section) :-
    Total2 is Total1 - Size,
    set_floor_of_section(Height, Section),
    set_total_of_section(Total2, Section),
-   section_offsets(Section, Offsets1),
-   % (  ord_memberchk(Offset, Offsets1)
-   % -> true
-   % ;  gtrace
-   % ),
-   ord_del_element(Offsets1, Offset, Offsets2),
-   set_offsets_of_section(Offsets2, Section).
+   section_buffers(Section, Buffers1),
+   ord_del_element(Buffers1, Buffer, Buffers2),
+   set_buffers_of_section(Buffers2, Section).
 
-update_section(Old, New, Section) :-
-   section_offsets(Section, Offsets1),
-   ord_replace(Offsets1, Old, Offsets2, New),
-   set_offsets_of_section(Offsets2, Section).
+effective_height([], Min, Min).
+effective_height([Buffer | Buffers], Min1, Min3) :-
+   buffer_offset(Buffer, Offset),
+   buffer_id(Buffer, Id),
+   format("min: ~p, ~p~n", [Id, Offset]),
+   Min2 is min(Min1, Offset),
+   effective_height(Buffers, Min2, Min3).
 
-check_section(C, Offset, Section) :-
-   % (  section_id(Section, 10)
+update_section(Section) :-
+   section_floor(Section, Floor1),
+   section_buffers(Section, Buffers),
+   % (  section_id(Section, 215)
    % -> gtrace
    % ;  true
    % ),
-   section_floor(Section, Floor1),
-   (  section_offsets(Section, [MinOffset-_ | _]),
-      Floor1 < MinOffset
-   -> set_floor_of_section(MinOffset, Section)
+   section_id(Section, Id),
+   format("affected section: ~p~n", [Id]),
+   effective_height(Buffers, inf, MinOffset),
+   (  MinOffset \== inf, Floor1 < MinOffset
+   -> format("update floor: ~p,~p~n", [Id, MinOffset]),
+      set_floor_of_section(MinOffset, Section)
    ;  true
-   ),
+   ).
+
+check_section(C, Offset, Section) :-
    section_floor(Section, Floor),
    section_total(Section, Total),
-   % section_id(Section, Id),
-   % format("section ~p,~p~n", [Id, Floor]),
-   max(Offset, Floor) + Total =< C.
+   section_id(Section, Id),
+   format("section: ~p,~p,~p~n", [Id, Floor, Offset]),
+   max(Offset, Floor) + Total =< C,
+   !.
+% check_section(C, Offset, Section) :-
+%    gtrace,
+%    print_term([C, Offset, Section], []).
 
-update_cuts(Buffer, AllCuts, ZeroCuts) :-
+update_cuts(Buffer, AllCuts, SortedCuts) :-
    buffer_id(Buffer, Id),
    arg(Id, AllCuts, Cuts),
-   foldl(update_cut, Cuts, ZeroCuts, []).
+   foldl(update_cut, Cuts, ZeroCuts, []),
+   sort(ZeroCuts, SortedCuts).
 
 update_cut(Cut, ZeroCuts1, ZeroCuts2) :-
    Cut = cut(N, V),
@@ -123,17 +136,24 @@ update_cut(Cut, ZeroCuts1, ZeroCuts2) :-
    ;  ZeroCuts1 = ZeroCuts2
    ).
 
-inference(C, Overlaps, Sections, SectionList, Cuts, Buffers0, MinOffset, MinIndex) :-
+inference(Heuristic, C, Overlaps, Sections, SectionList, Cuts, Buffers0, MinOffset, MinIndex) :-
    min_height(Buffers0, MinHeight),
    sort(Buffers0, Sorted),
+   maplist([B]>>(
+      buffer_id(B, Id),
+      buffer_offset(B, Offset),
+      format("sorted: ~p,~p~n", [Id, Offset])), Sorted),
    select(Buffer, Sorted, Buffers1),
+   nb_getval(inference, Count),
+   Count1 is Count + 1,
+   nb_setval(inference, Count1),
    buffer_offset(Buffer, Offset),
-   % buffer_id(Buffer, Id),
-   % (  Id == 47; Id == 198
+   buffer_id(Buffer, Id),
+   format("~p,~p,~p~n", [Id, Offset,Count1]),
+   % (  Count1 == 7
    % -> gtrace
    % ;  true
    % ),
-   % format("~p,~p~n", [Id, Offset]),
    Offset >= MinOffset,
    buffer_index(Buffer, Index),
    (  Offset == MinOffset
@@ -146,23 +166,44 @@ inference(C, Overlaps, Sections, SectionList, Cuts, Buffers0, MinOffset, MinInde
    (  Buffers1 == []
    -> true
    ;  ZeroCuts == []
-   -> inference(C, Overlaps, Sections, SectionList, Cuts, Buffers1, Offset, Index)
+   -> inference(Heuristic, C, Overlaps, Sections, SectionList, Cuts, Buffers1, Offset, Index)
    ;  append(ZeroCuts, [inf], ZeroCutsInf),
-      foldl(partition_inference(C, Overlaps, Sections, SectionList, Cuts), ZeroCutsInf, Buffers1, [])
+      foldl(partition_inference(Heuristic, C, Overlaps, Sections, Cuts),
+            ZeroCutsInf, SectionList-Buffers1, []-[])
    ).
 
-left(Cut, Buffer) :-
+left(Cut, Buffer), default_buffer(Buffer) =>
    buffer_end(Buffer, End),
    End =< Cut.
+left(Cut, Section), default_section(Section) =>
+   section_end(Section, End),
+   End =< Cut.
 
-partition_inference(C, Overlaps, Sections, SectionList, Cuts, ZeroCut,
-                    Buffers, RightBuffers) :-
+partition_inference(Heuristic, C, Overlaps, Sections, Cuts, ZeroCut,
+                    SectionList-Buffers, RightSections-RightBuffers) :-
    partition(left(ZeroCut), Buffers, LeftBuffers, RightBuffers),
-   sort(#static, @>=, LeftBuffers, SortedBuffers),
-   length(SortedBuffers, N),
-   numlist(1, N, Index),
-   maplist(set_index_of_buffer, Index, SortedBuffers),
-   once(inference(C, Overlaps, Sections, SectionList, Cuts, SortedBuffers, 0, 0)).
+   partition(left(ZeroCut), SectionList, LeftSections, RightSections),
+
+   (  LeftBuffers = []
+   -> true
+   ;  length(LeftBuffers, N),
+      maplist(buffer_heuristic(N, Heuristic, Sections), LeftBuffers),
+
+      % sort(#id, @=<, LeftBuffers, IdSortBuffers),
+      % maplist([B]>>(buffer_id(B, Id), buffer_static(B, twa(Total, _, _, _)),
+      %               format("prestatic: ~p,~p~n", [Id, Total])), LeftBuffers),
+
+      sort(#static, @>=, LeftBuffers, SortedBuffers),
+
+      maplist([B]>>(
+         buffer_id(B, Id),
+         buffer_static(B, twa(Total, _, _, _)),
+         format("static: ~p,~p~n", [Id, Total])), SortedBuffers),
+
+      numlist(1, N, Index),
+      maplist(set_index_of_buffer, Index, SortedBuffers),
+      once(inference(Heuristic, C, Overlaps, Sections, LeftSections, Cuts, SortedBuffers, 0, 0))
+   ).
 
 buffers_overlaps(Buffers, Compound) :-
    list_to_ord_set(Buffers, Set),
@@ -173,11 +214,13 @@ buffer_overlaps(Buffers, Buffer, Overlaps) :-
    include(overlap(Buffer), Buffers, AllOverlaps),
    ord_del_element(AllOverlaps, Buffer, Overlaps).
 
-buffers_cuts(Buffers, Compound) :-
+buffers_cuts(Buffers, Compound, ZeroCuts) :-
    maplist(buffer_end, Buffers, Ends),
    sort(Ends, SortedEnds),
    once(append(Cuts, [_], SortedEnds)),
    maplist(buffers_cut(Buffers), Cuts, PPairs),
+   maplist([V, Pairs, cut(N, V)]>>length(Pairs, N), Cuts, PPairs, CutList),
+   convlist([cut(0, V), V]>>true, CutList, ZeroCuts),
    append(PPairs, Pairs),
    keysort(Pairs, SortedPairs),
    group_pairs_by_key(SortedPairs, Groups),
@@ -190,7 +233,8 @@ buffers_cut(Buffers, Cut, Pairs) :-
    include(inside(Cut), Buffers, Inside),
    length(Inside, N),
    maplist(buffer_id, Inside, Ids),
-   maplist({N, Cut}/[Id, Id-cut(N, Cut)]>>true, Ids, Pairs).
+   Compound = cut(N, Cut),
+   maplist({Compound}/[Id, Id-Compound]>>true, Ids, Pairs).
 
 inside(Point, B) :-
    buffer_start(B, L),
@@ -208,19 +252,17 @@ buffers_sections(Buffers, SectionList, Compound) :-
 
 buffers_section(Buffers, Id, Section, End, Start, End) :-
    include(overlap(Start, End), Buffers, SectionBuffers),
-   maplist([B, Offset-Id]>>(buffer_offset(B, Offset), buffer_id(B, Id)),
-           SectionBuffers, Offsets),
+   list_to_ord_set(SectionBuffers, Set),
    maplist(buffer_size, SectionBuffers, Sizes),
    sum_list(Sizes, Total),
-   make_section([id(Id), floor(0), total(Total), offsets(Offsets)], Section).
+   make_section([id(Id), floor(0), total(Total), buffers(Set), end(End)], Section).
 
 buffer_sections(SectionList, Buffer, Sections) :-
    include(buffer_section(Buffer), SectionList, Sections).
 
 buffer_section(Buffer, Section) :-
-   buffer_id(Buffer, Id),
-   section_offsets(Section, Offsets),
-   memberchk(_-Id, Offsets).
+   section_buffers(Section, Buffers),
+   memberchk(Buffer, Buffers).
 
 overlap(L1, U1, B2) :-
    buffer_start(B2, L2),
@@ -234,11 +276,13 @@ overlap(B1, B2) :-
    buffer_end(B2, U2),
    U1 > L2, L1 < U2.
 
-heuristic(C, Overlaps, Sections, SectionList, Cuts, Buffers, Offsets, Heuristic) :-
+heuristic(C, Overlaps, Sections, SectionList, Cuts, ZeroCuts, Buffers, Offsets, Heuristic) :-
    debug(heuristic, "heuristic called with ~p~n", [Heuristic]),
-   length(Buffers, N),
-   maplist(buffer_heuristic(N, Heuristic, Sections), Buffers),
-   time(partition_inference(C, Overlaps, Sections, SectionList, Cuts, inf, Buffers, [])),
+   % length(Buffers, N),
+   % maplist(buffer_heuristic(N, Heuristic, Sections), Buffers),
+   append(ZeroCuts, [inf], ZeroCutsInf),
+   foldl(partition_inference(Heuristic, C, Overlaps, Sections, Cuts),
+         ZeroCutsInf, SectionList-Buffers, []-[]),
    maplist(buffer_allocated_offset, Buffers, Offsets),
    debug(heuristic, "heuristic ~p: found solution ~p~n", [Heuristic, Offsets]).
 
@@ -255,21 +299,22 @@ buffer_heuristic(N, Heuristic, Sections, Buffer) :-
    maplist(section_total, BufferSections, Totals),
    max_list(Totals, Total),
    call(Goal, [id(Id1), width(Width), area(Area), total(Total)], Static),
-   buffer_static(Buffer, Static).
+   set_static_of_buffer(Static, Buffer).
 
 minimalloc(Rows, Options) :-
+   nb_setval(inference, 0),
    length(Rows, N),
    numlist(1, N, Ids),
    maplist(row_buffer, Ids, Rows, Buffers),
    buffers_overlaps(Buffers, Overlaps),
-   buffers_cuts(Buffers, Cuts),
+   buffers_cuts(Buffers, Cuts, ZeroCuts),
    buffers_sections(Buffers, SectionList, Sections),
    option(capacity(C), Options, 1048576),
    option(heuristics(Heuristics), Options, [wat, taw, twa]),
+   Goal = heuristic(C, Overlaps, Sections, SectionList, Cuts, ZeroCuts, Buffers, Offsets),
    (  Heuristics = [Heuristic]
-   -> heuristic(C, Overlaps, Sections, SectionList, Cuts, Buffers, Offsets, Heuristic)
-   ;  Heuristic = heuristic(C, Overlaps, Sections, SectionList, Cuts, Buffers, Offsets),
-      maplist({Heuristic}/[H, call(Heuristic, H)]>>true, Heuristics, Goals),
+   -> call(Goal, Heuristic)
+   ;  maplist({Goal}/[H, call(Goal, H)]>>true, Heuristics, Goals),
       first_solution(Offsets, Goals, [])
    ),
    maplist(row_offset, Rows, Offsets).
