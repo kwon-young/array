@@ -2,6 +2,7 @@
 :- use_module(library(heaps)).
 :- use_module(library(macros)).
 :- use_module(library(csv)).
+:- use_module(library(yall)).
 
 :- record buffer(offset, index, id, static, height, size, start, end).
 :- record wat(width, area, total, id).
@@ -13,6 +14,9 @@
 #define(id, 3).
 #define(static, 4).
 #define(height, 5).
+
+rows(File, Rows) :-
+   rows(File, Rows, []).
 
 rows(File, Rows, Options) :-
    csv_read_file(File, [_Header | AllRows]),
@@ -89,8 +93,8 @@ update_section_floor(Buffer, Height, Size, Section) :-
 effective_height([], Min, Min).
 effective_height([Buffer | Buffers], Min1, Min3) :-
    buffer_offset(Buffer, Offset),
-   buffer_id(Buffer, Id),
-   format("min: ~p, ~p~n", [Id, Offset]),
+   % buffer_id(Buffer, Id),
+   % format("min: ~p, ~p~n", [Id, Offset]),
    Min2 is min(Min1, Offset),
    effective_height(Buffers, Min2, Min3).
 
@@ -101,20 +105,20 @@ update_section(Section) :-
    % -> gtrace
    % ;  true
    % ),
-   section_id(Section, Id),
-   format("affected section: ~p~n", [Id]),
+   % section_id(Section, Id),
+   % format("affected section: ~p~n", [Id]),
    effective_height(Buffers, inf, MinOffset),
    (  MinOffset \== inf, Floor1 < MinOffset
-   -> format("update floor: ~p,~p~n", [Id, MinOffset]),
-      set_floor_of_section(MinOffset, Section)
+   -> set_floor_of_section(MinOffset, Section)
+      % format("update floor: ~p,~p~n", [Id, MinOffset]),
    ;  true
    ).
 
 check_section(C, Offset, Section) :-
    section_floor(Section, Floor),
    section_total(Section, Total),
-   section_id(Section, Id),
-   format("section: ~p,~p,~p~n", [Id, Floor, Offset]),
+   % section_id(Section, Id),
+   % format("section: ~p,~p,~p~n", [Id, Floor, Offset]),
    max(Offset, Floor) + Total =< C,
    !.
 % check_section(C, Offset, Section) :-
@@ -139,17 +143,17 @@ update_cut(Cut, ZeroCuts1, ZeroCuts2) :-
 inference(Heuristic, C, Overlaps, Sections, SectionList, Cuts, Buffers0, MinOffset, MinIndex) :-
    min_height(Buffers0, MinHeight),
    sort(Buffers0, Sorted),
-   maplist([B]>>(
-      buffer_id(B, Id),
-      buffer_offset(B, Offset),
-      format("sorted: ~p,~p~n", [Id, Offset])), Sorted),
+   % maplist([B]>>(
+   %    buffer_id(B, Id),
+   %    buffer_offset(B, Offset),
+   %    format("sorted: ~p,~p~n", [Id, Offset])), Sorted),
    select(Buffer, Sorted, Buffers1),
-   nb_getval(inference, Count),
-   Count1 is Count + 1,
-   nb_setval(inference, Count1),
+   % nb_getval(inference, Count),
+   % Count1 is Count + 1,
+   % nb_setval(inference, Count1),
    buffer_offset(Buffer, Offset),
-   buffer_id(Buffer, Id),
-   format("~p,~p,~p~n", [Id, Offset,Count1]),
+   % buffer_id(Buffer, Id),
+   % format("~p,~p,~p~n", [Id, Offset,Count1]),
    % (  Count1 == 7
    % -> gtrace
    % ;  true
@@ -195,10 +199,10 @@ partition_inference(Heuristic, C, Overlaps, Sections, Cuts, ZeroCut,
 
       sort(#static, @>=, LeftBuffers, SortedBuffers),
 
-      maplist([B]>>(
-         buffer_id(B, Id),
-         buffer_static(B, twa(Total, _, _, _)),
-         format("static: ~p,~p~n", [Id, Total])), SortedBuffers),
+      % maplist([B]>>(
+      %    buffer_id(B, Id),
+      %    buffer_static(B, twa(Total, _, _, _)),
+      %    format("static: ~p,~p~n", [Id, Total])), SortedBuffers),
 
       numlist(1, N, Index),
       maplist(set_index_of_buffer, Index, SortedBuffers),
@@ -301,8 +305,11 @@ buffer_heuristic(N, Heuristic, Sections, Buffer) :-
    call(Goal, [id(Id1), width(Width), area(Area), total(Total)], Static),
    set_static_of_buffer(Static, Buffer).
 
+minimalloc(Rows) :-
+   minimalloc(Rows, []).
+
 minimalloc(Rows, Options) :-
-   nb_setval(inference, 0),
+   % nb_setval(inference, 0),
    length(Rows, N),
    numlist(1, N, Ids),
    maplist(row_buffer, Ids, Rows, Buffers),
@@ -319,10 +326,31 @@ minimalloc(Rows, Options) :-
    ),
    maplist(row_offset, Rows, Offsets).
 
+challenging(File) :-
+   code_type(C, upper),
+   C =< 0'K,
+   append([C], `.1048576.csv`, File).
+
+benchmark :-
+   findall(File, challenging(File), Files),
+   maplist(rows, Files, Rows),
+   maplist([File, Row]>>(
+      call_time(minimalloc(Row), Time),
+      get_dict(wall, Time, Wall),
+      format("~s: ~3f seconds~n", [File, Wall])), Files, Rows).
+
+row_rect(row(_, Start, End, Size, Offset), rect(Start, Width, Offset, Size)) :-
+   Width is End - Start.
+
 :- begin_tests(minimalloc).
 
 test(input12) :-
    rows("input.12.out.csv", Rows, []),
    minimalloc(Rows, [capacity(12), heuristics([wat])]).
+
+test(challenging, [forall(challenging(File))]) :-
+   rows(File, Rows, []),
+   minimalloc(Rows, []).
+
 
 :- end_tests(minimalloc).
