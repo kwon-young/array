@@ -92,9 +92,9 @@ update_section_floor(Buffer, Height, Size, Section) :-
 
 effective_height([], Min, Min).
 effective_height([Buffer | Buffers], Min1, Min3) :-
-   buffer_offset(Buffer, Offset),
-   % buffer_id(Buffer, Id),
-   % format("min: ~p, ~p~n", [Id, Offset]),
+   % hottest code path, avoid extra predicate call
+   Buffer = buffer(Offset, _, _, _, _, _, _, _),
+   % buffer_offset(Buffer, Offset),
    Min2 is min(Min1, Offset),
    effective_height(Buffers, Min2, Min3).
 
@@ -309,7 +309,6 @@ minimalloc(Rows) :-
    minimalloc(Rows, []).
 
 minimalloc(Rows, Options) :-
-   % nb_setval(inference, 0),
    length(Rows, N),
    numlist(1, N, Ids),
    maplist(row_buffer, Ids, Rows, Buffers),
@@ -345,7 +344,7 @@ row_rect(row(_, Start, End, Size, Offset), rect(Start, Width, Offset, Size)) :-
 :- begin_tests(minimalloc).
 
 test(input12) :-
-   rows("input.12.out.csv", Rows, []),
+   rows("input.12.csv", Rows, []),
    minimalloc(Rows, [capacity(12), heuristics([wat])]).
 
 test(challenging, [forall(challenging(File))]) :-
