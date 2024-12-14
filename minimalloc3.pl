@@ -53,6 +53,7 @@ allocate_buffer(C, Buffer, Overlaps, Sections, SectionList) :-
    buffer_id(Buffer, Id),
    arg(Id, Sections, BufferSections),
    arg(Id, Overlaps, BufferOverlaps),
+   % could be done with a foldl, but hot code path, avoid meta predicate
    update_buffer(BufferOverlaps, Height, Sections, [], AffectedSections),
    buffer_size(Buffer, Size),
    maplist(update_section_floor(Buffer, Height, Size), BufferSections),
@@ -101,18 +102,13 @@ effective_height([Buffer | Buffers], Min1, Min3) :-
    effective_height(Buffers, Min2, Min3).
 
 update_section(Section) :-
-   section_floor(Section, Floor1),
-   section_buffers(Section, Buffers),
-   % (  section_id(Section, 215)
-   % -> gtrace
-   % ;  true
-   % ),
-   % section_id(Section, Id),
-   % format("affected section: ~p~n", [Id]),
+   % hot code path, avoid extra predicate call
+   Section = section(_, Floor1, _, Buffers, _),
+   % section_floor(Section, Floor1),
+   % section_buffers(Section, Buffers),
    effective_height(Buffers, inf, MinOffset),
    (  MinOffset \== inf, Floor1 < MinOffset
    -> set_floor_of_section(MinOffset, Section)
-      % format("update floor: ~p,~p~n", [Id, MinOffset]),
    ;  true
    ).
 
