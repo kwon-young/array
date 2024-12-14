@@ -57,7 +57,7 @@ allocate_buffer(C, Buffer, Overlaps, Sections, SectionList) :-
    update_buffer(BufferOverlaps, Height, Sections, [], AffectedSections),
    buffer_size(Buffer, Size),
    maplist(update_section_floor(Buffer, Height, Size), BufferSections),
-   maplist(update_section, AffectedSections),
+   update_sections(AffectedSections),
    maplist(check_section(C, Offset), SectionList).
 
 update_buffer([], _, _, Sections, Sections).
@@ -101,7 +101,8 @@ effective_height([Buffer | Buffers], Min1, Min3) :-
    Min2 is min(Min1, Offset),
    effective_height(Buffers, Min2, Min3).
 
-update_section(Section) :-
+update_sections([]).
+update_sections([Section | Sections]) :-
    % hot code path, avoid extra predicate call
    Section = section(_, Floor1, _, Buffers, _),
    % section_floor(Section, Floor1),
@@ -110,7 +111,8 @@ update_section(Section) :-
    (  MinOffset \== inf, Floor1 < MinOffset
    -> set_floor_of_section(MinOffset, Section)
    ;  true
-   ).
+   ),
+   update_sections(Sections).
 
 check_section(C, Offset, Section) :-
    section_floor(Section, Floor),
