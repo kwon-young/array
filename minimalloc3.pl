@@ -53,13 +53,14 @@ allocate_buffer(C, Buffer, Overlaps, Sections, SectionList) :-
    buffer_id(Buffer, Id),
    arg(Id, Sections, BufferSections),
    arg(Id, Overlaps, BufferOverlaps),
-   foldl(update_buffer(Height, Sections), BufferOverlaps, [], AffectedSections),
+   update_buffer(BufferOverlaps, Height, Sections, [], AffectedSections),
    buffer_size(Buffer, Size),
    maplist(update_section_floor(Buffer, Height, Size), BufferSections),
    maplist(update_section, AffectedSections),
    maplist(check_section(C, Offset), SectionList).
 
-update_buffer(Height1, Sections, B2, Sections1, Sections2) :-
+update_buffer([], _, _, Sections, Sections).
+update_buffer([B2 | Bs], Height1, Sections, Sections1, Sections3) :-
    buffer_offset(B2, Offset2),
    (  integer(Offset2), Offset2 < Height1
    -> buffer_size(B2, Size2),
@@ -75,7 +76,8 @@ update_buffer(Height1, Sections, B2, Sections1, Sections2) :-
       % ;  true
       % )
    ;  Sections2 = Sections1
-   ).
+   ),
+   update_buffer(Bs, Height1, Sections, Sections2, Sections3).
    
 update_section_floor(Buffer, Height, Size, Section) :-
    % (  section_id(Section, 38)
