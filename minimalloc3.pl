@@ -4,6 +4,7 @@
 :- use_module(library(csv)).
 :- use_module(library(yall)).
 
+:- record buffer(id, start, end, size, offset).
 :- record b(offset, index, id, static, height, size, start, end).
 :- record wat(width, area, total, id).
 :- record taw(total, area, width, id).
@@ -15,28 +16,30 @@
 #define(static, 4).
 #define(height, 5).
 
-rows(File, Rows) :-
-   rows(File, Rows, []).
+csv_read_buffers(File, Buffers) :-
+   csv_read_buffers(File, Buffers, []).
 
-rows(File, Rows, Options) :-
-   csv_read_file(File, [_Header | AllRows]),
-   maplist(add_offset, AllRows, RowsOffset),
+csv_read_buffers(File, Buffers, Options) :-
+   csv_read_file(File, [_Header | AllRows], [functor(buffer)]),
+   maplist(add_offset, AllRows, AllBuffers),
    (  option(head(Head), Options)
-   -> length(Rows, Head),
-      append(Rows, _, RowsOffset)
-   ;  Rows = RowsOffset
+   -> length(Buffers, Head),
+      append(Buffers, _, AllBuffers)
+   ;  Buffers = AllBuffers
    ).
 
-add_offset(row(Id, Start, End, Size), row(Id, Start, End, Size, _Offset)).
-add_offset(row(Id, Start, End, Size, Offset), row(Id, Start, End, Size, Offset)).
+add_offset(buffer(Id, Start, End, Size), buffer(Id, Start, End, Size, _Offset)).
+add_offset(buffer(Id, Start, End, Size, Offset), buffer(Id, Start, End, Size, Offset)).
 
-row_b(Id, row(_, Start, End, Size, _), B) :-
+buffer_b(Id, Buffer, B) :-
+   buffer_start(Buffer, Start),
+   buffer_end(Buffer, End),
+   buffer_size(Buffer, Size),
    make_b([id(Id), start(Start), end(End), size(Size), offset(0), height(Size),
            index(Id)], B).
 
 b_allocated_offset(B, Offset) :-
    b_offset(B, allocated(Offset)).
-row_offset(row(_, _, _, _, Offset), Offset).
 
 min_height(Bs, MinHeight) :-
    sort(#height, @<, Bs, [B | _]),
@@ -270,13 +273,13 @@ heuristic(C, Overlaps, Sections, SectionList, Cuts, ZeroCuts, Bs, Offsets, Heuri
    maplist(b_allocated_offset, Bs, Offsets),
    debug(heuristic, "heuristic ~p found solution~n", [Heuristic]).
 
-minimalloc(Rows) :-
-   minimalloc(Rows, []).
+minimalloc(Buffers) :-
+   minimalloc(Buffers, []).
 
-minimalloc(Rows, Options) :-
-   length(Rows, N),
+minimalloc(Buffers, Options) :-
+   length(Buffers, N),
    numlist(1, N, Ids),
-   maplist(row_b, Ids, Rows, Bs),
+   maplist(buffer_b, Ids, Buffers, Bs),
    bs_overlaps(Bs, Overlaps),
    bs_cuts(Bs, Cuts, ZeroCuts),
    bs_sections(Bs, SectionList, Sections),
@@ -288,7 +291,7 @@ minimalloc(Rows, Options) :-
    ;  maplist({Goal}/[H, call(Goal, H)]>>true, Heuristics, Goals),
       first_solution(Offsets, Goals, [])
    ),
-   maplist(row_offset, Rows, Offsets).
+   maplist(buffer_offset, Buffers, Offsets).
 
 challenging(File) :-
    code_type(C, upper),
@@ -297,24 +300,16 @@ challenging(File) :-
 
 benchmark :-
    findall(File, challenging(File), Files),
-   maplist(rows, Files, Rows),
-   maplist([File, Row]>>(
-      call_time(minimalloc(Row), Time),
+   maplist(csv_read_buffers, Files, BuffersList),
+   maplist([File, Buffers]>>(
+      call_time(minimalloc(Buffers), Time),
       get_dict(wall, Time, Wall),
-      format("~s: ~3f seconds~n", [File, Wall])), Files, Rows).
-
-row_rect(row(_, Start, End, Size, Offset), rect(Start, Width, Offset, Size)) :-
-   Width is End - Start.
+      format("~s: ~3f seconds~n", [File, Wall])), Files, BuffersList).
 
 :- begin_tests(minimalloc).
 
 test(input12) :-
-   rows("input.12.csv", Rows, []),
-   minimalloc(Rows, [capacity(12), heuristics([wat])]).
-
-test(challenging, [forall(challenging(File))]) :-
-   rows(File, Rows, []),
-   minimalloc(Rows, []).
-
+   csv_read_buffers("input.12.csv", Buffers, []),
+   minimalloc(Buffers, [capacity(12), heuristics([wat])]).
 
 :- end_tests(minimalloc).
