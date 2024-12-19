@@ -89,8 +89,10 @@ effective_height([B | Bs], Min1, Min3) :-
    % hottest code path, avoid extra predicate call
    B = b(Offset, _, _, _, _, _, _, _),
    % b_offset(B, Offset),
-   Min2 is min(Min1, Offset),
-   effective_height(Bs, Min2, Min3).
+   (  Offset < Min1
+   -> effective_height(Bs, Offset, Min3)
+   ;  effective_height(Bs, Min1, Min3)
+   ).
 
 update_sections([]).
 update_sections([Section | Sections]) :-
