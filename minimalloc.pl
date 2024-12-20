@@ -1,3 +1,46 @@
+/** <minimalloc> minimalloc static algorithm implementation
+ *
+ * @author   Kwon-Young Choi
+ * @version  1.0
+ * @see      Original minimalLoc paper: https://dl.acm.org/doi/pdf/10.1145/3623278.3624752
+ *
+ * This module implements the MinimalLoc static memory allocation algorithm,
+ * which finds non-overlapping memory positions for temporally overlapping buffers
+ * while respecting capacity constraints.
+ *
+ * Here is an example usage with the following buffers:
+ *
+ * ==
+ * Time →    0  3  6  9  12 15 18 21
+ * Buffer 1  ███
+ * Buffer 2     ██████
+ * Buffer 3  ████████████
+ * Buffer 4              ████████████
+ * Buffer 5  ████████████████████████
+ * ==
+ *
+ * ==
+   ?- Buffers = [
+        buffer(1, 0, 3, 4, _),
+        buffer(2, 3, 9, 4, _),
+        buffer(3, 0, 9, 4, _),
+        buffer(4, 9, 21, 4, _),
+        buffer(5, 0, 21, 4, _)
+    ],
+    minimalloc(Buffers, [capacity(12)]).
+   Buffers = [buffer(1, 0, 3, 4, 8), buffer(2, 3, 9, 4, 8), 
+          buffer(3, 0, 9, 4, 4), buffer(4, 9, 21, 4, 4), 
+          buffer(5, 0, 21, 4, 0)].
+ * ==
+ *    
+ * ==
+ *   Time  → 0  3  6  9  12 15 18 21
+ * Offset ↓0 #########5#############
+ *         4 ####3####~~~~~~4~~~~~~~
+ *         8 #1##~~2~~        
+ * ==
+ */
+
 :- module(minimalloc, [minimalloc/1, minimalloc/2]).
 
 :- use_module(library(record)).
