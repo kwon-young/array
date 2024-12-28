@@ -8,16 +8,7 @@
  * which finds non-overlapping memory positions for temporally overlapping buffers
  * while respecting capacity constraints.
  *
- * Here is an example usage with the following buffers:
- *
- * ==
- * Time →    0  3  6  9  12 15 18 21
- * Buffer 1  ███
- * Buffer 2     ██████
- * Buffer 3  ████████████
- * Buffer 4              ████████████
- * Buffer 5  ████████████████████████
- * ==
+ * Here is an example usage:
  *
  * ==
    ?- Buffers = [
@@ -32,12 +23,16 @@
           buffer(3, 0, 9, 4, 4), buffer(4, 9, 21, 4, 4), 
           buffer(5, 0, 21, 4, 0)].
  * ==
- *    
+ * 
  * ==
  *   Time  → 0  3  6  9  12 15 18 21
- * Offset ↓0 #########5#############
- *         4 ####3####~~~~~~4~~~~~~~
- *         8 #1##~~2~~        
+ * Offset ↓0 ┌─────────────────────┐
+ *           │         5           │
+ *         4 ├────────┬────────────┤
+ *           │   3    │      4     │
+ *         8 ├──┬─────┼────────────┘
+ *           │1 │  2  │
+ *        12 └──┴─────┘
  * ==
  */
 
@@ -621,17 +616,17 @@ update_cut(Cut, ZeroCuts1, ZeroCuts2) :-
  * benchmarking
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
 
-challenging_heuristic("A.1048576.out.csv", twa).
-challenging_heuristic("B.1048576.out.csv", taw).
-challenging_heuristic("C.1048576.out.csv", taw).
-challenging_heuristic("D.1048576.out.csv", wat).
-challenging_heuristic("E.1048576.out.csv", twa).
-challenging_heuristic("F.1048576.out.csv", twa).
-challenging_heuristic("G.1048576.out.csv", twa).
-challenging_heuristic("H.1048576.out.csv", taw).
-challenging_heuristic("I.1048576.out.csv", twa).
-challenging_heuristic("J.1048576.out.csv", twa).
-challenging_heuristic("K.1048576.csv", twa).
+challenging_heuristic("benchmarks/A.1048576.out.csv", twa).
+challenging_heuristic("benchmarks/B.1048576.out.csv", taw).
+challenging_heuristic("benchmarks/C.1048576.out.csv", taw).
+challenging_heuristic("benchmarks/D.1048576.out.csv", wat).
+challenging_heuristic("benchmarks/E.1048576.out.csv", twa).
+challenging_heuristic("benchmarks/F.1048576.out.csv", twa).
+challenging_heuristic("benchmarks/G.1048576.out.csv", twa).
+challenging_heuristic("benchmarks/H.1048576.out.csv", taw).
+challenging_heuristic("benchmarks/I.1048576.out.csv", twa).
+challenging_heuristic("benchmarks/J.1048576.out.csv", twa).
+challenging_heuristic("benchmarks/K.1048576.csv", twa).
 
 benchmarks :-
    findall(File-H, challenging_heuristic(File, H), FilesHeuristics),
@@ -648,7 +643,7 @@ benchmark(File-Heuristic, Wall) :-
 :- begin_tests(minimalloc).
 
 test(input12) :-
-   csv_read_buffers("input.12.csv", Buffers, []),
+   csv_read_buffers("benchmarks/input.12.csv", Buffers, []),
    minimalloc(Buffers, [capacity(12), heuristics([wat])]).
 
 :- end_tests(minimalloc).
