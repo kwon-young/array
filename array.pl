@@ -3,23 +3,10 @@
    op(600, fy, ::),
    op(600, xfy, ::)
 ]).
-:- reexport(library(type_ndarray), except([ndarray/1])).
 
 :- use_module(library(clpfd), except([sum/3])).
 :- use_module(library(dcg/basics)).
 :- use_module(library(dcg/high_order)).
-:- use_module(library(type_ndarray)).
-:- use_module(library(arithmetic_types)).
-
-:- arithmetic_function([]/1).         % block indexing and slicing
-:- arithmetic_function([]/2).
-:- arithmetic_function('.+'/2).       % numeric array addition
-:- arithmetic_function('.-'/1).       % numeric array unary minus
-:- arithmetic_function('.-'/2).       % numeric array subtraction
-:- arithmetic_function('.*'/2).       % numeric array product
-:- arithmetic_function('./'/2).       % numeric array division
-:- arithmetic_function('.**'/2).      % numeric array power
-:- arithmetic_function('.@'/2).       % dot product of two vectors/matrices
 
 product(L, Rel, Product) :-
    foldl([A, B, A*B]>>(true), L, 1, Expr),
@@ -119,102 +106,6 @@ mutable(Data, Options) :-
    ;  true
    ).
 
-M.contiguous() := Contiguous :-
-   Contiguous = contiguous(M.shape, M.strides, Contiguous).
-M.size() := Size :-
-   shape_size(M.shape, Size).
-M.to(Device) := Dict :-
-   Dict = M.put([device: Device]).
-M.arg_offset(Offset) := I :-
-   I is (Offset mod M.buffersize) + M.offset + 1.
-M.arg_(Offset) := V :-
-   arg(M.arg_offset(Offset), M.data(), V).
-M.data() := Data :-
-   Data = M.data,
-   (  var(Data), get_attr(Data, array, Goal)
-   -> del_attr(Data, array),
-      call(Goal)
-   ;  true
-   ).
-
-M.default() := Dict :-
-   Dict = M.default([]).
-M.default(Options) := Dict :-
-   dict_options(M, MOptions),
-   merge_options(Options, MOptions, Merged),
-   option(dtype(DType), Merged, float),
-   option(device(Device), Merged, is),
-   option(offset(Offset), Merged, 0),
-   Dict = array{dtype:DType, device:Device, offset:Offset}.
-
-M.empty(Shape) := Dict :-
-   Dict = M.empty(Shape, []).
-M.empty(Shape, Options) := Dict :-
-   same_length(Shape, Strides),
-   shape_size(Shape, Size),
-   contiguous(Shape, Strides, 1),
-   Size1 is Size + 1,
-   put_attr(Data, array, (
-      compound_name_arity(Data, data, Size1),
-      mutable(Data, Options)
-   )),
-   Dict = M.default().put([
-      data: Data, shape: Shape, strides: Strides, buffersize: Size]).
-
-M.from_list(List) := Dict :-
-   Dict = M.from_list(List, []).
-M.from_list(List, Options) := Dict :-
-   DType = M.get(dtype, _),
-   M1 = M.default(),
-   shape_type_list(M1.device, Shape, DType, List),
-   same_length(Shape, Strides),
-   shape_size(Shape, Size),
-   contiguous(Shape, Strides, 1),
-   put_attr(Data, array, (
-      flatten(List, ListData),
-      append(ListData, [_], ListData1),
-      compound_name_arguments(Data, data, ListData1),
-      mutable(Data, Options)
-   )),
-   Dict = M1.put([
-      data: Data, shape: Shape, strides: Strides, dtype: DType, buffersize: Size]).
-
-M.ones(Shape) := Dict :-
-   Dict = M.ones(Shape, []).
-M.ones(Shape, Options) := Dict :-
-   same_length(Shape, Strides),
-   maplist(=(0), Strides),
-   M1 = M.empty([1], Options).put([shape=Shape, strides=Strides]),
-   put_attr(Data, array, ones_kernel(M1, Data)),
-   Dict = M1.put([
-      data: Data, shape: Shape, strides: Strides, buffersize: 1]).
-ones_kernel(M1, Data) :-
-   M1.data() = Data,
-   maparray([1]>>true, M1.iter()).
-
-M.arange(Start, Stop, Step, Options) := Dict :-
-   Size is ceil((Stop - Start) / Step),
-   M1 = M.empty([Size], Options),
-   Dict = M1.put([data=Data]),
-   put_attr(Data, array, arange_kernel(Start, Step, Dict, M1.data)).
-arange_kernel(Start, Step, Dict, Data) :-
-   Dict.data() = Data,
-   foldlarray({Step}/[Prev, Prev, Next]>>(Next is Prev + Step), Dict.iter(), Start, _).
-
-M.to_list() := R :-
-   shape_list(M.shape, R),
-   flatten(R, List),
-   foldl([V, Iter, Next]>>reset(Iter, V, Next), List, M.iter(), _).
-
-M.iter() := Cont :-
-   Cont = M.iter_value().
-M.iter_value() := Cont :-
-   Cont = iterate_value(M).
-M.iter_offset() := Cont :-
-   Cont = iterate_offset(M).
-M.iter_index() := Cont :-
-   Cont = iterate_index(M).
-
 foldlarray(Goal, Iter, Start, End) :-
    reset(Iter, V, Next),
    (  Next == 0
@@ -265,10 +156,10 @@ iterate_offset(Array) :-
 iterate_offset([], [], Offset) :-
    shift(Offset).
 iterate_offset([Dim | Shape], [Stride | Strides], C) :-
-   (  Dim == 0
+   (  Dim #= 0
    -> true
    ;  iterate_offset(Shape, Strides, C),
-      Dim1 is Dim - 1,
+      Dim1 #= Dim - 1,
       C1 is C + Stride,
       iterate_offset([Dim1 | Shape], [Stride | Strides], C1)
    ).
@@ -282,160 +173,291 @@ iterate_value(Goal, Array) :-
       iterate_value(Cont, Array)
    ).
 
-% M.is_input() := IsInput :-
-%    (  M.data = from_list(_)
-%    -> IsInput = true
-%    ;  IsInput = false
-%    ).
-% M.input() := Input :-
-%    from_list(Input) = M.data.
-%
-% M.reshape(Shape) := Dict :-
-%    Shape ins 0..sup,
-%    shape_size(Shape, M.size),
-%    (  compatible_shape_strides(M.shape, M.strides, Shape, Strides)
-%    -> Data = view(M), M1 = M
-%    ;  Data = +(M),
-%       same_length(Shape, Strides),
-%       contiguous(Shape, Strides, 1),
-%       product(Shape, #=, BufferSize),
-%       M1 = M.put([offset=0, buffer=_, buffersize=BufferSize])
-%    ),
-%    Dict = M1.put([data=Data, shape=Shape, strides=Strides]).
-%
-% M.t() := Dict :-
-%    reverse(M.shape, Shape),
-%    reverse(M.strides, Strides),
-%    Dict = M.put([data=view(M), shape=Shape, strides=Strides]).
-%
-% take_nth0(Index, Value, L, R) :-
-%    nth0(Index, L, Value, R).
-% put_nth0(Index, Value, R, L) :-
-%    nth0(Index, L, Value, R).
-%
-% replace_nth0(Index, Old, New) -->
-%    take_nth0(Index, Old),
-%    put_nth0(Index, New).
-%
-% swap(I1, I2) -->
-%    replace_nth0(I1, V1, V2),
-%    replace_nth0(I2, V2, V1).
-%
-% M.swapaxes(Axis1, Axis2) := Dict :-
-%    swap(Axis1, Axis2, M.shape, Shape),
-%    swap(Axis1, Axis2, M.strides, Strides),
-%    Dict = M.put([data=view(M), shape=Shape, strides=Strides]).
-%
-% M.ndim() := NDim :-
-%    length(M.shape, NDim).
-%
-% M.index(Index) := Dict :-
-%    index_shape(Index, M.shape, Shape),
-%    index_shape_strides_offset(Index, M.shape, M.strides, Strides, NewOffset),
-%    Offset #= M.offset + NewOffset,
-%    shape_size(Shape, Size),
-%    Dict = M.put([data=index(M), shape=Shape, strides=Strides, offset=Offset, size=Size]).
-%
-% positive_index(Index, Dim, PositiveIndex) :-
-%    (  Index == sup
-%    -> I = Dim
-%    ;  I = Index
-%    ),
-%    I #>= Dim #<==> OverTheEnd,
-%    PositiveIndex #= max(min(I, Dim-1), -Dim) mod Dim + OverTheEnd.
-%
-% start_end_stop(Start:End:Step, Start1, End1, Step1) =>
-%    Start = Start1,
-%    End = End1,
-%    Step = Step1.
-% start_end_stop(:, Start1, End1, Step1) =>
-%    0 = Start1,
-%    sup = End1,
-%    1 = Step1.
-% start_end_stop(:End, Start1, End1, Step1) =>
-%    0 = Start1,
-%    End = End1,
-%    1 = Step1.
-% start_end_stop(:End:Step, Start1, End1, Step1) =>
-%    0 = Start1,
-%    End = End1,
-%    Step = Step1.
-% start_end_stop(Start:sup, Start1, End1, Step1) =>
-%    Start = Start1,
-%    sup = End1,
-%    1 = Step1.
-% start_end_stop(Start:End, Start1, End1, Step1) =>
-%    Start = Start1,
-%    End = End1,
-%    1 = Step1.
-% start_end_stop(::Step, Start1, End1, Step1) =>
-%    0 = Start1,
-%    sup = End1,
-%    Step = Step1.
-% start_end_stop(Start::Step, Start1, End1, Step1) =>
-%    Start = Start1,
-%    sup = End1,
-%    Step = Step1.
-% start_end_stop(List, Start, End, Step), is_list(List), list_step(List, Step) =>
-%    List = [Start | _],
-%    last(List, Last),
-%    End #= Last + Step.
-% start_end_stop(_, _, _, _) =>
-%    fail.
-%
-% list_step([H | T], Step) :-
-%    foldl({Step}/[A, B, A]>>(Step #= A - B), T, H, _).
-%
-% index_shape_strides_offset([], _Shape, Strides, NewStrides, Offset) =>
-%    NewStrides = Strides,
-%    Offset = 0.
-% index_shape_strides_offset(
-%       [I | Index], [Dim | Shape], [Stride | Strides], NewStrides, Offset
-%       ), start_end_stop(I, Start, _End, Step) =>
-%    NewStride #= Stride * Step,
-%    NewStrides = [NewStride | NewStridesRest],
-%    Step #< 0 #<==> Reverse,
-%    Offset #= Reverse * (Dim - 1) * Stride + Start * Stride + SubOffset,
-%    index_shape_strides_offset(Index, Shape, Strides, NewStridesRest, SubOffset).
-% index_shape_strides_offset(
-%       [I | Index], [Dim | Shape], [Stride | Strides], NewStrides, Offset),
-%       (var(I) ; integer(I)) =>
-%    I #>= -Dim,
-%    I #< Dim,
-%    positive_index(I, Dim, PositiveI),
-%    Offset #= PositiveI * Stride + SubOffset,
-%    index_shape_strides_offset(Index, Shape, Strides, NewStrides, SubOffset).
-% index_shape_strides_offset(
-%       [I | Index], [_Dim | Shape], [Stride | Strides], NewStrides, Offset),
-%       is_list(I) =>
-%    A @= array{dtype: int64}.from_list(I) * Stride,
-%    NewStrides = [A | NewStridesRest],
-%    index_shape_strides_offset(Index, Shape, Strides, NewStridesRest, Offset).
-% index_shape_strides_offset(_, _, _, _, _) =>
-%    fail.
-%
-% index_shape([], Shape, NewShape) =>
-%    NewShape = Shape.
-% index_shape([I | Index], [Dim | Shape], NewShape), start_end_stop(I, Start, End, Step) =>
-%    positive_index(Start, Dim, PositiveStart),
-%    positive_index(End, Dim, PositiveEnd),
-%    Size #= max(0, PositiveEnd - PositiveStart),
-%    NewDim #= Size div abs(Step) + min(1, Size mod abs(Step)),
-%    NewShape = [NewDim | NewShapeRest],
-%    index_shape(Index, Shape, NewShapeRest).
-% index_shape([I | Index], [Dim | Shape], NewShape), is_list(I) =>
-%    maplist(dim_index(Dim), I),
-%    length(I, NewDim),
-%    NewShape = [NewDim | NewShapeRest],
-%    index_shape(Index, Shape, NewShapeRest).
-% index_shape([I | Index], [Dim | Shape], NewShape) =>
-%    dim_index(Dim, I),
-%    index_shape(Index, Shape, NewShape).
-%
-% dim_index(Dim, I) :-
-%    I #>= -Dim,
-%    I #< Dim.
-%
+push(Data, Goal) :-
+   (  get_attr(Data, array, Goals)
+   -> true
+   ;  Goals = []
+   ),
+   put_attr(Data, array, [Goal | Goals]).
+
+take_nth0(Index, Value, L, R) :-
+   nth0(Index, L, Value, R).
+put_nth0(Index, Value, R, L) :-
+   nth0(Index, L, Value, R).
+
+replace_nth0(Index, Old, New) -->
+   take_nth0(Index, Old),
+   put_nth0(Index, New).
+
+swap(I1, I2) -->
+   replace_nth0(I1, V1, V2),
+   replace_nth0(I2, V2, V1).
+
+M.contiguous() := Contiguous :-
+   Contiguous = contiguous(M.shape, M.strides, Contiguous).
+M.size() := Size :-
+   shape_size(M.shape, Size).
+M.to(Device) := Dict :-
+   Dict = M.put([device: Device]).
+M.arg_offset(Offset) := I :-
+   I #= (Offset + M.offset) mod M.buffersize + 1.
+M.arg_(Offset) := V :-
+   arg(M.arg_offset(Offset), M.data(), V).
+M.setarg_(Offset, Value) := M :-
+   setarg(M.arg_offset(Offset), M.data(), Value).
+M.readonly() := M :-
+   Data = M.data(),
+   compound_name_arity(Data, data, Arity),
+   arg(Arity, Data, false).
+M.lazy() := M :-
+   (  M.lazy = true
+   -> true
+   ;  _ = M.data()
+   ).
+
+
+M.data() := Data :-
+   Data = M.data,
+   (  var(Data), get_attr(Data, array, Goals)
+   -> del_attr(Data, array),
+      reverse(Goals, RGoals),
+      maplist(call, RGoals)
+   ;  true
+   ).
+
+M.default() := Dict :-
+   Dict = M.default([]).
+M.default(Options) := Dict :-
+   dict_options(M, MOptions),
+   merge_options(Options, MOptions, Merged),
+   option(dtype(DType), Merged, float),
+   option(device(Device), Merged, is),
+   option(offset(Offset), Merged, 0),
+   option(lazy(Lazy), Merged, true),
+   Dict = array{dtype:DType, device:Device, offset:Offset, lazy: Lazy}.
+
+M.empty(Shape) := Dict :-
+   Dict = M.empty(Shape, []).
+M.empty(Shape, Options) := Dict :-
+   same_length(Shape, Strides),
+   shape_size(Shape, Size),
+   contiguous(Shape, Strides, 1),
+   Size1 is Size + 1,
+   push(Data, (
+      compound_name_arity(Data, data, Size1),
+      mutable(Data, Options)
+   )),
+   Dict = M.default().put([
+      data: Data, shape: Shape, strides: Strides, buffersize: Size]).lazy().
+
+M.from_list(List) := Dict :-
+   Dict = M.from_list(List, []).
+M.from_list(List, Options) := Dict :-
+   DType = M.get(dtype, _),
+   M1 = M.default(),
+   shape_type_list(M1.device, Shape, DType, List),
+   same_length(Shape, Strides),
+   shape_size(Shape, Size),
+   contiguous(Shape, Strides, 1),
+   push(Data, (
+      flatten(List, ListData),
+      append(ListData, [_], ListData1),
+      compound_name_arguments(Data, data, ListData1),
+      mutable(Data, Options)
+   )),
+   Dict = M1.put([
+      data: Data, shape: Shape, strides: Strides, dtype: DType, buffersize: Size]).lazy().
+
+M.ones(Shape) := Dict :-
+   Dict = M.ones(Shape, []).
+M.ones(Shape, Options) := Dict :-
+   Dict = M.full(Shape, 0, Options).
+
+M.full(Shape, FillValue) := Dict :-
+   Dict = M.full(Shape, FillValue, []).
+M.full(Shape, FillValue, Options) := Dict :-
+   same_length(Shape, Strides),
+   maplist(=(0), Strides),
+   Dict = M.empty([1], Options).put([shape=Shape, strides=Strides]),
+   push(Dict.data, maparray([FillValue]>>true, Dict.iter())),
+   _ = Dict.lazy().
+
+
+M.arange(Stop) := Dict :-
+   Dict = M.arange(Stop, []).
+M.arange(Stop, Options) := Dict :-
+   Dict = M.arange(0, Stop, Options).
+M.arange(Start, Stop, Options) := Dict :-
+   Dict = M.arange(Start, Stop, 1, Options).
+M.arange(Start, Stop, Step, Options) := Dict :-
+   Size is ceil((Stop - Start) / Step),
+   Dict = M.empty([Size], Options),
+   push(Dict.data, 
+        foldlarray({Step}/[Prev, Prev, Next]>>(Next is Prev + Step),
+                   Dict.iter(), Start, _)),
+   _ = Dict.lazy().
+
+M.eye(N) := Dict :-
+   Dict = M.full([N], 0).copy([mutable(true)]).put([shape=[N, N], strides=[-1, 1]]),
+   push(Dict.data, eye_kernel(Dict)),
+   _ = Dict.lazy().
+eye_kernel(Array) :-
+   Array = Array.setarg_(0, 1).readonly().
+
+M.to_list() := R :-
+   shape_list(M.shape, R),
+   flatten(R, List),
+   foldl([V, Iter, Next]>>reset(Iter, V, Next), List, M.iter(), _).
+
+M.iter() := Cont :-
+   Cont = M.iter_value().
+M.iter_value() := Cont :-
+   Cont = iterate_value(M).
+M.iter_offset() := Cont :-
+   Cont = iterate_offset(M).
+M.iter_index() := Cont :-
+   Cont = iterate_index(M).
+
+M.copy() := R :-
+   R = M.copy([]).
+M.copy(Options) := R :-
+   R = M.empty(M.shape, Options),
+   push(R.data, maparray(=, M.iter(), R.iter())),
+   _ = R.lazy().
+
+M.reshape(Shape) := Dict :-
+   Shape ins 0..sup,
+   shape_size(Shape, M.size()),
+   (  compatible_shape_strides(M.shape, M.strides, Shape, Strides)
+   -> Dict = M.put([shape=Shape, strides=Strides])
+   ;  Dict = M.copy().reshape(Shape)
+   ).
+
+
+M.t() := Dict :-
+   reverse(M.shape, Shape),
+   reverse(M.strides, Strides),
+   Dict = M.put([shape=Shape, strides=Strides]).
+
+M.swapaxes(Axis1, Axis2) := Dict :-
+   swap(Axis1, Axis2, M.shape, Shape),
+   swap(Axis1, Axis2, M.strides, Strides),
+   Dict = M.put([shape=Shape, strides=Strides]).
+
+M.ndim() := NDim :-
+   length(M.shape, NDim).
+
+M.index(Index) := Dict :-
+   index_shape(Index, M.shape, Shape),
+   index_shape_strides_offset(Index, M.shape, M.strides, Strides, NewOffset),
+   Offset #= M.offset + (NewOffset mod M.buffersize),
+   Dict = M.put([shape=Shape, strides=Strides, offset=Offset]).
+
+positive_index(Index, Dim, PositiveIndex) :-
+   (  Index == sup
+   -> I = Dim
+   ;  I = Index
+   ),
+   I #>= Dim #<==> OverTheEnd,
+   PositiveIndex #= max(min(I, Dim-1), -Dim) mod Dim + OverTheEnd.
+
+start_end_stop(Start:End:Step, Start1, End1, Step1) =>
+   Start = Start1,
+   End = End1,
+   Step = Step1.
+start_end_stop(:, Start1, End1, Step1) =>
+   0 = Start1,
+   sup = End1,
+   1 = Step1.
+start_end_stop(:End:Step, Start1, End1, Step1) =>
+   0 = Start1,
+   End = End1,
+   Step = Step1.
+start_end_stop(:End, Start1, End1, Step1) =>
+   0 = Start1,
+   End = End1,
+   1 = Step1.
+start_end_stop(Start:End, Start1, End1, Step1) =>
+   Start = Start1,
+   End = End1,
+   1 = Step1.
+start_end_stop(::Step, Start1, End1, Step1) =>
+   0 = Start1,
+   sup = End1,
+   Step = Step1.
+start_end_stop(Start::Step, Start1, End1, Step1) =>
+   Start = Start1,
+   sup = End1,
+   Step = Step1.
+start_end_stop(_, _, _, _) =>
+   fail.
+
+list_step([H | T], Step) :-
+   foldl({Step}/[A, B, A]>>(Step #= A - B), T, H, _).
+
+index_shape_strides_offset([], _Shape, Strides, NewStrides, Offset) =>
+   NewStrides = Strides,
+   Offset = 0.
+index_shape_strides_offset(
+      [I | Index], [Dim | Shape], [Stride | Strides], NewStrides, Offset
+      ), start_end_stop(I, Start, _End, Step) =>
+   NewStride #= Stride * Step,
+   NewStrides = [NewStride | NewStridesRest],
+   Step #< 0 #<==> Reverse,
+   Offset #= Reverse * Dim * Stride + Start * Stride + SubOffset,
+   index_shape_strides_offset(Index, Shape, Strides, NewStridesRest, SubOffset).
+index_shape_strides_offset(
+      [I | Index], [Dim | Shape], [Stride | Strides], NewStrides, Offset),
+      (var(I) ; integer(I)) =>
+   I #>= -Dim,
+   I #< Dim,
+   positive_index(I, Dim, PositiveI),
+   Offset #= PositiveI * Stride + SubOffset,
+   index_shape_strides_offset(Index, Shape, Strides, NewStrides, SubOffset).
+index_shape_strides_offset(_, _, _, _, _) =>
+   fail.
+
+index_shape([], Shape, NewShape) =>
+   NewShape = Shape.
+index_shape([I | Index], [Dim | Shape], NewShape), start_end_stop(I, Start, End, Step) =>
+   positive_index(Start, Dim, PositiveStart),
+   positive_index(End, Dim, PositiveEnd),
+   Size #= max(0, abs(PositiveEnd - PositiveStart)),
+   NewDim #= Size div abs(Step) + min(1, Size mod abs(Step)),
+   NewShape = [NewDim | NewShapeRest],
+   index_shape(Index, Shape, NewShapeRest).
+index_shape([I | Index], [Dim | Shape], NewShape), is_list(I) =>
+   maplist(dim_index(Dim), I),
+   length(I, NewDim),
+   NewShape = [NewDim | NewShapeRest],
+   index_shape(Index, Shape, NewShapeRest).
+index_shape([I | Index], [Dim | Shape], NewShape) =>
+   dim_index(Dim, I),
+   index_shape(Index, Shape, NewShape).
+
+dim_index(Dim, I) :-
+   I #>= -Dim,
+   I #< Dim.
+
+:- begin_tests(array).
+
+test('single element indexing') :-
+   X = array{}.arange(10),
+   2 = X.index([2]).to_list(),
+   8 = X.index([-2]).to_list(),
+   Y = X.reshape([2, 5]),
+   8 = Y.index([1, 3]).to_list(), 
+   9 = Y.index([1, -1]).to_list(),
+   [0, 1, 2, 3, 4] = Y.index([0]).to_list(),
+   2 = Y.index([0]).index([2]).to_list().
+
+test('slicing and striding') :-
+   X = array{lazy:false}.from_list([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
+   [1, 3, 5] = X.index([1:7:2]).to_list(),
+   [8, 9] = X.index([-2:10]).to_list(),
+   [7, 6, 5, 4] = X.index([-3:3: -1]).to_list().
+
+:- end_tests(array).
 % promote(X, Y), is_dict(X, array) =>
 %    X = Y.
 % promote(X, Y), integer(X) =>
