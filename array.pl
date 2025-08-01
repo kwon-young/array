@@ -105,6 +105,12 @@ dtype(is, false, Type) => Type = boolean.
 dtype(is, X, Type), integer(X) => Type = integer.
 dtype(is, X, Type), float(X) => Type = float.
 dtype(is, X, _Type), var(X) => true.
+dtype(is, _, _) => fail.
+
+shape_list([], _).
+shape_list([Dim | Shape], L) :-
+   length(L, Dim),
+   maplist(shape_list(Shape), L).
 
 mutable(Data, Options) :-
    compound_name_arity(Data, data, Size),
@@ -122,11 +128,12 @@ M.to(Device) := Dict :-
 M.arg_offset(Offset) := I :-
    I is (Offset mod M.buffersize) + M.offset + 1.
 M.arg_(Offset) := V :-
-   arg(M.arg_offset(Offset), M.data, V).
+   arg(M.arg_offset(Offset), M.data(), V).
 M.data() := Data :-
    Data = M.data,
-   (  var(Data)
-   -> call(M.delayed)
+   (  var(Data), get_attr(Data, array, Goal)
+   -> del_attr(Data, array),
+      call(Goal)
    ;  true
    ).
 
@@ -147,8 +154,10 @@ M.empty(Shape, Options) := Dict :-
    shape_size(Shape, Size),
    contiguous(Shape, Strides, 1),
    Size1 is Size + 1,
-   compound_name_arity(Data, data, Size1),
-   mutable(Data, Options),
+   put_attr(Data, array, (
+      compound_name_arity(Data, data, Size1),
+      mutable(Data, Options)
+   )),
    Dict = M.default().put([
       data: Data, shape: Shape, strides: Strides, buffersize: Size]).
 
@@ -159,12 +168,14 @@ M.from_list(List, Options) := Dict :-
    M1 = M.default(),
    shape_type_list(M1.device, Shape, DType, List),
    same_length(Shape, Strides),
+   shape_size(Shape, Size),
    contiguous(Shape, Strides, 1),
-   flatten(List, ListData),
-   length(ListData, Size),
-   append(ListData, [_], ListData1),
-   compound_name_arguments(Data, data, ListData1),
-   mutable(Data, Options),
+   put_attr(Data, array, (
+      flatten(List, ListData),
+      append(ListData, [_], ListData1),
+      compound_name_arguments(Data, data, ListData1),
+      mutable(Data, Options)
+   )),
    Dict = M1.put([
       data: Data, shape: Shape, strides: Strides, dtype: DType, buffersize: Size]).
 
@@ -173,15 +184,27 @@ M.ones(Shape) := Dict :-
 M.ones(Shape, Options) := Dict :-
    same_length(Shape, Strides),
    maplist(=(0), Strides),
-   Data = data(1, _),
-   mutable(Data, Options),
-   Dict = M.default().put([
+   M1 = M.empty([1], Options).put([shape=Shape, strides=Strides]),
+   put_attr(Data, array, ones_kernel(M1, Data)),
+   Dict = M1.put([
       data: Data, shape: Shape, strides: Strides, buffersize: 1]).
+ones_kernel(M1, Data) :-
+   M1.data() = Data,
+   maparray([1]>>true, M1.iter()).
 
 M.arange(Start, Stop, Step, Options) := Dict :-
    Size is ceil((Stop - Start) / Step),
-   Dict = M.empty([Size], Options),
+   M1 = M.empty([Size], Options),
+   Dict = M1.put([data=Data]),
+   put_attr(Data, array, arange_kernel(Start, Step, Dict, M1.data)).
+arange_kernel(Start, Step, Dict, Data) :-
+   Dict.data() = Data,
    foldlarray({Step}/[Prev, Prev, Next]>>(Next is Prev + Step), Dict.iter(), Start, _).
+
+M.to_list() := R :-
+   shape_list(M.shape, R),
+   flatten(R, List),
+   foldl([V, Iter, Next]>>reset(Iter, V, Next), List, M.iter(), _).
 
 M.iter() := Cont :-
    Cont = M.iter_value().
