@@ -1,12 +1,16 @@
 :- module(array, [
    op(600, fy, :),
    op(600, fy, ::),
-   op(600, xfy, ::)
+   op(600, xfy, ::),
+	op(100, yf,  [])    % support block notation
 ]).
 
+% :- use_module(library(arithmetic_types), []).
 :- use_module(library(clpfd), except([sum/3])).
 :- use_module(library(dcg/basics)).
 :- use_module(library(dcg/high_order)).
+
+% :- arithmetic_function([]/2).
 
 product(L, Rel, Product) :-
    foldl([A, B, A*B]>>(true), L, 1, Expr),
@@ -132,7 +136,7 @@ maparray(Goal, Iter1, Iter2, Iter3) :-
    reset(Iter1, V1, Next1),
    reset(Iter2, V2, Next2),
    reset(Iter3, V3, Next3),
-   (  Next1 == 0, Next2 == 0, Next3
+   (  Next1 == 0, Next2 == 0, Next3 == 0
    -> true
    ;  call(Goal, V1, V2, V3),
       maparray(Goal, Next1, Next2, Next3)
@@ -172,13 +176,26 @@ iterate_value(Goal, Array) :-
    ;  shift(Array.arg_(I)),
       iterate_value(Cont, Array)
    ).
+iterate_values(Arrays) :-
+   maplist([A, iterate_value(A)]>>true, Arrays, Iters),
+   iterate_values_(Iters).
+iterate_values_(Iters) :-
+   maplist(reset, Iters, Vs, Conts),
+   (  maplist(=(0), Conts)
+   -> true
+   ;  shift(Vs),
+      iterate_values_(Conts)
+   ).
 
-push(Data, Goal) :-
-   (  get_attr(Data, array, Goals)
+push(Lazy, Goal) :-
+   (  get_attr(Lazy, array, Goals)
    -> true
    ;  Goals = []
    ),
-   put_attr(Data, array, [Goal | Goals]).
+   (  var(Lazy)
+   -> put_attr(Lazy, array, [Goal | Goals])
+   ;  call(Goal)
+   ).
 
 take_nth0(Index, Value, L, R) :-
    nth0(Index, L, Value, R).
@@ -193,165 +210,15 @@ swap(I1, I2) -->
    replace_nth0(I1, V1, V2),
    replace_nth0(I2, V2, V1).
 
-M.contiguous() := Contiguous :-
-   Contiguous = contiguous(M.shape, M.strides, Contiguous).
-M.size() := Size :-
-   shape_size(M.shape, Size).
-M.to(Device) := Dict :-
-   Dict = M.put([device: Device]).
-M.arg_offset(Offset) := I :-
-   I #= (Offset + M.offset) mod M.buffersize + 1.
-M.arg_(Offset) := V :-
-   arg(M.arg_offset(Offset), M.data(), V).
-M.setarg_(Offset, Value) := M :-
-   setarg(M.arg_offset(Offset), M.data(), Value).
-M.readonly() := M :-
-   Data = M.data(),
-   compound_name_arity(Data, data, Arity),
-   arg(Arity, Data, false).
-M.lazy() := M :-
-   (  M.lazy = true
+advanced_index_iterate_value(M, Pre, Iter, Post) :-
+   reset(Iter, Is, Cont),
+   (  Cont == 0
    -> true
-   ;  _ = M.data()
+   ;  append([Pre, Is, Post], Index),
+      M1 = M.simple_index(Index),
+      iterate_value(M1),
+      advanced_index_iterate_value(M, Pre, Cont, Post)
    ).
-
-
-M.data() := Data :-
-   Data = M.data,
-   (  var(Data), get_attr(Data, array, Goals)
-   -> del_attr(Data, array),
-      reverse(Goals, RGoals),
-      maplist(call, RGoals)
-   ;  true
-   ).
-
-M.default() := Dict :-
-   Dict = M.default([]).
-M.default(Options) := Dict :-
-   dict_options(M, MOptions),
-   merge_options(Options, MOptions, Merged),
-   option(dtype(DType), Merged, float),
-   option(device(Device), Merged, is),
-   option(offset(Offset), Merged, 0),
-   option(lazy(Lazy), Merged, true),
-   Dict = array{dtype:DType, device:Device, offset:Offset, lazy: Lazy}.
-
-M.empty(Shape) := Dict :-
-   Dict = M.empty(Shape, []).
-M.empty(Shape, Options) := Dict :-
-   same_length(Shape, Strides),
-   shape_size(Shape, Size),
-   contiguous(Shape, Strides, 1),
-   Size1 is Size + 1,
-   push(Data, (
-      compound_name_arity(Data, data, Size1),
-      mutable(Data, Options)
-   )),
-   Dict = M.default().put([
-      data: Data, shape: Shape, strides: Strides, buffersize: Size]).lazy().
-
-M.from_list(List) := Dict :-
-   Dict = M.from_list(List, []).
-M.from_list(List, Options) := Dict :-
-   DType = M.get(dtype, _),
-   M1 = M.default(),
-   shape_type_list(M1.device, Shape, DType, List),
-   same_length(Shape, Strides),
-   shape_size(Shape, Size),
-   contiguous(Shape, Strides, 1),
-   push(Data, (
-      flatten(List, ListData),
-      append(ListData, [_], ListData1),
-      compound_name_arguments(Data, data, ListData1),
-      mutable(Data, Options)
-   )),
-   Dict = M1.put([
-      data: Data, shape: Shape, strides: Strides, dtype: DType, buffersize: Size]).lazy().
-
-M.ones(Shape) := Dict :-
-   Dict = M.ones(Shape, []).
-M.ones(Shape, Options) := Dict :-
-   Dict = M.full(Shape, 0, Options).
-
-M.full(Shape, FillValue) := Dict :-
-   Dict = M.full(Shape, FillValue, []).
-M.full(Shape, FillValue, Options) := Dict :-
-   same_length(Shape, Strides),
-   maplist(=(0), Strides),
-   Dict = M.empty([1], Options).put([shape=Shape, strides=Strides]),
-   push(Dict.data, maparray([FillValue]>>true, Dict.iter())),
-   _ = Dict.lazy().
-
-
-M.arange(Stop) := Dict :-
-   Dict = M.arange(Stop, []).
-M.arange(Stop, Options) := Dict :-
-   Dict = M.arange(0, Stop, Options).
-M.arange(Start, Stop, Options) := Dict :-
-   Dict = M.arange(Start, Stop, 1, Options).
-M.arange(Start, Stop, Step, Options) := Dict :-
-   Size is ceil((Stop - Start) / Step),
-   Dict = M.empty([Size], Options),
-   push(Dict.data, 
-        foldlarray({Step}/[Prev, Prev, Next]>>(Next is Prev + Step),
-                   Dict.iter(), Start, _)),
-   _ = Dict.lazy().
-
-M.eye(N) := Dict :-
-   Dict = M.full([N], 0).copy([mutable(true)]).put([shape=[N, N], strides=[-1, 1]]),
-   push(Dict.data, eye_kernel(Dict)),
-   _ = Dict.lazy().
-eye_kernel(Array) :-
-   Array = Array.setarg_(0, 1).readonly().
-
-M.to_list() := R :-
-   shape_list(M.shape, R),
-   flatten(R, List),
-   foldl([V, Iter, Next]>>reset(Iter, V, Next), List, M.iter(), _).
-
-M.iter() := Cont :-
-   Cont = M.iter_value().
-M.iter_value() := Cont :-
-   Cont = iterate_value(M).
-M.iter_offset() := Cont :-
-   Cont = iterate_offset(M).
-M.iter_index() := Cont :-
-   Cont = iterate_index(M).
-
-M.copy() := R :-
-   R = M.copy([]).
-M.copy(Options) := R :-
-   R = M.empty(M.shape, Options),
-   push(R.data, maparray(=, M.iter(), R.iter())),
-   _ = R.lazy().
-
-M.reshape(Shape) := Dict :-
-   Shape ins 0..sup,
-   shape_size(Shape, M.size()),
-   (  compatible_shape_strides(M.shape, M.strides, Shape, Strides)
-   -> Dict = M.put([shape=Shape, strides=Strides])
-   ;  Dict = M.copy().reshape(Shape)
-   ).
-
-
-M.t() := Dict :-
-   reverse(M.shape, Shape),
-   reverse(M.strides, Strides),
-   Dict = M.put([shape=Shape, strides=Strides]).
-
-M.swapaxes(Axis1, Axis2) := Dict :-
-   swap(Axis1, Axis2, M.shape, Shape),
-   swap(Axis1, Axis2, M.strides, Strides),
-   Dict = M.put([shape=Shape, strides=Strides]).
-
-M.ndim() := NDim :-
-   length(M.shape, NDim).
-
-M.index(Index) := Dict :-
-   index_shape(Index, M.shape, Shape),
-   index_shape_strides_offset(Index, M.shape, M.strides, Strides, NewOffset),
-   Offset #= M.offset + (NewOffset mod M.buffersize),
-   Dict = M.put([shape=Shape, strides=Strides, offset=Offset]).
 
 positive_index(Index, Dim, PositiveIndex) :-
    (  Index == sup
@@ -407,37 +274,343 @@ index_shape_strides_offset(
    Offset #= Reverse * Dim * Stride + Start * Stride + SubOffset,
    index_shape_strides_offset(Index, Shape, Strides, NewStridesRest, SubOffset).
 index_shape_strides_offset(
-      [I | Index], [Dim | Shape], [Stride | Strides], NewStrides, Offset),
+      [I | Index], [_Dim | Shape], [Stride | Strides], NewStrides, Offset),
       (var(I) ; integer(I)) =>
-   I #>= -Dim,
-   I #< Dim,
-   positive_index(I, Dim, PositiveI),
-   Offset #= PositiveI * Stride + SubOffset,
+   Offset #= I * Stride + SubOffset,
    index_shape_strides_offset(Index, Shape, Strides, NewStrides, SubOffset).
 index_shape_strides_offset(_, _, _, _, _) =>
    fail.
 
-index_shape([], Shape, NewShape) =>
-   NewShape = Shape.
-index_shape([I | Index], [Dim | Shape], NewShape), start_end_stop(I, Start, End, Step) =>
+index_shape([], NewIndex, Shape, NewShape) =>
+   NewShape = Shape,
+   NewIndex = [].
+index_shape([I | Index], NewIndex, [Dim | Shape], NewShape),
+      start_end_stop(I, Start, End, Step) =>
    positive_index(Start, Dim, PositiveStart),
    positive_index(End, Dim, PositiveEnd),
    Size #= max(0, abs(PositiveEnd - PositiveStart)),
    NewDim #= Size div abs(Step) + min(1, Size mod abs(Step)),
    NewShape = [NewDim | NewShapeRest],
-   index_shape(Index, Shape, NewShapeRest).
-index_shape([I | Index], [Dim | Shape], NewShape), is_list(I) =>
-   maplist(dim_index(Dim), I),
-   length(I, NewDim),
-   NewShape = [NewDim | NewShapeRest],
-   index_shape(Index, Shape, NewShapeRest).
-index_shape([I | Index], [Dim | Shape], NewShape) =>
+   NewIndex = [PositiveStart:PositiveEnd:Step | NewIndexRest],
+   index_shape(Index, NewIndexRest, Shape, NewShapeRest).
+index_shape([I | Index], NewIndex, [Dim | Shape], NewShape), is_list(I) =>
+   Array = array{lazy:false}.from_list(I),
+   index_shape([Array | Index], NewIndex, [Dim | Shape], NewShape).
+index_shape([I | Index], NewIndex, [_Dim | Shape], NewShape),
+      is_dict(I, array), I.dtype = integer =>
+   NewIndex = [I | NewIndexRest],
+   append(I.shape, NewShapeRest, NewShape),
+   index_shape(Index, NewIndexRest, Shape, NewShapeRest).
+index_shape([I | Index], NewIndex, [Dim | Shape], NewShape) =>
    dim_index(Dim, I),
-   index_shape(Index, Shape, NewShape).
+   positive_index(I, Dim, NewI),
+   NewIndex = [NewI | NewIndexRest],
+   index_shape(Index, NewIndexRest, Shape, NewShape).
 
 dim_index(Dim, I) :-
    I #>= -Dim,
    I #< Dim.
+
+promote(X, Y), is_dict(X, array) =>
+   X = Y.
+promote(X, Y), number(X) =>
+   Y = array{}.full([], X).
+
+broadcast(Arrays, NewArrays) :-
+   maplist(promote, Arrays, Arrays1),
+   maplist(get_dict(shape), Arrays1, Shapes),
+   maplist(get_dict(strides), Arrays1, Strides),
+   broadcast(Shapes, Strides, NewShape, NewStrides),
+   maplist(
+      {NewShape}/[Stride, Array, NewArray]>>(
+         put_dict([shape=NewShape, strides=Stride], Array, NewArray)),
+      NewStrides, Arrays1, NewArrays).
+
+broadcast(Shapes, Strides, NewShape, NewStrides) :-
+   maplist(length, Shapes, Lengths),
+   max_list(Lengths, L),
+   maplist(pad(1, L), Shapes, PaddedShapes),
+   maplist(pad(0, L), Strides, PaddedStrides),
+   maplist(reverse, PaddedShapes, RPaddedShapes),
+   maplist(reverse, PaddedStrides, RPaddedStrides),
+   same_length(RPaddedShapes, RPairs),
+   maplist(pairs_keys_values, RPairs, RPaddedShapes, RPaddedStrides),
+   transpose(RPairs, RPairsT),
+   maplist(broadcast_pairs, RPairsT, RNewShape, RNewStridesT),
+   transpose(RNewStridesT, RNewStrides),
+   maplist(reverse, RNewStrides, NewStrides),
+   reverse(RNewShape, NewShape).
+
+pad(V, Length, ShapeIn, ShapeOut) :-
+   length(ShapeOut, Length),
+   length(ShapeIn, InLength),
+   PadLength is Length - InLength,
+   length(Padding, PadLength),
+   append(Padding, ShapeIn, ShapeOut),
+   maplist(=(V), Padding).
+  
+broadcast_pairs(Pairs, D, Strides) :-
+   foldl(broadcast_shape, Pairs, 1, D),
+   maplist(broadcast_stride(D), Pairs, Strides).
+
+broadcast_shape(D2-_, D1, D) :-
+   D1 #\= 1 #/\ D1 #= D
+   #\ D1 #= 1 #/\ D2 #= D,
+   D2 #\= 1 #/\ D2 #= D
+   #\ D2 #= 1 #/\ D1 #= D.
+broadcast_stride(D, D1-S1, S2) :-
+   D #= D1 #/\ S1 #= S2
+   #\ D #\= D1 #/\ S2 #= 0.
+
+M.contiguous() := Contiguous :-
+   Contiguous = contiguous(M.shape, M.strides, Contiguous).
+M.size() := Size :-
+   shape_size(M.shape, Size).
+M.to(Device) := Dict :-
+   Dict = M.put([device: Device]).
+M.arg_offset(Offset) := I :-
+   I #= (Offset + M.offset) mod M.buffersize + 1.
+M.arg_(Offset) := V :-
+   arg(M.arg_offset(Offset), M.data(), V).
+M.setarg_(Offset, Value) := M :-
+   setarg(M.arg_offset(Offset), M.data(), Value).
+M.index_offset(Index) := Offset :-
+   maplist([A, B, C]>>(C #= A*B), Index, M.strides, Prod),
+   clpfd:sum(Prod, #=, Offset).
+M.readonly() := M :-
+   push(M.lazy, mutable(M.data, [mutable(false)])).
+
+M.data() := M.data :-
+   Lazy = M.lazy,
+   (  var(Lazy), get_attr(Lazy, array, Goals)
+   -> del_attr(Lazy, array),
+      reverse(Goals, RGoals),
+      maplist(call, RGoals)
+   ;  true
+   ).
+
+M.default() := Dict :-
+   Dict = M.default([]).
+M.default(Options) := Dict :-
+   dict_options(M, MOptions),
+   merge_options(Options, MOptions, Merged),
+   option(dtype(DType), Merged, float),
+   option(device(Device), Merged, is),
+   option(offset(Offset), Merged, 0),
+   option(lazy(Lazy), Merged, _),
+   Dict = array{dtype:DType, device:Device, offset:Offset, lazy: Lazy}.
+
+M.empty(Shape) := Dict :-
+   Dict = M.empty(Shape, []).
+M.empty(Shape, Options) := Dict :-
+   same_length(Shape, Strides),
+   shape_size(Shape, Size),
+   contiguous(Shape, Strides, 1),
+   Size1 is Size + 1,
+   Dict = M.default().put([
+      data: Data, shape: Shape, strides: Strides, buffersize: Size]),
+   push(Dict.lazy, (
+      compound_name_arity(Data, data, Size1),
+      mutable(Data, Options)
+   )).
+
+M.from_list(List) := Dict :-
+   Dict = M.from_list(List, []).
+M.from_list(List, Options) := Dict :-
+   DType = M.get(dtype, _),
+   M1 = M.default(),
+   shape_type_list(M1.device, Shape, DType, List),
+   same_length(Shape, Strides),
+   shape_size(Shape, Size),
+   contiguous(Shape, Strides, 1),
+   Dict = M1.put([
+      data: Data, shape: Shape, strides: Strides, dtype: DType, buffersize: Size]),
+   push(Dict.lazy, (
+      flatten(List, ListData),
+      append(ListData, [_], ListData1),
+      compound_name_arguments(Data, data, ListData1),
+      mutable(Data, Options)
+   )).
+
+M.ones(Shape) := Dict :-
+   Dict = M.ones(Shape, []).
+M.ones(Shape, Options) := Dict :-
+   Dict = M.full(Shape, 1, Options).
+M.zeros(Shape) := Dict :-
+   Dict = M.zeros(Shape, []).
+M.zeros(Shape, Options) := Dict :-
+   Dict = M.full(Shape, 0, Options).
+
+M.full(Shape, FillValue) := Dict :-
+   Dict = M.full(Shape, FillValue, []).
+M.full(Shape, FillValue, Options) := Dict :-
+   same_length(Shape, Strides),
+   maplist(=(0), Strides),
+   Dict = M.empty([1], Options).put([shape=Shape, strides=Strides]),
+   push(Dict.lazy, maparray([FillValue]>>true, Dict.iter())).
+
+
+M.arange(Stop) := Dict :-
+   Dict = M.arange(Stop, []).
+M.arange(Stop, Options) := Dict :-
+   Dict = M.arange(0, Stop, Options).
+M.arange(Start, Stop, Options) := Dict :-
+   Dict = M.arange(Start, Stop, 1, Options).
+M.arange(Start, Stop, Step, Options) := Dict :-
+   Size is ceil(abs((Stop - Start) / Step)),
+   Dict = M.empty([Size], Options),
+   push(Dict.lazy, 
+        foldlarray({Step}/[Prev, Prev, Next]>>(Next is Prev + Step),
+                   Dict.iter(), Start, _)).
+
+M.eye(N) := Dict :-
+   Dict = M.full([N], 0).copy([mutable(true)]).put([shape=[N, N], strides=[-1, 1]]),
+   push(Dict.lazy, eye_kernel(Dict)).
+eye_kernel(Array) :-
+   Array = Array.setarg_(0, 1).readonly().
+
+M.to_list() := R :-
+   shape_list(M.shape, R),
+   flatten(R, List),
+   foldl([V, Iter, Next]>>reset(Iter, V, Next), List, M.iter(), _).
+
+M.iter() := Cont :-
+   Cont = M.iter_value().
+M.iter_value() := Cont :-
+   Cont = iterate_value(M).
+M.iter_offset() := Cont :-
+   Cont = iterate_offset(M).
+M.iter_index() := Cont :-
+   Cont = iterate_index(M.shape).
+
+M.copy() := R :-
+   R = M.copy([]).
+M.copy(Options) := R :-
+   R = M.empty(M.shape, Options),
+   push(R.lazy, maparray(=, M.iter(), R.iter())).
+
+M.reshape(Shape) := Dict :-
+   Shape ins 0..sup,
+   shape_size(Shape, M.size()),
+   (  compatible_shape_strides(M.shape, M.strides, Shape, Strides)
+   -> Dict = M.put([shape=Shape, strides=Strides])
+   ;  Dict = M.copy().reshape(Shape)
+   ).
+
+
+M.t() := Dict :-
+   reverse(M.shape, Shape),
+   reverse(M.strides, Strides),
+   Dict = M.put([shape=Shape, strides=Strides]).
+
+M.swapaxes(Axis1, Axis2) := Dict :-
+   swap(Axis1, Axis2, M.shape, Shape),
+   swap(Axis1, Axis2, M.strides, Strides),
+   Dict = M.put([shape=Shape, strides=Strides]).
+
+M.ndim() := NDim :-
+   length(M.shape, NDim).
+
+split_index(A, S, R), (is_dict(A, array) ; integer(A)) => A = R, S = ':' .
+split_index(A, R, S) => A = R, S = ':' .
+
+M.index(Index) := Dict :-
+   index_shape(Index, NewIndex, M.shape, _),
+   (  member(I, NewIndex), is_dict(I, array)
+   -> maplist(split_index, NewIndex, SimpleIndex, AdvancedIndex),
+      M1 = M.simple_index(SimpleIndex),
+      Dict = M1.advanced_index(AdvancedIndex)
+   ;  Dict = M.simple_index(Index)
+   ).
+M.simple_index(Index) := Dict :-
+   index_shape(Index, NewIndex, M.shape, Shape),
+   index_shape_strides_offset(NewIndex, M.shape, M.strides, Strides, NewOffset),
+   Offset #= M.offset + (NewOffset mod M.buffersize),
+   Dict = M.put([shape=Shape, strides=Strides, offset=Offset]).
+M.advanced_index(Index) := Dict :-
+   % missing interleaving of simple and advanced indexing
+   % missing boolean indexing
+   include([A]>>once(is_dict(A, array) ; integer(A)), Index, Arrays),
+   broadcast(Arrays, BArrays),
+   once(append([PreSlice, Arrays, PostSlice], Index)),
+   same_length(PreSlice, PreShape),
+   same_length(Arrays, ArraysShape),
+   once(append([PreShape, ArraysShape, PostShape], M.shape)),
+   BArrays = [Array | _],
+   append([PreShape, Array.shape, PostShape], Shape),
+   Dict = M.empty(Shape),
+   push(Dict.lazy, maparray(=, Dict.iter(),
+      advanced_index_iterate_value(M, PreSlice, iterate_values(BArrays), PostSlice))).
+
+squeeze_(Axis) -->
+   take_nth0(Axis, Dim-_),
+   (  {Dim = 1}
+   -> []
+   ;  {domain_error(1, Dim)}
+   ).
+
+M.squeeze(Axis) := Dict :-
+   sort(0, @>=, Axis, SortedAxis),
+   pairs_keys_values(Pairs, M.shape, M.strides),
+   phrase(sequence(squeeze_, SortedAxis), Pairs, NewPairs),
+   pairs_keys_values(NewPairs, NewShape, NewStrides),
+   Dict = M.put([shape=NewShape, strides=NewStrides]).
+
+M.broadcast(Other) := Dict :-
+   broadcast([M, Other], [Dict, Other]).
+
+M.max() := Dict :-
+   Dict = M.max([]).
+M.max(Options) := Dict :-
+   (  option(axis(Axis), Options)
+   -> phrase(replace_nth0(Axis, _, 1), M.shape, Shape),
+      M1 = M.zeros(Shape).copy([mutable(true)])
+   ;  M1 = M.zeros([1], [mutable(true)]),
+      Axis = 0
+   ),
+   M2 = M1.broadcast(M),
+   push(M2.lazy, maparray(max_kernel(M2), M.iter(), M2.iter_offset())),
+   (  option(keepdims(false), Options, false)
+   -> Dict = M1.squeeze([Axis])
+   ;  Dict = M1
+   ).
+
+M.argmax() := Dict :-
+   Dict = M.argmax([]).
+M.argmax(Options) := Dict :-
+   (  option(axis(Axis), Options)
+   -> phrase(replace_nth0(Axis, _, 1), M.shape, Shape),
+      MaxArray = M.zeros(Shape).copy([mutable(true)]),
+      IndexArray = M.put([dtype:integer]).empty(Shape, [mutable(true)]),
+      M1 = M
+   ;  MaxArray = M.zeros([1], [mutable(true)]),
+      IndexArray = M.put([dtype:integer]).empty([1], [mutable(true)]),
+      M1 = M.reshape([_]),
+      Axis = 0
+   ),
+   MaxArray1 = MaxArray.broadcast(M),
+   IndexArray1 = IndexArray.broadcast(M),
+   push(IndexArray1.lazy, maparray(argmax_kernel(Axis, MaxArray1, IndexArray1), M1.iter_index(), M1.iter(), MaxArray1.iter_offset())),
+   (  option(keepdims(false), Options, false)
+   -> Dict = IndexArray.squeeze([Axis])
+   ;  Dict = IndexArray
+   ).
+
+max_kernel(MaxArray, Value, MaxOffset) :-
+   Max = MaxArray.arg_(MaxOffset),
+   (  Value > Max
+   -> _ = MaxArray.setarg_(MaxOffset, Value)
+   ;  true
+   ).
+argmax_kernel(Axis, MaxArray, IndexArray, Index, Value, MaxOffset) :-
+   Max = MaxArray.arg_(MaxOffset),
+   (  Value > Max
+   -> _ = MaxArray.setarg_(MaxOffset, Value),
+      nth0(Axis, Index, I),
+      _ = IndexArray.setarg_(MaxOffset, I)
+   ;  true
+   ).
+
 
 :- begin_tests(array).
 
@@ -455,63 +628,46 @@ test('slicing and striding') :-
    X = array{lazy:false}.from_list([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
    [1, 3, 5] = X.index([1:7:2]).to_list(),
    [8, 9] = X.index([-2:10]).to_list(),
-   [7, 6, 5, 4] = X.index([-3:3: -1]).to_list().
+   [7, 6, 5, 4] = X.index([-3:3: -1]).to_list(),
+   [5, 6, 7, 8, 9] = X.index([5:sup]).to_list().
+test('slicing and striding 2') :-
+   X = array{}.from_list([[[1],[2],[3]], [[4],[5],[6]]]),
+   [[[4], [5], [6]]] = X.index([1:2]).to_list().
+
+test('advanced indexing') :-
+   X = array{}.arange(10, 1, -1, []),
+   [7, 7, 9, 2] = X.index([[3, 3, 1, 8]]).to_list(),
+   [7, 7, 4, 2] = X.index([[3, 3, -3, 8]]).to_list(),
+   Y = array{}.from_list([[1, 2], [3, 4], [5, 6]]),
+   [[3, 4], [5, 6]] = Y.index([[1, -1]]).to_list(),
+   \+ _ = Y.index([[3, 4]]).to_list().
+
+test('advanced indexing 2') :-
+   X = array{}.arange(35).reshape([5, 7]),
+   [0, 15, 30] = X.index([[0, 2, 4], [0, 1, 2]]).to_list(),
+   \+ _ = X.index([[0, 2, 4], [0, 1]]).to_list(),
+   [1, 15, 29] = X.index([[0, 2, 4], 1]).to_list(),
+   [[ 0,  1,  2,  3,  4,  5,  6],
+    [14, 15, 16, 17, 18, 19, 20],
+    [28, 29, 30, 31, 32, 33, 34]] = X.index([[0, 2, 4]]).to_list().
+
+test('advanced indexing 3') :-
+   X = array{}.from_list([[1,2],[3, 4],[5,6]]),
+   [1, 4, 5] = X.index([[0, 1, 2], [0, 1, 0]]).to_list().
+
+test('advanced indexing corners') :-
+   X = array{}.from_list([[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11]]),
+   Rows = array{}.from_list([[0, 0], [3, 3]]),
+   Columns = array{}.from_list([[0, 2], [0, 2]]),
+   [[0, 2], [9, 11]] = X.index([Rows, Columns]).to_list().
+test('advanced indexing corners 2') :-
+   X = array{}.from_list([[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11]]),
+   Rows = array{}.from_list([0, 3]),
+   Columns = array{}.from_list([0, 2]),
+   [[0, 2], [9, 11]] = X.index([Rows.reshape([2, 1]), Columns]).to_list(),
+   [0, 11] = X.index([Rows, Columns]).to_list().
 
 :- end_tests(array).
-% promote(X, Y), is_dict(X, array) =>
-%    X = Y.
-% promote(X, Y), integer(X) =>
-%    Y = array{data: data(X), shape: [], strides: [], offset: 0,
-%              device: c, dtype: int64, size: 1, buffer: _, buffersize: 1}.
-%
-% broadcast(Arrays, NewArrays) :-
-%    maplist(promote, Arrays, Arrays1),
-%    maplist(get_dict(shape), Arrays1, Shapes),
-%    maplist(get_dict(strides), Arrays1, Strides),
-%    broadcast(Shapes, Strides, NewShape, NewStrides),
-%    product(NewShape, #=, Size),
-%    maplist(
-%       {NewShape, Size}/[Stride, Array, NewArray]>>(
-%          put_dict([shape=NewShape, strides=Stride, size=Size, data=view(Array)],
-%                   Array, NewArray)),
-%       NewStrides, Arrays1, NewArrays).
-%
-% broadcast(Shapes, Strides, NewShape, NewStrides) :-
-%    maplist(length, Shapes, Lengths),
-%    max_list(Lengths, L),
-%    maplist(pad(1, L), Shapes, PaddedShapes),
-%    maplist(pad(0, L), Strides, PaddedStrides),
-%    maplist(reverse, PaddedShapes, RPaddedShapes),
-%    maplist(reverse, PaddedStrides, RPaddedStrides),
-%    same_length(RPaddedShapes, RPairs),
-%    maplist(pairs_keys_values, RPairs, RPaddedShapes, RPaddedStrides),
-%    transpose(RPairs, RPairsT),
-%    maplist(broadcast_pairs, RPairsT, RNewShape, RNewStridesT),
-%    transpose(RNewStridesT, RNewStrides),
-%    maplist(reverse, RNewStrides, NewStrides),
-%    reverse(RNewShape, NewShape).
-%
-% pad(V, Length, ShapeIn, ShapeOut) :-
-%    length(ShapeOut, Length),
-%    length(ShapeIn, InLength),
-%    PadLength is Length - InLength,
-%    length(Padding, PadLength),
-%    append(Padding, ShapeIn, ShapeOut),
-%    maplist(=(V), Padding).
-%   
-% broadcast_pairs(Pairs, D, Strides) :-
-%    foldl(broadcast_shape, Pairs, 1, D),
-%    maplist(broadcast_stride(D), Pairs, Strides).
-%
-% broadcast_shape(D2-_, D1, D) :-
-%    D1 #\= 1 #/\ D1 #= D
-%    #\ D1 #= 1 #/\ D2 #= D,
-%    D2 #\= 1 #/\ D2 #= D
-%    #\ D2 #= 1 #/\ D1 #= D.
-% broadcast_stride(D, D1-S1, S2) :-
-%    D #= D1 #/\ S1 #= S2
-%    #\ D #\= D1 #/\ S2 #= 0.
-%
 % '@='(Left, Right) :-
 %    array_eval(Right, Left).
 %
@@ -574,19 +730,6 @@ test('slicing and striding') :-
 %    ;  Dict = Res4.squeeze(Axis)
 %    ).
 %
-% squeeze_(Axis) -->
-%    take_nth0(Axis, Dim-_),
-%    (  {Dim = 1}
-%    -> []
-%    ;  {domain_error(1, Dim)}
-%    ).
-%
-% M.squeeze(Axis) := Dict :-
-%    sort(0, @>=, Axis, SortedAxis),
-%    pairs_keys_values(Pairs, M.shape, M.strides),
-%    phrase(sequence(squeeze_, SortedAxis), Pairs, NewPairs),
-%    pairs_keys_values(NewPairs, NewShape, NewStrides),
-%    Dict = M.put([shape=NewShape, strides=NewStrides, data=view(M)]).
 %
 % realize(Outputs) :-
 %    compile(c, Outputs).
