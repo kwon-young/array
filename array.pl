@@ -72,119 +72,163 @@ test('from_shape') :-
 
 :- begin_tests(reshape).
 
-% reformat the test cases below into correct plunit test cases
-% in our case, contiguous is not a attribute but a method of View AI!
-    cases = [                                                                                                                 
-      # ===== SUCCESSFUL RESHAPES =====                                                                                       
-      # --- Contiguous ---                                                                                                    
-      {"name": "contiguous merge",                                                                                            
-       "start": View(shape=(2, 3, 4), strides=(12, 4, 1), offset=0, mask=None, contiguous=True),                              
-       "arg": (6, 4),                                                                                                         
-       "expected": View(shape=(6, 4), strides=(4, 1), offset=0, mask=None, contiguous=True)},                                 
-      {"name": "contiguous split",                                                                                            
-       "start": View(shape=(24,), strides=(1,), offset=0, mask=None, contiguous=True),                                        
-       "arg": (2, 3, 4),                                                                                                      
-       "expected": View(shape=(2, 3, 4), strides=(12, 4, 1), offset=0, mask=None, contiguous=True)},                          
-      {"name": "contiguous to scalar",                                                                                        
-       "start": View(shape=(1,), strides=(1,), offset=0, mask=None, contiguous=True),                                         
-       "arg": (),                                                                                                             
-       "expected": View(shape=(), strides=(), offset=0, mask=None, contiguous=True)},                                         
-      {"name": "scalar to contiguous",                                                                                        
-       "start": View(shape=(), strides=(), offset=0, mask=None, contiguous=True),                                             
-       "arg": (1, 1, 1),                                                                                                      
-       "expected": View(shape=(1, 1, 1), strides=(1, 1, 1), offset=0, mask=None, contiguous=True)},                           
-      {"name": "contiguous with ones",                                                                                        
-       "start": View(shape=(1, 10, 1), strides=(10, 1, 1), offset=0, mask=None, contiguous=True),                             
-       "arg": (10,),                                                                                                          
-       "expected": View(shape=(10,), strides=(1,), offset=0, mask=None, contiguous=True)},                                    
-                                                                                                                              
-      # --- Non-contiguous (from expand, permute) ---                                                                         
-      {"name": "split expanded dim",                                                                                          
-       "start": View(shape=(10, 10), strides=(1, 0), offset=0, mask=None, contiguous=False),                                  
-       "arg": (10, 2, 5),                                                                                                     
-       "expected": View(shape=(10, 2, 5), strides=(1, 0, 0), offset=0, mask=None, contiguous=False)},                         
-      {"name": "split other expanded dim",                                                                                    
-       "start": View(shape=(10, 10), strides=(0, 1), offset=0, mask=None, contiguous=False),                                  
-       "arg": (10, 5, 2),                                                                                                     
-       "expected": View(shape=(10, 5, 2), strides=(0, 2, 1), offset=0, mask=None, contiguous=False)},                         
-      {"name": "merge after permute",                                                                                         
-       "start": View(shape=(3, 4, 2), strides=(4, 1, 12), offset=0, mask=None, contiguous=False),                             
-       "arg": (12, 2),                                                                                                        
-       "expected": View(shape=(12, 2), strides=(1, 12), offset=0, mask=None, contiguous=False)},                              
-      {"name": "double permute with merge",                                                                                   
-       "start": View(shape=(4, 4, 4), strides=(1, 16, 4), offset=0, mask=None, contiguous=False),                             
-       "arg": (16, 4),                                                                                                        
-       "expected": View(shape=(16, 4), strides=(4, 1), offset=0, mask=None, contiguous=True)},                                
-                                                                                                                              
-      # --- Masked ---                                                                                                        
-      {"name": "reshape masked view",                                                                                         
-       "start": View(shape=(10,), strides=(1,), offset=0, mask=((2, 8),), contiguous=False),                                  
-       "arg": (3, 2),                                                                                                         
-       "expected": View(shape=(3, 2), strides=(2, 1), offset=2, mask=((0, 3), (0, 2)), contiguous=False)},                    
-      {"name": "reshape with offset",                                                                                         
-        "start": View(shape=(6,), strides=(1,), offset=2, mask=None, contiguous=False),                                       
-        "arg": (2, 3),                                                                                                        
-        "expected": View(shape=(2, 3), strides=(3, 1), offset=2, mask=None, contiguous=False)},                               
-      {"name": "masked with pad no-op reshape",                                                                               
-       "start": View(shape=(14,), strides=(1,), offset=-2, mask=((2, 12),), contiguous=False),                                
-       "arg": (14,),                                                                                                          
-       "expected": View(shape=(14,), strides=(1,), offset=-2, mask=((2, 12),), contiguous=False)},                            
-                                                                                                                              
-      # --- Zero shapes ---                                                                                                   
-      {"name": "zero shape to zero shape",                                                                                    
-       "start": View(shape=(2, 0, 4), strides=(0, 4, 1), offset=0, mask=None, contiguous=False),                              
-       "arg": (0, 3, 1),                                                                                                      
-       "expected": View(shape=(0, 3, 1), strides=(0, 0, 0), offset=0, mask=None, contiguous=True)},                           
-      {"name": "zero shape with ones",                                                                                        
-       "start": View(shape=(1, 10, 0), strides=(0, 0, 1), offset=0, mask=None, contiguous=False),                             
-       "arg": (0,),                                                                                                           
-       "expected": View(shape=(0,), strides=(0,), offset=0, mask=None, contiguous=True)},                                     
-                                                                                                                              
-      # ===== FAILED RESHAPES (expected=None) =====                                                                           
-      {"name": "permute breaks contiguity",                                                                                   
-       "start": View(shape=(3, 2, 4), strides=(4, 12, 1), offset=0, mask=None, contiguous=False),                             
-       "arg": (6, 4),                                                                                                         
-       "expected": None},                                                                                                     
-      {"name": "permute breaks contiguity 2",                                                                                 
-       "start": View(shape=(2, 4, 3), strides=(12, 1, 4), offset=0, mask=None, contiguous=False),                             
-       "arg": (2, 12),                                                                                                        
-       "expected": None},                                                                                                     
-      {"name": "expand and permute breaks contiguity",                                                                        
-       "start": View(shape=(2, 4, 3), strides=(0, 1, 0), offset=0, mask=None, contiguous=False),                              
-       "arg": (2, 12),                                                                                                        
-       "expected": None},                                                                                                     
-      {"name": "merge expanded dim",                                                                                          
-       "start": View(shape=(10, 10), strides=(1, 0), offset=0, mask=None, contiguous=False),                                  
-       "arg": (100,),                                                                                                         
-       "expected": None},                                                                                                     
-      {"name": "non-contiguous to smaller non-contiguous",                                                                    
-       "start": View(shape=(8, 2), strides=(1, 8), offset=0, mask=None, contiguous=False),                                    
-       "arg": (4, 4),                                                                                                         
-       "expected": None},                                                                                                     
-      {"name": "masked permute",                                                                                              
-       "start": View(shape=(2, 2), strides=(1, 4), offset=5, mask=None, contiguous=False),                                    
-       "arg": (4,),                                                                                                           
-       "expected": None},                                                                                                     
-      {"name": "masked split unaligned",                                                                                      
-       "start": View(shape=(10,), strides=(1,), offset=0, mask=((2, 7),), contiguous=False),                                  
-       "arg": (2, 3), # size 5 cannot be reshaped to 6                                                                        
-       "expected": None},                                                                                                     
-                                                                                                                              
-      # --- Symbolic ---                                                                                                      
-      {"name": "symbolic contiguous",                                                                                         
-       "start": View(shape=(UOp.variable('w', 1, 10), 4), strides=(4, 1), offset=0, mask=None, contiguous=True),              
-       "arg": (UOp.variable('w', 1, 10) * 4,),                                                                                
-       "expected": View(shape=(UOp.variable('w', 1, 10) * 4,), strides=(1,), offset=0, mask=None, contiguous=True)},          
-      {"name": "symbolic non-contiguous fail",                                                                                
-       "start": View(shape=(4, UOp.variable('w', 1, 10)), strides=(UOp.variable('w', 1, 10), 1), offset=0, mask=None,         
-contiguous=False),                                                                                                            
-       "arg": (UOp.variable('w', 1, 10) * 4,),                                                                                
-       "expected": None},                                                                                                     
-      {"name": "symbolic no-op",                                                                                              
-       "start": View(shape=(4, UOp.variable('w', 1, 10)), strides=(1, 4), offset=0, mask=None, contiguous=False),             
-       "arg": (4, UOp.variable('w', 1, 10)),                                                                                  
-       "expected": View(shape=(4, UOp.variable('w', 1, 10)), strides=(1, 4), offset=0, mask=None, contiguous=False)},         
-    ]                                                                                                                         
+% ===== SUCCESSFUL RESHAPES =====
+% --- Contiguous ---
+test('contiguous merge') :-
+  Start = view{shape:[2,3,4], strides:[12,4,1], offset:0, mask:_},
+  NewShape = [6,4],
+  shape_mask(NewShape, ExpectedMask),
+  Expected = view{shape:[6,4], strides:[4,1], offset:0, mask:ExpectedMask},
+  Start.reshape(NewShape) = Expected.
 
+test('contiguous split') :-
+  Start = view{shape:[24], strides:[1], offset:0, mask:_},
+  NewShape = [2,3,4],
+  shape_mask(NewShape, ExpectedMask),
+  Expected = view{shape:[2,3,4], strides:[12,4,1], offset:0, mask:ExpectedMask},
+  Start.reshape(NewShape) = Expected.
+
+test('contiguous to scalar') :-
+  Start = view{shape:[1], strides:[1], offset:0, mask:_},
+  NewShape = [],
+  shape_mask(NewShape, ExpectedMask),
+  Expected = view{shape:[], strides:[], offset:0, mask:ExpectedMask},
+  Start.reshape(NewShape) = Expected.
+
+test('scalar to contiguous') :-
+  Start = view{shape:[], strides:[], offset:0, mask:_},
+  NewShape = [1,1,1],
+  shape_mask(NewShape, ExpectedMask),
+  Expected = view{shape:[1,1,1], strides:[1,1,1], offset:0, mask:ExpectedMask},
+  Start.reshape(NewShape) = Expected.
+
+test('contiguous with ones') :-
+  Start = view{shape:[1,10,1], strides:[10,1,1], offset:0, mask:_},
+  NewShape = [10],
+  shape_mask(NewShape, ExpectedMask),
+  Expected = view{shape:[10], strides:[1], offset:0, mask:ExpectedMask},
+  Start.reshape(NewShape) = Expected.
+
+% --- Non-contiguous (from expand, permute) ---
+test('split expanded dim') :-
+  Start = view{shape:[10,10], strides:[1,0], offset:0, mask:_},
+  NewShape = [10,2,5],
+  shape_mask(NewShape, ExpectedMask),
+  Expected = view{shape:[10,2,5], strides:[1,0,0], offset:0, mask:ExpectedMask},
+  Start.reshape(NewShape) = Expected.
+
+test('split other expanded dim') :-
+  Start = view{shape:[10,10], strides:[0,1], offset:0, mask:_},
+  NewShape = [10,5,2],
+  shape_mask(NewShape, ExpectedMask),
+  Expected = view{shape:[10,5,2], strides:[0,2,1], offset:0, mask:ExpectedMask},
+  Start.reshape(NewShape) = Expected.
+
+test('merge after permute') :-
+  Start = view{shape:[3,4,2], strides:[4,1,12], offset:0, mask:_},
+  NewShape = [12,2],
+  shape_mask(NewShape, ExpectedMask),
+  Expected = view{shape:[12,2], strides:[1,12], offset:0, mask:ExpectedMask},
+  Start.reshape(NewShape) = Expected.
+
+test('double permute with merge') :-
+  Start = view{shape:[4,4,4], strides:[1,16,4], offset:0, mask:_},
+  NewShape = [16,4],
+  shape_mask(NewShape, ExpectedMask),
+  Expected = view{shape:[16,4], strides:[4,1], offset:0, mask:ExpectedMask},
+  Start.reshape(NewShape) = Expected.
+
+% --- Masked ---
+test('reshape masked view') :-
+  Start = view{shape:[10], strides:[1], offset:0, mask:[2-7]},
+  NewShape = [3,2],
+  shape_mask(NewShape, ExpectedMask),
+  Expected = view{shape:[3,2], strides:[2,1], offset:2, mask:ExpectedMask},
+  Start.reshape(NewShape) = Expected.
+
+test('reshape with offset') :-
+  Start = view{shape:[6], strides:[1], offset:2, mask:_},
+  NewShape = [2,3],
+  shape_mask(NewShape, ExpectedMask),
+  Expected = view{shape:[2,3], strides:[3,1], offset:2, mask:ExpectedMask},
+  Start.reshape(NewShape) = Expected.
+
+test('masked with pad no-op reshape') :-
+  Start = view{shape:[14], strides:[1], offset:-2, mask:[2-11]},
+  NewShape = [14],
+  Start.reshape(NewShape) = Start.
+
+% --- Zero shapes ---
+test('zero shape to zero shape') :-
+  Start = view{shape:[2,0,4], strides:[0,4,1], offset:0, mask:_},
+  NewShape = [0,3,1],
+  shape_mask(NewShape, ExpectedMask),
+  Expected = view{shape:[0,3,1], strides:[0,0,0], offset:0, mask:ExpectedMask},
+  Start.reshape(NewShape) = Expected.
+
+test('zero shape with ones') :-
+  Start = view{shape:[1,10,0], strides:[0,0,1], offset:0, mask:_},
+  NewShape = [0],
+  shape_mask(NewShape, ExpectedMask),
+  Expected = view{shape:[0], strides:[0], offset:0, mask:ExpectedMask},
+  Start.reshape(NewShape) = Expected.
+
+% ===== FAILED RESHAPES =====
+test('permute breaks contiguity', [fail]) :-
+  Start = view{shape:[3,2,4], strides:[4,12,1], offset:0, mask:_},
+  NewShape = [6,4],
+  _ = Start.reshape(NewShape).
+
+test('permute breaks contiguity 2', [fail]) :-
+  Start = view{shape:[2,4,3], strides:[12,1,4], offset:0, mask:_},
+  NewShape = [2,12],
+  _ = Start.reshape(NewShape).
+
+test('expand and permute breaks contiguity', [fail]) :-
+  Start = view{shape:[2,4,3], strides:[0,1,0], offset:0, mask:_},
+  NewShape = [2,12],
+  _ = Start.reshape(NewShape).
+
+test('merge expanded dim', [fail]) :-
+  Start = view{shape:[10,10], strides:[1,0], offset:0, mask:_},
+  NewShape = [100],
+  _ = Start.reshape(NewShape).
+
+test('non-contiguous to smaller non-contiguous', [fail]) :-
+  Start = view{shape:[8,2], strides:[1,8], offset:0, mask:_},
+  NewShape = [4,4],
+  _ = Start.reshape(NewShape).
+
+test('masked permute', [fail]) :-
+  Start = view{shape:[2,2], strides:[1,4], offset:5, mask:_},
+  NewShape = [4],
+  _ = Start.reshape(NewShape).
+
+test('masked split unaligned', [fail]) :-
+  Start = view{shape:[10], strides:[1], offset:0, mask:[2-6]}, % mask=((2, 7),) -> size 5
+  NewShape = [2,3], % size 6
+  _ = Start.reshape(NewShape).
+
+% --- Symbolic ---
+test('symbolic contiguous', [sto]) :-
+  W in 1..10,
+  Start = view{shape:[W,4], strides:[4,1], offset:0, mask:_},
+  W4 #= W*4,
+  NewShape = [W4],
+  Expected = view{shape:NewShape, strides:[1], offset:0, mask:_},
+  Start.reshape(NewShape) = Expected.
+
+test('symbolic non-contiguous fail', [fail, sto]) :-
+  W in 1..10,
+  Start = view{shape:[4,W], strides:[W,1], offset:0, mask:_},
+  W4 #= W*4,
+  NewShape = [W4],
+  _ = Start.reshape(NewShape).
+
+test('symbolic no-op', [sto]) :-
+  W in 1..10,
+  Start = view{shape:[4,W], strides:[1,4], offset:0, mask:_},
+  NewShape = [4,W],
+  Start.reshape(NewShape) = Start.
 
 :- end_tests(reshape).
