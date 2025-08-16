@@ -1,16 +1,19 @@
 :- module(array, []).
 
 :- use_module(library(clpfd)).
+:- use_module(library(pairs)).
 
 view:_.from_shape(Shape) := View :-
    shape_strides(Shape, Strides),
    shape_mask(Shape, Mask),
    View = view{shape: Shape, strides: Strides, mask: Mask, offset: 0}.
 
-view:M.reshape(Shape) := Dict :-
-   merge_dims(M.shape, M.strides, MShape, MStrides),
-   merge_dims(Shape, Strides, MShape, MStrides),
-   Dict = M.put([shape: Shape, strides: Strides]).
+view:M.reshape(Shape) := Dict :- % FIXME: This needs to handle masks and offsets
+   pairs_keys_values(Pairs, M.shape, M.strides),
+   merge_dims(Pairs, MergedPairs),
+   pairs_keys_values(NewPairs, Shape, Strides),
+   merge_dims(NewPairs, MergedPairs),
+   Dict = M.put([shape: Shape, strides: Strides]). % FIXME: update mask and offset
 
 M.default() := Dict :-
    Dict = M.default([]).
@@ -66,30 +69,30 @@ contiguous(Stride, C, [_Dim | Shape], Shape) :-
    foldl([A, B, A*B]>>true, Shape, 1, Expr),
    Expr #= Stride #<==> C.
 
-merge_dims(Shape, Strides, MShape, MStrides) :-
-   merge_dims(Shape, Strides, MShape, MStrides, _).
+merge_dims(Pairs, MergedPairs) :-
+   merge_dims(Pairs, MergedPairs, _).
 
-merge_dims([], [], [], [], 1).
-merge_dims([Dim | Shape], [Stride | Strides], MergedShape, MergedStrides, ParentStride) :-
+merge_dims([], [], 1).
+merge_dims([Dim-Stride | Pairs], MergedPairs, ParentStride) :-
    ParentStride #= Dim*ChildStride,
    Stride #= ChildStride #<==> C,
-   merge_dims(C, Shape, Strides, MergedShape, MergedStrides, Dim, Stride, ChildStride).
-merge_dims(0, Shape, Strides, [Dim | MergedShape], [Stride | MergedStrides], Dim, Stride, CStride) :-
-   merge_dims(Shape, Strides, MergedShape, MergedStrides, CStride).
-merge_dims(1, Shape, Strides, MergedShape, MergedStrides, Dim, Stride, CStride) :-
-   merge_dims(Shape, Strides, MergedShape, MergedStrides, Dim, Stride, CStride).
+   merge_dims(C, Pairs, MergedPairs, Dim, Stride, ChildStride).
+merge_dims(0, Pairs, [Dim-Stride | MergedPairs], Dim, Stride, CStride) :-
+   merge_dims(Pairs, MergedPairs, CStride).
+merge_dims(1, Pairs, MergedPairs, Dim, Stride, CStride) :-
+   merge_dims(Pairs, MergedPairs, Dim, Stride, CStride).
 
-merge_dims([], [], [PopDim], [PopStride], PopDim, PopStride, 1).
-merge_dims([Dim | Shape], [Stride | Strides], MergedShape, MergedStrides, PopDim, PopStride, ParentStride) :-
+merge_dims([], [PopDim-PopStride], PopDim, PopStride, 1).
+merge_dims([Dim-Stride | Pairs], MergedPairs, PopDim, PopStride, ParentStride) :-
    ParentStride #= Dim*ChildStride,
    Stride #= ChildStride #<==> C,
-   merge_dims(C, Shape, Strides, MergedShape, MergedStrides, PopDim, PopStride, Dim, Stride, ChildStride).
-merge_dims(0, Shape, Strides, [PopDim, Dim | MergedShape], [PopStride, Stride | MergedStrides], PopDim, PopStride, Dim, Stride, CStride) :-
-   merge_dims(Shape, Strides, MergedShape, MergedStrides, CStride).
-merge_dims(1, Shape, Strides, MergedShape, MergedStrides, PopDim, PopStride, Dim, Stride, CStride) :-
+   merge_dims(C, Pairs, MergedPairs, PopDim, PopStride, Dim, Stride, ChildStride).
+merge_dims(0, Pairs, [PopDim-PopStride, Dim-Stride | MergedPairs], PopDim, PopStride, Dim, Stride, CStride) :-
+   merge_dims(Pairs, MergedPairs, CStride).
+merge_dims(1, Pairs, MergedPairs, PopDim, PopStride, Dim, Stride, CStride) :-
    NewDim #= PopDim*Dim,
    PopStride #= Dim*Stride,
-   merge_dims(Shape, Strides, MergedShape, MergedStrides, NewDim, Stride, CStride).
+   merge_dims(Pairs, MergedPairs, NewDim, Stride, CStride).
 
 :- begin_tests(strides).
 
