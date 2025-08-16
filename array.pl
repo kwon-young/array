@@ -7,8 +7,10 @@ view:_.from_shape(Shape) := View :-
    shape_mask(Shape, Mask),
    View = view{shape: Shape, strides: Strides, mask: Mask, offset: 0}.
 
-view:M.reshape(_Shape) := M :-
-   true.
+view:M.reshape(Shape) := Dict :-
+   merge_dims(M.shape, M.strides, MShape, MStrides),
+   merge_dims(Shape, Strides, MShape, MStrides),
+   Dict = M.put([shape: Shape, strides: Strides]).
 
 M.default() := Dict :-
    Dict = M.default([]).
@@ -46,9 +48,48 @@ shape_mask(Shape, Mask) :-
    same_length(Shape, Mask),
    maplist([Dim, 0-Dim1]>>(Dim1 is Dim - 1), Shape, Mask).
 
+shape_strides([], []).
 shape_strides([_ | Shape], [HeadStride | Strides]) :-
    foldl([Dim, Stride, ParentStride, Stride]>>(ParentStride #= Dim*Stride),
          Shape, Strides, HeadStride, 1).
+
+% contiguous([_Dim | Shape], [Stride | Strides], [C | Cs]) :-
+%    Stride #= CStride #<==> C,
+%    contiguous(Shape, Strides, Cs, CStride).
+% contiguous([], [], [], 1).
+% contiguous([Dim | Shape], [Stride | Strides], [C | Cs], ParentStride) :-
+%    ParentStride #= ChildStride*Dim,
+%    Stride #= ChildStride #<==> C,
+%    contiguous(Shape, Strides, Cs, ChildStride).
+
+contiguous(Stride, C, [_Dim | Shape], Shape) :-
+   foldl([A, B, A*B]>>true, Shape, 1, Expr),
+   Expr #= Stride #<==> C.
+
+merge_dims(Shape, Strides, MShape, MStrides) :-
+   merge_dims(Shape, Strides, MShape, MStrides, _).
+
+merge_dims([], [], [], [], 1).
+merge_dims([Dim | Shape], [Stride | Strides], MergedShape, MergedStrides, ParentStride) :-
+   ParentStride #= Dim*ChildStride,
+   Stride #= ChildStride #<==> C,
+   merge_dims(C, Shape, Strides, MergedShape, MergedStrides, Dim, Stride, ChildStride).
+merge_dims(0, Shape, Strides, [Dim | MergedShape], [Stride | MergedStrides], Dim, Stride, CStride) :-
+   merge_dims(Shape, Strides, MergedShape, MergedStrides, CStride).
+merge_dims(1, Shape, Strides, MergedShape, MergedStrides, Dim, Stride, CStride) :-
+   merge_dims(Shape, Strides, MergedShape, MergedStrides, Dim, Stride, CStride).
+
+merge_dims([], [], [PopDim], [PopStride], PopDim, PopStride, 1).
+merge_dims([Dim | Shape], [Stride | Strides], MergedShape, MergedStrides, PopDim, PopStride, ParentStride) :-
+   ParentStride #= Dim*ChildStride,
+   Stride #= ChildStride #<==> C,
+   merge_dims(C, Shape, Strides, MergedShape, MergedStrides, PopDim, PopStride, Dim, Stride, ChildStride).
+merge_dims(0, Shape, Strides, [PopDim, Dim | MergedShape], [PopStride, Stride | MergedStrides], PopDim, PopStride, Dim, Stride, CStride) :-
+   merge_dims(Shape, Strides, MergedShape, MergedStrides, CStride).
+merge_dims(1, Shape, Strides, MergedShape, MergedStrides, PopDim, PopStride, Dim, Stride, CStride) :-
+   NewDim #= PopDim*Dim,
+   PopStride #= Dim*Stride,
+   merge_dims(Shape, Strides, MergedShape, MergedStrides, NewDim, Stride, CStride).
 
 :- begin_tests(strides).
 
@@ -75,10 +116,9 @@ test('from_shape') :-
 % ===== SUCCESSFUL RESHAPES =====
 % --- Contiguous ---
 test('contiguous merge') :-
-  Start = view{shape:[2,3,4], strides:[12,4,1], offset:0, mask:_},
+  Start = view{}.from_shape([2,3,4]),
   NewShape = [6,4],
-  shape_mask(NewShape, ExpectedMask),
-  Expected = view{shape:[6,4], strides:[4,1], offset:0, mask:ExpectedMask},
+  Expected = view{}.from_shape(NewShape),
   Start.reshape(NewShape) = Expected.
 
 test('contiguous split') :-
@@ -154,7 +194,7 @@ test('reshape with offset') :-
   Start.reshape(NewShape) = Expected.
 
 test('masked with pad no-op reshape') :-
-  Start = view{shape:[14], strides:[1], offset:-2, mask:[2-11]},
+  Start = view{shape:[14], strides:[1], offset: -2, mask:[2-11]},
   NewShape = [14],
   Start.reshape(NewShape) = Start.
 
@@ -210,7 +250,7 @@ test('masked split unaligned', [fail]) :-
   _ = Start.reshape(NewShape).
 
 % --- Symbolic ---
-test('symbolic contiguous', [sto]) :-
+test('symbolic contiguous', []) :-
   W in 1..10,
   Start = view{shape:[W,4], strides:[4,1], offset:0, mask:_},
   W4 #= W*4,
@@ -218,14 +258,14 @@ test('symbolic contiguous', [sto]) :-
   Expected = view{shape:NewShape, strides:[1], offset:0, mask:_},
   Start.reshape(NewShape) = Expected.
 
-test('symbolic non-contiguous fail', [fail, sto]) :-
+test('symbolic non-contiguous fail', [fail]) :-
   W in 1..10,
   Start = view{shape:[4,W], strides:[W,1], offset:0, mask:_},
   W4 #= W*4,
   NewShape = [W4],
   _ = Start.reshape(NewShape).
 
-test('symbolic no-op', [sto]) :-
+test('symbolic no-op', []) :-
   W in 1..10,
   Start = view{shape:[4,W], strides:[1,4], offset:0, mask:_},
   NewShape = [4,W],
