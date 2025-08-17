@@ -123,6 +123,13 @@ merge_dims_acc(1, [Dim-Stride-_ | T], AccDim-_-_, Merged) :-
 merge_dims_acc(0, [H | T], Acc, [Acc | MergedTail]) :-
    merge_dims_acc(T, H, MergedTail).
 
+:- begin_tests(merge_dims).
+
+test('contiguous merge all') :-
+   merge_dims([2-12-(0-1), 3-4-(0-2), 4-1-(0-3)], [24-1-(0-23)]).
+
+:- end_tests(merge_dims).
+
 :- begin_tests(strides).
 
 test('strides_1') :-
