@@ -155,95 +155,83 @@ test('contiguous merge') :-
   Start.reshape(NewShape) = Expected.
 
 test('contiguous split') :-
-  Start = view{shape:[24], strides:[1], offset:0, mask:_},
+  Start = view{}.from_shape([24]),
   NewShape = [2,3,4],
-  shape_mask(NewShape, ExpectedMask),
-  Expected = view{shape:[2,3,4], strides:[12,4,1], offset:0, mask:ExpectedMask},
+  Expected = view{}.from_shape(NewShape),
   Start.reshape(NewShape) = Expected.
 
 test('contiguous to scalar') :-
-  Start = view{shape:[1], strides:[1], offset:0, mask:_},
+  Start = view{}.from_shape([1]),
   NewShape = [],
-  shape_mask(NewShape, ExpectedMask),
-  Expected = view{shape:[], strides:[], offset:0, mask:ExpectedMask},
+  Expected = view{}.from_shape(NewShape),
   Start.reshape(NewShape) = Expected.
 
 test('scalar to contiguous') :-
-  Start = view{shape:[], strides:[], offset:0, mask:_},
+  Start = view{}.from_shape([]),
   NewShape = [1,1,1],
-  shape_mask(NewShape, ExpectedMask),
-  Expected = view{shape:[1,1,1], strides:[1,1,1], offset:0, mask:ExpectedMask},
+  Expected = view{}.from_shape(NewShape),
   Start.reshape(NewShape) = Expected.
 
 test('contiguous with ones') :-
-  Start = view{shape:[1,10,1], strides:[10,1,1], offset:0, mask:_},
+  Start = view{}.from_shape([1,10,1]),
   NewShape = [10],
-  shape_mask(NewShape, ExpectedMask),
-  Expected = view{shape:[10], strides:[1], offset:0, mask:ExpectedMask},
+  Expected = view{}.from_shape(NewShape),
   Start.reshape(NewShape) = Expected.
 
 % --- Non-contiguous (from expand, permute) ---
 test('split expanded dim') :-
-  Start = view{shape:[10,10], strides:[1,0], offset:0, mask:_},
+  Start = view{}.from_shape([10,10]).put(strides, [1,0]),
   NewShape = [10,2,5],
-  shape_mask(NewShape, ExpectedMask),
-  Expected = view{shape:[10,2,5], strides:[1,0,0], offset:0, mask:ExpectedMask},
+  Expected = view{}.from_shape(NewShape).put(strides, [1,0,0]),
   Start.reshape(NewShape) = Expected.
 
 test('split other expanded dim') :-
-  Start = view{shape:[10,10], strides:[0,1], offset:0, mask:_},
+  Start = view{}.from_shape([10,10]).put(strides, [0,1]),
   NewShape = [10,5,2],
-  shape_mask(NewShape, ExpectedMask),
-  Expected = view{shape:[10,5,2], strides:[0,2,1], offset:0, mask:ExpectedMask},
+  Expected = view{}.from_shape(NewShape).put(strides, [0,2,1]),
   Start.reshape(NewShape) = Expected.
 
 test('merge after permute') :-
-  Start = view{shape:[3,4,2], strides:[4,1,12], offset:0, mask:_},
+  Start = view{}.from_shape([3,4,2]).put(strides, [4,1,12]),
   NewShape = [12,2],
-  shape_mask(NewShape, ExpectedMask),
-  Expected = view{shape:[12,2], strides:[1,12], offset:0, mask:ExpectedMask},
+  Expected = view{}.from_shape(NewShape).put(strides, [1,12]),
   Start.reshape(NewShape) = Expected.
 
 test('double permute with merge') :-
-  Start = view{shape:[4,4,4], strides:[1,16,4], offset:0, mask:_},
+  Start = view{}.from_shape([4,4,4]).put(strides, [1,16,4]),
   NewShape = [16,4],
-  shape_mask(NewShape, ExpectedMask),
-  Expected = view{shape:[16,4], strides:[4,1], offset:0, mask:ExpectedMask},
+  Expected = view{}.from_shape(NewShape),
   Start.reshape(NewShape) = Expected.
 
 % --- Masked ---
 test('reshape masked view') :-
-  Start = view{shape:[10], strides:[1], offset:0, mask:[2-7]},
+  Start = view{}.from_shape([10]).put(mask, [2-7]),
   NewShape = [3,2],
-  shape_mask(NewShape, ExpectedMask),
-  Expected = view{shape:[3,2], strides:[2,1], offset:2, mask:ExpectedMask},
+  Expected = view{}.from_shape(NewShape).put(offset, 2),
   Start.reshape(NewShape) = Expected.
 
 test('reshape with offset') :-
-  Start = view{shape:[6], strides:[1], offset:2, mask:_},
+  Start = view{}.from_shape([6]).put(offset, 2),
   NewShape = [2,3],
-  shape_mask(NewShape, ExpectedMask),
-  Expected = view{shape:[2,3], strides:[3,1], offset:2, mask:ExpectedMask},
+  Expected = view{}.from_shape(NewShape).put(offset, 2),
   Start.reshape(NewShape) = Expected.
 
 test('masked with pad no-op reshape') :-
-  Start = view{shape:[14], strides:[1], offset: -2, mask:[2-11]},
+  Start = view{}.from_shape([14]).put([offset: -2, mask:[2-11]]),
   NewShape = [14],
   Start.reshape(NewShape) = Start.
 
 % --- Zero shapes ---
 test('zero shape to zero shape') :-
-  Start = view{shape:[2,0,4], strides:[0,4,1], offset:0, mask:_},
+  Start = view{}.from_shape([2,0,4]).put(strides, [0,4,1]),
   NewShape = [0,3,1],
-  shape_mask(NewShape, ExpectedMask),
-  Expected = view{shape:[0,3,1], strides:[0,0,0], offset:0, mask:ExpectedMask},
+  Expected = view{}.from_shape(NewShape).put(strides, [0,0,0]),
   Start.reshape(NewShape) = Expected.
 
 test('zero shape with ones') :-
-  Start = view{shape:[1,10,0], strides:[0,0,1], offset:0, mask:_},
+  Start = view{}.from_shape([1,10,0]).put(strides, [0,0,1]),
   NewShape = [0],
-  shape_mask(NewShape, ExpectedMask),
-  Expected = view{shape:[0], strides:[0], offset:0, mask:ExpectedMask},
+  Expected = view{}.from_shape(NewShape).put(strides, [0]),
   Start.reshape(NewShape) = Expected.
 
 % ===== FAILED RESHAPES =====
@@ -285,10 +273,10 @@ test('masked split unaligned', [fail]) :-
 % --- Symbolic ---
 test('symbolic contiguous', []) :-
   W in 1..10,
-  Start = view{shape:[W,4], strides:[4,1], offset:0, mask:_},
+  Start = view{}.from_shape([W,4]),
   W4 #= W*4,
   NewShape = [W4],
-  Expected = view{shape:NewShape, strides:[1], offset:0, mask:_},
+  Expected = view{}.from_shape(NewShape),
   Start.reshape(NewShape) = Expected.
 
 test('symbolic non-contiguous fail', [fail]) :-
@@ -300,7 +288,7 @@ test('symbolic non-contiguous fail', [fail]) :-
 
 test('symbolic no-op', []) :-
   W in 1..10,
-  Start = view{shape:[4,W], strides:[1,4], offset:0, mask:_},
+  Start = view{}.from_shape([4,W]).put(strides, [1,4]),
   NewShape = [4,W],
   Start.reshape(NewShape) = Start.
 
