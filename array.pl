@@ -326,3 +326,32 @@ test('single element mask', []) :-
    Reshaped.mask == [0-1, 1-2].
 
 :- end_tests(reshape).
+
+:- begin_tests(array_reshape).
+
+test('reshape that can be merged replaces the view') :-
+  % Create a contiguous array.
+  A = array{}.empty([2,3,4]),
+  % Reshape it. view{}.reshape() can handle this.
+  B = A.reshape([6,4]),
+  % array{}.reshape() should replace the view, not add one.
+  length(B.views, 1),
+  B.view().shape == [6,4].
+
+test('reshape that cannot be merged adds a new view') :-
+  % Create a non-contiguous view that view{}.reshape() cannot handle.
+  StartView = view{}.from_shape([3,2,4]).put(strides, [4,12,1]),
+  A = array{}.empty([24]).replace_view(StartView),
+  % Reshape it. The total size is the same.
+  B = A.reshape([6,4]),
+  % Since view{}.reshape() fails, array{}.reshape() must add a new view.
+  length(B.views, 2),
+  B.views = [NewView, StartView],
+  NewView == view{}.from_shape([6,4]).
+
+test('reshape with mismatched size fails', [throws(error(domain_error(_,_),_))]) :-
+  A = array{}.empty([2,3]),
+  % New shape has size 9, original has size 6.
+  _ = A.reshape([3,3]).
+
+:- end_tests(array_reshape).
