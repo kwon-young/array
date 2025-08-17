@@ -69,36 +69,57 @@ contiguous(Stride, C, [_Dim | Shape], Shape) :-
    foldl([A, B, A*B]>>true, Shape, 1, Expr),
    Expr #= Stride #<==> C.
 
-merge_dims(Pairs, MergedPairs) :-
-   phrase(merge_dims(Pairs, _), MergedPairs).
+peak(X), [X] -->
+   [X].
 
-merge_dims([], 1) --> [].
-merge_dims([Dim-Stride | Pairs], ParentStride) -->
-   {  ParentStride #= Dim*ChildStride,
-      Stride #= ChildStride #<==> C
-   },
-   merge_dims(C, Pairs, Dim, Stride, ChildStride).
-merge_dims(0, Pairs, Dim, Stride, CStride) -->
-   [Dim-Stride],
-   merge_dims(Pairs, CStride).
-merge_dims(1, Pairs, Dim, Stride, CStride) -->
-   merge_dims(Pairs, Dim, Stride, CStride).
+% merge_dims(Pairs, MergedPairs) :-
+%    phrase(merge_dims(Pairs, _), MergedPairs).
+% merge_dims([], 1) --> [].
+% merge_dims([Dim-Stride | Pairs], ParentStride) -->
+%    peak(MDim-MStride),
+%    {  ParentStride #= Dim*ChildStride,
+%       Stride #= ChildStride #<==> C,
+%       (Dim #= MDim #/\ Stride #= MStride) #<==> #\ C
+%    },
+%    merge_dims(C, Pairs, Dim-Stride, ChildStride).
+% merge_dims(0, Pairs, Pair, CStride) -->
+%    [Pair],
+%    merge_dims(Pairs, CStride).
+% merge_dims(1, Pairs, Pair, CStride) -->
+%    merge_dims(Pairs, Pair, CStride).
+% merge_dims([], Pair, 1) -->
+%    [Pair].
+% merge_dims([Dim-Stride | Pairs], PopDim-PopStride, ParentStride) -->
+%    peak(MDim-MStride),
+%    {  ParentStride #= Dim*ChildStride,
+%       Stride #= ChildStride #<==> C,
+%       (PopDim #= MDim #/\ PopStride #= MStride) #<==> #\ C
+%    },
+%    merge_dims(C, Pairs, PopDim-PopStride, Dim-Stride, ChildStride).
+% merge_dims(0, Pairs, PopPair, Pair, CStride) -->
+%    [PopPair, Pair],
+%    merge_dims(Pairs, CStride).
+% merge_dims(1, Pairs, PopDim-PopStride, Dim-Stride, CStride) -->
+%    {  NewDim #= PopDim*Dim,
+%       PopStride #= Dim*Stride
+%    },
+%    merge_dims(Pairs, NewDim-Stride, CStride).
 
-merge_dims([], PopDim, PopStride, 1) -->
-   [PopDim-PopStride].
-merge_dims([Dim-Stride | Pairs], PopDim, PopStride, ParentStride) -->
-   {  ParentStride #= Dim*ChildStride,
-      Stride #= ChildStride #<==> C
-   },
-   merge_dims(C, Pairs, PopDim, PopStride, Dim, Stride, ChildStride).
-merge_dims(0, Pairs, PopDim, PopStride, Dim, Stride, CStride) -->
-   [PopDim-PopStride, Dim-Stride],
-   merge_dims(Pairs, CStride).
-merge_dims(1, Pairs, PopDim, PopStride, Dim, Stride, CStride) -->
-   {  NewDim #= PopDim*Dim,
-      PopStride #= Dim*Stride
-   },
-   merge_dims(Pairs, NewDim, Stride, CStride).
+merge_dims([], []).
+merge_dims([H | T], MergedPairs) :-
+   merge_dims_acc(T, H, MergedPairs).
+
+merge_dims_acc([], Acc, [Acc]).
+merge_dims_acc([Dim-Stride | T], AccDim-AccStride, [MDim-MStride | Merged]) :-
+   AccStride #= Dim * Stride #<==> C,
+   AccDim #= MDim #<==> #\ C,
+   merge_dims_acc(C, [Dim-Stride | T], AccDim-AccStride, [MDim-MStride | Merged]).
+
+merge_dims_acc(1, [Dim-Stride | T], AccDim-_, Merged) :-
+   NewAccDim #= AccDim * Dim,
+   merge_dims_acc(T, NewAccDim-Stride, Merged).
+merge_dims_acc(0, [H | T], Acc, [Acc | MergedTail]) :-
+   merge_dims_acc(T, H, MergedTail).
 
 :- begin_tests(strides).
 
