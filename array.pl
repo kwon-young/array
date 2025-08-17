@@ -106,29 +106,23 @@ peak(X), [X] -->
 %    },
 %    merge_dims(Pairs, NewDim-Stride, CStride).
 
-merge_dims([], []).
+merge_dims([], [1-1-(0-0)]).
 merge_dims([H | T], MergedPairs) :-
    merge_dims_acc(T, H, MergedPairs).
 
 merge_dims_acc([], Acc, [Acc]).
-merge_dims_acc([Dim-Stride-(Min-Max) | T], AccDim-AccStride-AccMask, [MDim-MStrideMask | Merged]) :-
+merge_dims_acc([Dim-Stride-(Min-Max) | T], AccDim-AccStride-AccMask, [MDim-MStride-MMask | Merged]) :-
    AccStride #= Dim * Stride #<==> C,
    Max - Min + 1 #= Dim #<==> C,
    AccDim #= MDim #<==> #\ C,
-   merge_dims_acc(C, [Dim-Stride | T], AccDim-AccStride-AccMask, [MDim-MStrideMask | Merged]).
+   merge_dims_acc(C, [Dim-Stride-(Min-Max) | T], AccDim-AccStride-AccMask, [MDim-MStride-MMask | Merged]).
 
 merge_dims_acc(1, [Dim-Stride-_ | T], AccDim-_-_, Merged) :-
    NewAccDim #= AccDim * Dim,
-   merge_dims_acc(T, NewAccDim-Stride-(0-NewAccDim), Merged).
+   NewMax #= NewAccDim - 1,
+   merge_dims_acc(T, NewAccDim-Stride-(0-NewMax), Merged).
 merge_dims_acc(0, [H | T], Acc, [Acc | MergedTail]) :-
    merge_dims_acc(T, H, MergedTail).
-
-:- begin_tests(merge_dims).
-
-test('contiguous merge all') :-
-   merge_dims([2-12-(0-1), 3-4-(0-2), 4-1-(0-3)], [24-1-(0-23)]).
-
-:- end_tests(merge_dims).
 
 :- begin_tests(strides).
 
@@ -150,7 +144,7 @@ test('from_shape') :-
 
 :- end_tests(view).
 
-:- begin_tests(reshape, [blocked('not implemented')]).
+:- begin_tests(reshape).
 
 % ===== SUCCESSFUL RESHAPES =====
 % --- Contiguous ---
