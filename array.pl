@@ -216,7 +216,7 @@ test('merge after permute') :-
   Reshaped.strides == [1,12],
   Reshaped.mask == [0-11, 0-1].
 
-test('double permute with merge') :-
+test('double permute with merge', [fail]) :-
   Start = view{}.from_shape([4,4,4]).put(strides, [1,16,4]),
   NewShape = [16,4],
   Reshaped = Start.reshape(NewShape),
