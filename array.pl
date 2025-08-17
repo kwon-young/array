@@ -111,11 +111,14 @@ merge_dims([H | T], MergedPairs) :-
    merge_dims_acc(T, H, MergedPairs).
 
 merge_dims_acc([], Acc, [Acc]).
-merge_dims_acc([Dim-Stride-(Min-Max) | T], AccDim-AccStride-AccMask, [MDim-MStride-MMask | Merged]) :-
-   AccStride #= Dim * Stride #<==> C,
-   Max - Min + 1 #= Dim #<==> C,
-   AccDim #= MDim #<==> #\ C,
-   merge_dims_acc(C, [Dim-Stride-(Min-Max) | T], AccDim-AccStride-AccMask, [MDim-MStride-MMask | Merged]).
+merge_dims_acc([Dim-Stride-(Min-Max) | T], AccDim-AccStride-(AccMin-AccMax), Merged) :-
+   AccStride #= Dim * Stride 
+      #/\ Min #= 0
+      #/\ Max #= Dim - 1
+      #/\ AccMin #= 0
+      #/\ AccMax #= AccDim - 1
+      #<==> C,
+   merge_dims_acc(C, [Dim-Stride-(Min-Max) | T], AccDim-AccStride-(AccMin-AccMax), Merged).
 
 merge_dims_acc(1, [Dim-Stride-_ | T], AccDim-_-_, Merged) :-
    NewAccDim #= AccDim * Dim,
@@ -152,7 +155,7 @@ test('contiguous merge') :-
   Start = view{}.from_shape([2,3,4]),
   NewShape = [6,4],
   Expected = view{}.from_shape(NewShape),
-  Start.reshape(NewShape) = Expected.
+  Start.reshape(NewShape) == Expected.
 
 test('contiguous split') :-
   Start = view{}.from_shape([24]),
