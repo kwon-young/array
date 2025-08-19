@@ -355,3 +355,16 @@ test('reshape with mismatched size fails', [throws(error(domain_error(_,_),_))])
   _ = A.reshape([3,3]).
 
 :- end_tests(array_reshape).
+
+:- begin_tests(array_empty).
+
+test('create empty array') :-
+  A = array{}.empty([2,3], [dtype(float), device(prolog)]),
+  A.shape() == [2,3],
+  A.dtype == float,
+  A.device == prolog,
+  A.op == buffer(6),
+  length(A.views, 1),
+  A.view().shape == [2,3].
+
+:- end_tests(array_empty).
