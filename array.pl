@@ -2,6 +2,7 @@
 
 :- use_module(library(clpfd)).
 :- use_module(library(pairs)).
+:- use_module(library(dcg/high_order)).
 
 view:_.from_shape(Shape) := View :-
    shape_strides(Shape, Strides),
@@ -17,6 +18,14 @@ view:M.zip() := Zip :-
    maplist([Dim, Stride, Mask, Dim-Stride-Mask]>>true, M.shape, M.strides, M.mask, Zip).
 view:M.size() := Size :-
    shape_size(M.shape, Size).
+view:M.contiguous() := Res :-
+   (  shape_strides(M.shape, M.strides),
+      shape_mask(M.shape, M.mask),
+      M.offset = 0
+   -> Res = true
+   ;  Res = false
+   ).
+
 
 M.default() := Dict :-
    Dict = M.default([]).
@@ -25,12 +34,14 @@ M.default(Options) := Dict :-
    merge_options(Options, MOptions, Merged),
    option(dtype(DType), Merged, float),
    option(device(Device), Merged, prolog),
-   Dict = array{views: [], dtype:DType, device:Device, data: _}.
+   Dict = array{views: [], dtype:DType, device:Device, data: _, op: true}.
 
-M.push(buffer(Size)) := Dict :-
-   Dict = M.push_view(view{}.from_shape([Size])).push_op(buffer(Size)).
+M.push(contiguous) := Dict :-
+   Dict = M.empty().push_view(view{}.from(M.shape())).push_op(contiguous(M)).
+
 M.push_op(Op) := Dict :-
    Dict = M.put([id: _Id, op: Op]).
+
 M.push_view(View) := Dict :-
    Dict = M.put([views: [View | M.views]]).
 M.pop_view(View) := Dict :-
@@ -49,7 +60,12 @@ M.empty(Shape) := Dict :-
    Dict = M.empty(Shape, []).
 M.empty(Shape, Options) := Dict :-
    shape_size(Shape, Size),
-   Dict = M.default(Options).push(buffer(Size)).reshape(Shape).
+   Dict = M.default(Options).push(view{}.from_shape([Size])).
+
+M.tolist() := List :-
+   shape_list(M.shape(), List),
+   flatten(List, Flat),
+   compound_name_arguments(M.contiguous().to(prolog).realize().data, data, Flat).
 
 M.reshape(Shape) := Dict :-
    (  shape_size(Shape, M.size())
@@ -59,6 +75,83 @@ M.reshape(Shape) := Dict :-
       )
    ;  domain_error(M.shape(), Shape)
    ).
+
+M.contiguous() := Dict :-
+   Dict = M.push(contiguous).
+
+M.to(Device) := Dict :-
+   (  M.device = Device
+   -> Dict = M
+   ;  resource_error(to(M.device, Device))
+   ).
+
+M.realize() := M :-
+   create_schedule([M.push(sink)], Schedule),  % toposort of graph
+   maplist(compile, Schedule, CompiledSchedule),
+   run_schedule(CompiledSchedule).  % generate device specific code and execute
+
+create_schedule(Arrays, Schedule) :-
+   maplist(array_graph, Arrays, Graphs),
+   foldl(ugraph_union, Graphs, [], Graph),
+   top_sort(Graph, Schedule).
+
+array_graph(Array, Graph) :-
+   phrase(array_graph(Array), Edges),
+   vertices_edges_to_ugraph([], Edges, Graph).
+
+array_graph(Array), is_dict(Array, array) ==>
+   (  var(Array.data)
+   -> array_graph(Array.op, Array)
+   ;  []
+   ).
+array_graph(Parent, Array), is_dict(Array, array) ==>
+   array_graph(Array),
+   [Parent-Array].
+array_graph(Parent, Op) ==>
+   (  compound(Op)
+   -> compound_name_arguments(Op, _, Args),
+      sequence(array_graph(Parent), Args)
+   ;  true
+   ).
+
+compile(In, Out) :-
+   compile(In.device, In.op, In, Out).
+
+M.compile(prolog, true) := Dict :-
+   Dict = M.put(kernel, true).
+M.compile(prolog, contiguous(Parent)) := Dict :-
+   M1 = M.put(op, contiguous(Parent.data)),
+   variant_sha1(M1, KernelId),
+   Head =.. [KernelId, M.id, Parent.id, FlatIndex],
+   ModuleHead = kernel:Head,
+   % this index_expr is not implemented
+   ParentIndexExpr = Parent.index_expr(FlatIndex),
+   MIndexExpr = M.index_expr(FlatIndex),
+   Kernel = (ModuleHead :-
+      ParentIndex is ParentIndexExpr,
+      MIndex is MIndexExpr,
+      arg(ParentIndex, Parent.id, ParentValue),
+      nb_setarg(MIndex, M.id, ParentValue)
+   ),
+   retractall(ModuleHead),
+   asserta(Kernel),
+   CallHead =.. [KernelId, Parent.data, M.data, I],
+   Dict = M.put([kernel=(kernel:CallHead), index=I]).
+
+run_schedule(Schedule) :-
+   maplist(run_scheduleitem, Schedule).
+
+run_scheduleitem(M) :-
+   run_scheduleitem(M.device, M).
+run_scheduleitem(prolog, M) :-
+   Size1 is M.size() - 1,
+   compound_name_arity(M.data, data, M.size()),
+   (  M.kernel = true
+   -> true
+   ;  forall(between(0, Size1, M.index), M.kernel)
+   ).
+
+
 
 product(L, Rel, Product) :-
    foldl([A, B, A*B]>>(true), L, 1, Expr),
@@ -83,27 +176,19 @@ shape_strides([_ | Shape], [HeadStride | Strides]) :-
 
 merge_dims([], [1-1-(0-1)]).
 merge_dims([H | T], MergedPairs) :-
-   merge_dims_acc(T, H, MergedPairs).
+   merge_dims(T, H, MergedPairs).
 
-merge_dims_acc([], Acc, [Acc]).
-merge_dims_acc([Dim-Stride-(Min-Max) | T], AccDim-AccStride-(AccMin-AccMax), Merged) :-
-   mask(Dim, Min-Max),
-   mask(AccDim, AccMin-AccMax),
-   AccStride #= Dim * Stride 
-      #/\ (
-             (Min #= 0 #/\ Max #= Dim #/\ AccMin #= 0 #/\ AccMax #= AccDim)
-         #\/ (Max - Min #= 1 #/\ AccMax - AccMin #= 1)
-      )
-      #<==> C,
-   merge_dims_acc(C, [Dim-Stride-(Min-Max) | T], AccDim-AccStride-(AccMin-AccMax), Merged).
-
-merge_dims_acc(1, [Dim-Stride-(Min-Max) | T], AccDim-_-(AccMin-AccMax), Merged) :-
+merge_dims([], Acc, [Acc]).
+merge_dims_acc([Dim-Stride-(Min-Max) | T], AccDim-_-(AccMin-AccMax), Merged) :-
+   (  full_mask(Dim, Min-Max), full_mask(AccDim, AccMin-AccMax)
+   ;  single_element_mask(Dim, Min-Max), single_element_mask(AccDim, AccMin-AccMax)
+   ),
    NewAccDim #= AccDim * Dim,
    NewMin #= AccMin*AccDim + Min,
    NewMax #= (AccMax-1)*Dim + Max,
-   merge_dims_acc(T, NewAccDim-Stride-(NewMin-NewMax), Merged).
-merge_dims_acc(0, [H | T], Acc, [Acc | MergedTail]) :-
-   merge_dims_acc(T, H, MergedTail).
+   merge_dims(T, NewAccDim-Stride-(NewMin-NewMax), Merged).
+merge_dims_acc([H | T], Acc, [Acc | MergedTail]) :-
+   merge_dims(T, H, MergedTail).
 
 mask(Dim, Min-Max) :-
    Min #>= 0,
@@ -111,6 +196,15 @@ mask(Dim, Min-Max) :-
    Min #=< Dim,
    Max #=< Dim,
    Max #>= Min.
+full_mask(Dim, 0-Dim).
+single_element_mask(Dim, Min-Max) :-
+   mask(Dim, Min-Max),
+   Max - Min #= 1.
+
+shape_list([], _).
+shape_list([Dim | Shape], L) :-
+   length(L, Dim),
+   maplist(shape_list(Shape), L).
 
 :- begin_tests(strides).
 
