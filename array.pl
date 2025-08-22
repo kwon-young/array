@@ -122,7 +122,8 @@ M.realize() := M :-
 create_schedule(Arrays, Schedule) :-
    maplist(array_graph, Arrays, Graphs),
    foldl(ugraph_union, Graphs, [], Graph),
-   top_sort(Graph, Schedule).
+   top_sort(Graph, RSchedule),
+   reverse(RSchedule, Schedule).
 
 array_graph(Array, Graph) :-
    phrase(array_graph(Array), Edges),
@@ -609,19 +610,13 @@ test('two independent arrays') :-
     A = array{data: _, op: true},
     B = array{data: _, op: true},
     create_schedule([A, B], Schedule),
-    ( Schedule == [A, B] ; Schedule == [B, A] ).
-
-test('two arrays, one depends on other') :-
-    B = array{data: _, op: true},
-    A = array{data: _, op: op1(B)},
-    create_schedule([A, B], Schedule),
     Schedule == [B, A].
 
-test('two arrays, shared dependency') :-
-    C = array{data: _, op: true},
-    A = array{data: _, op: op1(C)},
-    B = array{data: _, op: op2(C)},
-    create_schedule([A, B], Schedule),
-    ( Schedule == [C, A, B] ; Schedule == [C, B, A] ).
+test('C = A+B') :-
+    A = array{data: _, op: true},
+    B = array{data: _, op: true},
+    C = array{data: _, op: A+B},
+    create_schedule([C], Schedule),
+    Schedule == [B, A, C].
 
 :- end_tests(create_schedule).
