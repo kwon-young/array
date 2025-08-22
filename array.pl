@@ -584,3 +584,44 @@ test('create empty array') :-
   A.view().shape == [2,3].
 
 :- end_tests(array_empty).
+
+:- begin_tests(create_schedule).
+
+test('one array, no dependencies') :-
+    A = array{data: _, op: true},
+    create_schedule([A], Schedule),
+    Schedule == [A].
+
+test('one array, one dependency') :-
+    B = array{data: _, op: true},
+    A = array{data: _, op: op1(B)},
+    create_schedule([A], Schedule),
+    Schedule == [B, A].
+
+test('one array, chain of two dependencies') :-
+    C = array{data: _, op: true},
+    B = array{data: _, op: op1(C)},
+    A = array{data: _, op: op2(B)},
+    create_schedule([A], Schedule),
+    Schedule == [C, B, A].
+
+test('two independent arrays') :-
+    A = array{data: _, op: true},
+    B = array{data: _, op: true},
+    create_schedule([A, B], Schedule),
+    ( Schedule == [A, B] ; Schedule == [B, A] ).
+
+test('two arrays, one depends on other') :-
+    B = array{data: _, op: true},
+    A = array{data: _, op: op1(B)},
+    create_schedule([A, B], Schedule),
+    Schedule == [B, A].
+
+test('two arrays, shared dependency') :-
+    C = array{data: _, op: true},
+    A = array{data: _, op: op1(C)},
+    B = array{data: _, op: op2(C)},
+    create_schedule([A, B], Schedule),
+    ( Schedule == [C, A, B] ; Schedule == [C, B, A] ).
+
+:- end_tests(create_schedule).
