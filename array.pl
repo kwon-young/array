@@ -485,58 +485,66 @@ test('reshape with mismatched size fails', [throws(error(domain_error(_,_),_))])
 test('contiguous') :-
     V = view{}.from_shape([4, 5]),
     A = array{}.default().push_view(V),
-    IndexExpr = A.index_expr(7),
-    7 is IndexExpr.
+    IndexExpr-ValidExpr = A.index_expr([1, 2]),
+    7 is IndexExpr,
+    ValidExpr == true.
 
 test('offset') :-
     V = view{}.from_shape([4, 5]).put(offset, 10),
     A = array{}.default().push_view(V),
-    IndexExpr = A.index_expr(7),
-    17 is IndexExpr.
+    IndexExpr-ValidExpr = A.index_expr([1, 2]),
+    17 is IndexExpr,
+    ValidExpr == true.
 
 test('sliced') :-
     % A 3x4 slice from a 10x10 array, starting at (2,3)
     V = view{shape:[3,4], strides:[10,1], mask:[0-3,0-4], offset:23},
     A = array{}.default().push_view(V),
-    % logical flat index 5 is coordinate (1,1) in the 3x4 slice
+    % logical coordinate (1,1) in the 3x4 slice
     % physical flat index should be for (2+1, 3+1) = (3,4) in 10x10 array
     % which is 3*10 + 4 = 34
-    IndexExpr = A.index_expr(5),
-    34 is IndexExpr.
+    IndexExpr-ValidExpr = A.index_expr([1, 1]),
+    34 is IndexExpr,
+    ValidExpr == true.
 
 test('transposed') :-
     % A 10x20 array, transposed to 20x10
     V = view{shape:[20,10], strides:[1,20], mask:[0-20,0-10], offset:0},
     A = array{}.default().push_view(V),
-    % logical flat index 21 is (2,1) in 20x10 array
+    % logical coordinate (2,1) in 20x10 array
     % this corresponds to (1,2) in 10x20 array
     % physical flat index is 1*20 + 2 = 22
-    IndexExpr = A.index_expr(21),
-    22 is IndexExpr.
+    IndexExpr-ValidExpr = A.index_expr([2, 1]),
+    22 is IndexExpr,
+    ValidExpr == true.
 
 test('stacked views') :-
     % A permuted array that is reshaped, adding a view
     V_permute = view{shape:[3,2,4], strides:[4,12,1], offset:0, mask:[0-3,0-2,0-4]},
     V_reshape = view{}.from_shape([6,4]), % logical view
     A = array{}.default().put(views, [V_reshape, V_permute]),
-    % logical flat index 7 is (1,3) in 6x4 array
-    % this is flat index 7 for the permuted array
-    % flat index 7 in shape [3,2,4] is coord (0,1,3)
-    % physical index is 0*4 + 1*12 + 3*1 = 15
-    IndexExpr = A.index_expr(7),
-    15 is IndexExpr.
+    % logical coordinate (1,3) in 6x4 array
+    % -> logical flat index 7 for V_permute
+    % -> logical coordinate (0,1,3) for V_permute (shape [3,2,4])
+    % -> physical index is 0*4 + 1*12 + 3*1 = 15
+    IndexExpr-ValidExpr = A.index_expr([1,3]),
+    15 is IndexExpr,
+    ValidExpr.
 
 test('three stacked views') :-
     V_phys = view{}.from_shape([100]),
     V_transpose = view{shape:[10,10], strides:[1,10], mask:[0-10,0-10], offset:0},
-    V_reshape = view{shape:[2,5,10], strides:[50,10,1], mask:[0-2,0-5,0-10], offset:0},
+    V_reshape = view{}.from_shape([2,5,10]),
     A = array{}.default().put(views, [V_reshape, V_transpose, V_phys]),
-    % logical flat index 25 is (0,2,5) in [2,5,10] array
-    % -> flat index 25 for V_transpose
-    % flat index 25 in shape [10,10] is coord (2,5)
-    % -> index in V_phys is 2*1 + 5*10 = 52
-    IndexExpr = A.index_expr(25),
-    52 is IndexExpr.
+    % logical coordinate (0,2,5) in [2,5,10] array
+    % -> logical flat index 25 for V_transpose
+    % -> logical coordinate (2,5) for V_transpose (shape [10,10])
+    % -> physical flat index 52 from V_transpose (strides [1,10])
+    % -> logical flat index 52 for V_phys
+    % -> physical flat index 52 from V_phys (contiguous)
+    IndexExpr-ValidExpr = A.index_expr([0,2,5]),
+    52 is IndexExpr,
+    ValidExpr.
 
 :- end_tests(index_expr).
 
