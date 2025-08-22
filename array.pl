@@ -75,7 +75,7 @@ M.empty(Shape) := Dict :-
    Dict = M.empty(Shape, []).
 M.empty(Shape, Options) := Dict :-
    shape_size(Shape, Size),
-   Dict = M.default(Options).push(view{}.from_shape([Size])).
+   Dict = M.default(Options).push_view(view{}.from_shape([Size])).reshape(Shape).
 
 M.tolist() := List :-
    shape_list(M.shape(), List),
@@ -115,7 +115,7 @@ array_graph(Array, Graph) :-
    vertices_edges_to_ugraph([], Edges, Graph).
 
 array_graph(Array), is_dict(Array, array) ==>
-   (  var(Array.data)
+   (  {var(Array.data)}
    -> array_graph(Array.op, Array)
    ;  []
    ).
@@ -123,10 +123,10 @@ array_graph(Parent, Array), is_dict(Array, array) ==>
    array_graph(Array),
    [Parent-Array].
 array_graph(Parent, Op) ==>
-   (  compound(Op)
-   -> compound_name_arguments(Op, _, Args),
+   (  {compound(Op)}
+   -> {compound_name_arguments(Op, _, Args)},
       sequence(array_graph(Parent), Args)
-   ;  true
+   ;  []
    ).
 
 compile(In, Out) :-
@@ -162,9 +162,9 @@ M.compile(prolog, contiguous(Parent)) := Dict :-
 M.index_expr(Index) := IndexExpr-ValidExpr :-
    M.views = [View | Views],
    foldl([V, Valid, FlatIn, FlatOut]>>(
-            view:reverse_index_expr(FlatIn, V, _Index),
-            view:valid_expr(_Index, V, Valid),
-            view:index_expr(_Index, V, FlatOut)
+            view:reverse_index_expr(FlatIn, V, Index_),
+            view:valid_expr(Index_, V, Valid),
+            view:index_expr(Index_, V, FlatOut)
          ), Views, Valids, View.index_expr(Index), IndexExpr),
    comma_list(Valids, ValidExpr).
 
@@ -180,8 +180,6 @@ run_scheduleitem(prolog, M) :-
    -> true
    ;  forall(between(0, Size1, M.index), M.kernel)
    ).
-
-
 
 product(L, Rel, Product) :-
    foldl([A, B, A*B]>>(true), L, 1, Expr),
@@ -202,6 +200,7 @@ shape_strides([_ | Shape], [HeadStride | Strides]) :-
    foldl([Dim, Stride, ParentStride, Stride]>>(ParentStride #= Dim*Stride),
          Shape, Strides, HeadStride, 1).
 
+% :- det(merge_dims/2).
 :- table merge_dims/2.
 
 merge_dims([], [1-1-(0-1)]).
@@ -209,15 +208,16 @@ merge_dims([H | T], MergedPairs) :-
    merge_dims(T, H, MergedPairs).
 
 merge_dims([], Acc, [Acc]).
-merge_dims_acc([Dim-Stride-(Min-Max) | T], AccDim-_-(AccMin-AccMax), Merged) :-
+merge_dims([Dim-Stride-(Min-Max) | T], AccDim-AccStride-(AccMin-AccMax), Merged) :-
    (  full_mask(Dim, Min-Max), full_mask(AccDim, AccMin-AccMax)
    ;  single_element_mask(Dim, Min-Max), single_element_mask(AccDim, AccMin-AccMax)
    ),
+   AccStride #= Dim * Stride,
    NewAccDim #= AccDim * Dim,
    NewMin #= AccMin*AccDim + Min,
    NewMax #= (AccMax-1)*Dim + Max,
    merge_dims(T, NewAccDim-Stride-(NewMin-NewMax), Merged).
-merge_dims_acc([H | T], Acc, [Acc | MergedTail]) :-
+merge_dims([H | T], Acc, [Acc | MergedTail]) :-
    merge_dims(T, H, MergedTail).
 
 mask(Dim, Min-Max) :-
@@ -483,8 +483,7 @@ test('reshape with mismatched size fails', [throws(error(domain_error(_,_),_))])
 :- begin_tests(index_expr).
 
 test('contiguous') :-
-    V = view{}.from_shape([4, 5]),
-    A = array{}.default().push_view(V),
+    A = array{}.empty([4, 5]),
     IndexExpr-ValidExpr = A.index_expr([1, 2]),
     7 is IndexExpr,
     ValidExpr == true.
