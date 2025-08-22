@@ -36,8 +36,9 @@ view:View.reverse_index_expr(FlatIndex) := Index :-
    foldl([Stride, Flat // Stride, Flat, Flat mod Stride]>>true,
          Strides, Index, FlatIndex, _).
 view:View.valid_expr(Index) := ValidExpr :-
-   maplist([I, Min-Max, (I >= Min, I < Max)]>>true,
-           Index, View.mask, ValidExpr).
+   maplist([I, Min-Max, (Min =< I, I < Max)]>>true,
+           Index, View.mask, Valid),
+   comma_list(ValidExpr, Valid).
 
 
 M.default() := Dict :-
@@ -166,7 +167,7 @@ M.index_expr(Index) := IndexExpr-ValidExpr :-
             view:valid_expr(Index_, V, Valid),
             view:index_expr(Index_, V, FlatOut)
          ), Views, Valids, View.index_expr(Index), IndexExpr),
-   comma_list(Valids, ValidExpr).
+   comma_list(ValidExpr, [View.valid_expr(Index) | Valids]).
 
 run_schedule(Schedule) :-
    maplist(run_scheduleitem, Schedule).
