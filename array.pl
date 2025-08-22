@@ -18,6 +18,8 @@ view:M.zip() := Zip :-
    maplist([Dim, Stride, Mask, Dim-Stride-Mask]>>true, M.shape, M.strides, M.mask, Zip).
 view:M.size() := Size :-
    shape_size(M.shape, Size).
+view:M.ndim() := NDim :-
+   length(M.shape, NDim).
 view:M.contiguous() := Res :-
    (  shape_strides(M.shape, M.strides),
       shape_mask(M.shape, M.mask),
@@ -25,6 +27,17 @@ view:M.contiguous() := Res :-
    -> Res = true
    ;  Res = false
    ).
+
+view:View.index_expr(Index) := FlatIndex :-
+   foldl([I, Stride, Sum, Sum+I*Stride]>>true,
+         Index, View.strides, View.offset, FlatIndex).
+view:View.reverse_index_expr(FlatIndex) := Index :-
+   shape_strides(View.shape, Strides),
+   foldl([Stride, Flat // Stride, Flat, Flat mod Stride]>>true,
+         Strides, Index, FlatIndex, _).
+view:View.valid_expr(Index) := ValidExpr :-
+   maplist([I, Min-Max, (I >= Min, I < Max)]>>true,
+           Index, View.mask, ValidExpr).
 
 
 M.default() := Dict :-
@@ -55,6 +68,8 @@ M.size() := Size :-
    Size = M.view().size().
 M.shape() := Shape :-
    Shape = M.view().shape.
+M.ndim() := NDim :-
+   NDim = M.view().ndim().
 
 M.empty(Shape) := Dict :-
    Dict = M.empty(Shape, []).
@@ -120,45 +135,38 @@ compile(In, Out) :-
 M.compile(prolog, true) := Dict :-
    Dict = M.put(kernel, true).
 M.compile(prolog, contiguous(Parent)) := Dict :-
-   M1 = M.put(op, contiguous(Parent.data)),
-   variant_sha1(M1, KernelId),
-   Head =.. [KernelId, M.id, Parent.id, FlatIndex],
+   (  M.contiguous() = true
+   -> true
+   ;  domain_error(contiguous, M)
+   ),
+   variant_sha1(M.put(op, contiguous(Parent.data)), KernelId),
+   length(Index, M.ndim()),
+   Head =.. [KernelId, M.id, Parent.id, Index],
    ModuleHead = kernel:Head,
-   % this index_expr is not implemented
-   ParentIndexExpr = Parent.index_expr(FlatIndex),
-   MIndexExpr = M.index_expr(FlatIndex),
+   ParentIndexExpr-ParentValidExpr = Parent.index_expr(Index),
+   MIndexExpr-_ = M.index_expr(Index),
    Kernel = (ModuleHead :-
-      ParentIndex is ParentIndexExpr,
+      (  ParentValidExpr
+      -> ParentIndex is ParentIndexExpr,
+         arg(ParentIndex, Parent.id, ParentValue)
+      ;  ParentValue = 0
+      ),
       MIndex is MIndexExpr,
-      arg(ParentIndex, Parent.id, ParentValue),
       nb_setarg(MIndex, M.id, ParentValue)
    ),
    retractall(ModuleHead),
    asserta(Kernel),
-   CallHead =.. [KernelId, Parent.data, M.data, I],
-   Dict = M.put([kernel=(kernel:CallHead), index=I]).
+   CallHead =.. [KernelId, Parent.data, M.data, Index],
+   Dict = M.put([kernel=(kernel:CallHead), index=Index]).
 
-M.index_expr(FlatIndex) := IndexExpr :-
-   foldl(view_index_expr, M.views, FlatIndex, IndexExpr).
-
-view_index_expr(View, InExpr, OutExpr) :-
-   index_coords_exprs(InExpr, View.shape, CoordsExprs),
-   maplist([Coord, Min-_, Stride, ((Coord+Min)*Stride)]>>true,
-           CoordsExprs, View.mask, View.strides, Terms),
-   foldl([Term, Acc, Acc+Term]>>true, Terms, View.offset, OutExpr).
-
-index_coords_exprs(FlatIndexExpr, Shape, CoordsExprs) :-
-    (  Shape = []
-    -> CoordsExprs = []
-    ;  shape_strides(Shape, UnflattenStrides),
-       index_coords_exprs_loop(FlatIndexExpr, UnflattenStrides, CoordsExprs)
-    ).
-
-index_coords_exprs_loop(Remainder, [1], [Remainder]) :- !.
-index_coords_exprs_loop(Remainder, [S|Ss], [C|Cs]) :-
-    C = Remainder // S,
-    NewRemainder = Remainder mod S,
-    index_coords_exprs_loop(NewRemainder, Ss, Cs).
+M.index_expr(Index) := IndexExpr-ValidExpr :-
+   M.views = [View | Views],
+   foldl([V, Valid, FlatIn, FlatOut]>>(
+            view:reverse_index_expr(FlatIn, V, _Index),
+            view:valid_expr(_Index, V, Valid),
+            view:index_expr(_Index, V, FlatOut)
+         ), Views, Valids, View.index_expr(Index), IndexExpr),
+   comma_list(Valids, ValidExpr).
 
 run_schedule(Schedule) :-
    maplist(run_scheduleitem, Schedule).
