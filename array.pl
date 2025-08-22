@@ -20,7 +20,7 @@ view:M.size() := Size :-
    shape_size(M.shape, Size).
 view:M.ndim() := NDim :-
    length(M.shape, NDim).
-view:M.contiguous() := Res :-
+view:M.is_contiguous() := Res :-
    (  shape_strides(M.shape, M.strides),
       shape_mask(M.shape, M.mask),
       M.offset = 0
@@ -48,10 +48,16 @@ M.default(Options) := Dict :-
    merge_options(Options, MOptions, Merged),
    option(dtype(DType), Merged, float),
    option(device(Device), Merged, prolog),
-   Dict = array{views: [], dtype:DType, device:Device, data: _, op: true}.
+   (  option(shape(Shape), Merged)
+   -> View = view{}.from_shape(Shape),
+      DataSize = View.size(),
+      Views = [View]
+   ;  Views = []
+   ),
+   Dict = array{id: _, views: Views, dtype:DType, device:Device, data: _, datasize: DataSize, op: true}.
 
 M.push(contiguous) := Dict :-
-   Dict = M.empty().push_view(view{}.from(M.shape())).push_op(contiguous(M)).
+   Dict = M.empty(M.shape()).push_op(contiguous(M)).
 
 M.push_op(Op) := Dict :-
    Dict = M.put([id: _Id, op: Op]).
@@ -75,8 +81,7 @@ M.ndim() := NDim :-
 M.empty(Shape) := Dict :-
    Dict = M.empty(Shape, []).
 M.empty(Shape, Options) := Dict :-
-   shape_size(Shape, Size),
-   Dict = M.default(Options).push_view(view{}.from_shape([Size])).reshape(Shape).
+   Dict = M.default([shape(Shape) | Options]).
 
 M.tolist() := List :-
    shape_list(M.shape(), List),
@@ -93,7 +98,13 @@ M.reshape(Shape) := Dict :-
    ).
 
 M.contiguous() := Dict :-
-   Dict = M.push(contiguous).
+   (  M.is_contiguous()
+   -> Dict = M
+   ;  Dict = M.push(contiguous)
+   ).
+M.is_contiguous() := Res :-
+   maplist(view:is_contiguous, M.views, [H | T]),
+   foldl(mkconj, T, H, Res).
 
 M.to(Device) := Dict :-
    (  M.device = Device
@@ -102,8 +113,10 @@ M.to(Device) := Dict :-
    ).
 
 M.realize() := M :-
-   create_schedule([M.push(sink)], Schedule),  % toposort of graph
+   % TODO: optimization
+   create_schedule([M], Schedule),  % toposort of graph
    maplist(compile, Schedule, CompiledSchedule),
+   allocate_schedule(Schedule),
    run_schedule(CompiledSchedule).  % generate device specific code and execute
 
 create_schedule(Arrays, Schedule) :-
@@ -113,11 +126,11 @@ create_schedule(Arrays, Schedule) :-
 
 array_graph(Array, Graph) :-
    phrase(array_graph(Array), Edges),
-   vertices_edges_to_ugraph([], Edges, Graph).
+   vertices_edges_to_ugraph([Array], Edges, Graph).
 
 array_graph(Array), is_dict(Array, array) ==>
    (  {var(Array.data)}
-   -> array_graph(Array.op, Array)
+   -> array_graph(Array, Array.op)
    ;  []
    ).
 array_graph(Parent, Array), is_dict(Array, array) ==>
@@ -130,13 +143,22 @@ array_graph(Parent, Op) ==>
    ;  []
    ).
 
-compile(In, Out) :-
-   compile(In.device, In.op, In, Out).
+allocate_schedule(Schedule) :-
+   maplist(allocate, Schedule).
+
+allocate(M) :-
+   (  var(M.data)
+   -> compound_name_arity(M.data, data, M.datasize)
+   ;  true
+   ).
+
+M.compile() := Dict :-
+   Dict = M.compile(M.device, M.op).
 
 M.compile(prolog, true) := Dict :-
    Dict = M.put(kernel, true).
 M.compile(prolog, contiguous(Parent)) := Dict :-
-   (  M.contiguous() = true
+   (  M.is_contiguous() = true
    -> true
    ;  domain_error(contiguous, M)
    ),
@@ -148,11 +170,11 @@ M.compile(prolog, contiguous(Parent)) := Dict :-
    MIndexExpr-_ = M.index_expr(Index),
    Kernel = (ModuleHead :-
       (  ParentValidExpr
-      -> ParentIndex is ParentIndexExpr,
+      -> ParentIndex is ParentIndexExpr+1,
          arg(ParentIndex, Parent.id, ParentValue)
       ;  ParentValue = 0
       ),
-      MIndex is MIndexExpr,
+      MIndex is MIndexExpr+1,
       nb_setarg(MIndex, M.id, ParentValue)
    ),
    retractall(ModuleHead),
@@ -175,11 +197,11 @@ run_schedule(Schedule) :-
 run_scheduleitem(M) :-
    run_scheduleitem(M.device, M).
 run_scheduleitem(prolog, M) :-
-   Size1 is M.size() - 1,
-   compound_name_arity(M.data, data, M.size()),
    (  M.kernel = true
    -> true
-   ;  forall(between(0, Size1, M.index), M.kernel)
+   ;  maplist([Dim, I, between(0, Dim1, I)]>>(Dim1 is Dim-1), M.shape(), M.index, L),
+      comma_list(Betweens, L),
+      forall(Betweens, M.kernel)
    ).
 
 product(L, Rel, Product) :-
@@ -201,7 +223,6 @@ shape_strides([_ | Shape], [HeadStride | Strides]) :-
    foldl([Dim, Stride, ParentStride, Stride]>>(ParentStride #= Dim*Stride),
          Shape, Strides, HeadStride, 1).
 
-% :- det(merge_dims/2).
 :- table merge_dims/2.
 
 merge_dims([], [1-1-(0-1)]).
@@ -558,7 +579,7 @@ test('create empty array') :-
   A.shape() == [2,3],
   A.dtype == float,
   A.device == prolog,
-  A.op == buffer(6),
+  A.op == true,
   length(A.views, 1),
   A.view().shape == [2,3].
 
