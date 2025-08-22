@@ -490,14 +490,14 @@ test('contiguous') :-
     A = array{}.empty([4, 5]),
     IndexExpr-ValidExpr = A.index_expr([1, 2]),
     7 is IndexExpr,
-    ValidExpr == true.
+    ValidExpr.
 
 test('offset') :-
     V = view{}.from_shape([4, 5]).put(offset, 10),
     A = array{}.default().push_view(V),
     IndexExpr-ValidExpr = A.index_expr([1, 2]),
     17 is IndexExpr,
-    ValidExpr == true.
+    ValidExpr.
 
 test('sliced') :-
     % A 3x4 slice from a 10x10 array, starting at (2,3)
@@ -508,7 +508,7 @@ test('sliced') :-
     % which is 3*10 + 4 = 34
     IndexExpr-ValidExpr = A.index_expr([1, 1]),
     34 is IndexExpr,
-    ValidExpr == true.
+    ValidExpr.
 
 test('transposed') :-
     % A 10x20 array, transposed to 20x10
@@ -519,7 +519,7 @@ test('transposed') :-
     % physical flat index is 1*20 + 2 = 22
     IndexExpr-ValidExpr = A.index_expr([2, 1]),
     22 is IndexExpr,
-    ValidExpr == true.
+    ValidExpr.
 
 test('stacked views') :-
     % A permuted array that is reshaped, adding a view
