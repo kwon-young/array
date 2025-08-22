@@ -218,6 +218,9 @@ merge_dims([Dim-Stride-(Min-Max) | T], AccDim-AccStride-(AccMin-AccMax), Merged)
    NewMax #= (AccMax-1)*Dim + Max,
    merge_dims(T, NewAccDim-Stride-(NewMin-NewMax), Merged).
 merge_dims([H | T], Acc, [Acc | MergedTail]) :-
+   H = Dim-Stride-_,
+   Acc = _-AccStride-_,
+   AccStride #\= Dim * Stride,
    merge_dims(T, H, MergedTail).
 
 mask(Dim, Min-Max) :-
