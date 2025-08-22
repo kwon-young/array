@@ -620,3 +620,13 @@ test('C = A+B') :-
     Schedule == [B, A, C].
 
 :- end_tests(create_schedule).
+
+:- begin_tests(array_tolist).
+
+test('4x4') :-
+    A = array{}.empty([4, 4]),
+    List = A.tolist(),
+    length(List, 4),
+    maplist([L]>>length(L, 4), List).
+
+:- end_tests(array_tolist).
