@@ -417,15 +417,23 @@ M.compile(prolog, A*B) := Dict :-
    Dict = M.compile(prolog, elementwise(*, [A, B])).
 M.compile(prolog, elementwise(Op, Args)) := Dict :-
    variant_sha1(M, KernelId),
+
+   % build predicate head
    length(Index, M.ndim()),
    maplist(get_dict(id), Args, Ids),
    append(Ids, Index, IdsIndex),
    Head =.. [KernelId, M.id | IdsIndex],
    ModuleHead = kernel:Head,
+
+   % index inputs
    maplist(index_input(Index), Args, Pairs),
    pairs_keys_values(Pairs, ArgsAsts, ArgsValue),
-   MIndexExpr-MValidExpr = M.index_expr(Index),
    foldl(mkconj, ArgsAsts, true, ArgsAst),
+
+   % index output
+   MIndexExpr-MValidExpr = M.index_expr(Index),
+
+   % arithmetic
    (  Op == true
    -> ArgsValue = [MValue],
       MExpr = true
@@ -435,6 +443,8 @@ M.compile(prolog, elementwise(Op, Args)) := Dict :-
       ;  MExpr = (MValue is Expr)
       )
    ),
+
+   % Head :- Body
    mkconj(ArgsAst, MExpr, Body),
    Kernel = (ModuleHead :-
       Body,
@@ -446,6 +456,8 @@ M.compile(prolog, elementwise(Op, Args)) := Dict :-
    ),
    retractall(ModuleHead),
    asserta(Kernel),
+
+   % callable head
    maplist(get_dict(data), Args, Datas),
    append(Datas, Index, DatasIndex),
    CallHead =.. [KernelId, M.data | DatasIndex],
