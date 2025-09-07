@@ -176,6 +176,8 @@ M.shape() := Shape :-
    Shape = M.view().shape.
 M.ndim() := NDim :-
    NDim = M.view().ndim().
+M.ndim0() := NDim :-
+   NDim #= M.ndim() - 1.
 
 M.empty(Shape) := Dict :-
    Dict = M.empty(Shape, []).
@@ -256,7 +258,7 @@ M.pad(Padding) := Dict :-
    Dict = M.pad(Padding, []).
 M.pad(Padding, Options) := Dict :-
    M1 = M.replace_view(M.view().pad(Padding)),
-   (  option(constant(Value), Options)
+   (  option(constant(Value), Options), Value #\= 0
    -> Mask_ = M.ones(M.shape()),
       Mask @= 1 - Mask_.replace_view(Mask_.view().pad(Padding)),
       Dict @= M1 + Mask*Value
@@ -278,71 +280,53 @@ M.pool(Kernel, Options) := Dict :-
    lpad(N, 1, Dilations_, Dilations),
    same_length(Kernel, LastDims),
    once(append(PrefixDims, LastDims, M.shape())),
-   maplist([I, K, D, E]>>(E #= I - D*(K-1)), LastDims, Kernel, Dilations, Effective),
-   debug(pool, "Effective ~p", [Effective]),
-   maplist([E, S, O]>>(O #= (E - 1) // S + 1), Effective, Strides, Output),
-   debug(pool, "Output ~p", [Output]),
-   maplist([S, O, SO]>>(SO #= O*S), Strides, Output, StridesOutput),
-   debug(pool, "StridesOutput ~p", [StridesOutput]),
-   maplist([E, SO, F]>>((SO #> E) #<==> B, F #= 1 + B), Effective, StridesOutput, Fs),
-   debug(pool, "Fs ~p", [Fs]),
-   maplist([I, D, F, U]>>(U #= I*F+D), LastDims, Dilations, Fs, Unfolded),
-   debug(pool, "Unfolded ~p", [Unfolded]),
-   maplist([U, K, T]>>(T #= K*U), Unfolded, Kernel, Target),
-   debug(pool, "Target ~p", [Target]),
-   maplist([I, T, R]>>ceildiv(T, I, R), LastDims, Target, Repeat),
+
+   maplist(same_length(Kernel), [Output, StridesOutput, Fs, Unfolded, Target, Repeat]),
+   clpfd:transpose([
+      LastDims, Kernel, Dilations, Strides,
+      Output, StridesOutput, Fs, Unfolded, Target, Repeat], Args),
+   maplist(prepare_pool, Args),
+      
    lpad(M.ndim(), 1, Repeat, PaddedRepeat),
-   debug(pool, "Repeat ~p", [PaddedRepeat]),
    M1 = M.repeat(PaddedRepeat),
-   debug(pool, "Repeated ~p", [M1.shape()]),
-   append(PrefixDims, Target, PrefixedTarget),
-   lpad(M1.ndim(), 0, [], Zeros),
-   pairs_keys_values(Shrink1, Zeros, PrefixedTarget),
-   debug(pool, "Shrink1 ~p", [Shrink1]),
-   M2 = M1.shrink(Shrink1),
-   debug(pool, "Shrinked1 ~p", [M2.shape()]),
-   clpfd:transpose([Kernel, Unfolded], KU),
-   flatten(KU, Reshape1_),
-   append(PrefixDims, Reshape1_, Reshape1),
-   debug(pool, "Reshape1 ~p", [Reshape1]),
-   M3 = M2.reshape(Reshape1),
-   clpfd:transpose([Kernel, StridesOutput], KSO),
-   flatten(KSO, Shrink2__),
-   append(PrefixDims, Shrink2__, Shrink2_),
-   lpad(M3.ndim(), 0, [], Zeros2),
-   pairs_keys_values(Shrink2, Zeros2, Shrink2_),
-   debug(pool, "Shrink2 ~p", [Shrink2]),
-   M4 = M3.shrink(Shrink2),
-   debug(pool, "Shrinked2 ~p", [M4.shape()]),
-   clpfd:transpose([Kernel, Output, Strides], KOS),
-   flatten(KOS, Reshape2_),
-   append(PrefixDims, Reshape2_, Reshape2),
-   debug(pool, "Reshape2 ~p", [Reshape2]),
-   M5 = M4.reshape(Reshape2),
+
+   M2 = M1.pool_shrink_reshape(PrefixDims, [Target], [Kernel, Unfolded]),
+
+   M3 = M2.pool_shrink_reshape(PrefixDims, [Kernel, StridesOutput], [Kernel, Output, Strides]),
+
    lpad(N, 1, [], Ones),
-   clpfd:transpose([Kernel, Output, Ones], KO1),
-   flatten(KO1, Shrink3__),
-   append(PrefixDims, Shrink3__, Shrink3_),
-   lpad(M5.ndim(), 0, [], Zeros3),
-   pairs_keys_values(Shrink3, Zeros3, Shrink3_),
-   debug(pool, "Shrink3 ~p", [Shrink3]),
-   M6 = M5.shrink(Shrink3),
-   debug(pool, "Shrinked3 ~p", [M6.shape()]),
-   clpfd:transpose([Kernel, Output], KO),
-   flatten(KO, Reshape3_),
-   append(PrefixDims, Reshape3_, Reshape3),
-   debug(pool, "Reshape3 ~p", [Reshape3]),
-   M7 = M6.reshape(Reshape3),
-   N1 is M7.ndim() - 1,
-   numlist(0, N1, Axes),
+   M4 = M3.pool_shrink_reshape(PrefixDims, [Kernel, Output, Ones], [Kernel, Output]),
+
+   numlist(0, M4.ndim0(), Axes),
    same_length(PrefixDims, PrefixAxes),
    append(PrefixAxes, PoolAxes, Axes),
    once(foldl([A, B, [A, B | R], R]>>true, KernelAxes, DimAxes, PoolAxes, [])),
    append([PrefixAxes, DimAxes, KernelAxes], PermuteAxes),
-   debug(pool, "Permute ~p", [PermuteAxes]),
-   M8 = M7.permute(PermuteAxes),
-   debug(pool, "Permuted ~p", [M8.shape()]),
-   Dict = M8.
+   Dict = M4.permute(PermuteAxes).
+
+prepare_pool([Dim, KernelDim, Dilation, Stride, OutputDim, StrideOutputDim,
+              F, Unfolded, Target, Repeat]) :-
+   E #= Dim - Dilation*(KernelDim - 1),
+   OutputDim #= (E - 1) // Stride + 1,
+   StrideOutputDim #= OutputDim*Stride,
+   (StrideOutputDim #> E) #<==> B, F #= 1 + B,
+   Unfolded #= Dim*F+Dilation,
+   Target #= KernelDim*Unfolded,
+   ceildiv(Target, Dim, Repeat).
+
+M.pool_shrink_reshape(PrefixDims, Shrink, Reshape) := Dict :-
+   concat_prefix(Shrink, PrefixDims, PrefixedShrink),
+   lpad(M.ndim(), 0, [], Zeros),
+   pairs_keys_values(ShrinkPairs, Zeros, PrefixedShrink),
+   M1 = M.shrink(ShrinkPairs),
+
+   concat_prefix(Reshape, PrefixDims, PrefixedReshape),
+   Dict = M1.reshape(PrefixedReshape).
+
+concat_prefix(In, Prefix, Out) :-
+   clpfd:transpose(In, T),
+   flatten(T, Flat),
+   append(Prefix, Flat, Out).
 
 ceildiv(A, B, C) :-
    C #= (A+B-1)//B.
@@ -356,41 +340,36 @@ M.reduce(Axes, Op, KeepDim) := Dict :-
    ;  Dict = M1.squeeze(Axes)
    ).
 M.sum() := Dict :-
-   High is M.ndim() - 1,
-   numlist(0, High, Axes),
+   numlist(0, M.ndim0(), Axes),
    Dict = M.sum(Axes).
 M.sum(Axes) := Dict :-
    Dict = M.sum(Axes, false).
 M.sum(Axes, KeepDim) := Dict :-
    Dict = M.reduce(Axes, +, KeepDim).
 M.max() := Dict :-
-   High is M.ndim() - 1,
-   numlist(0, High, Axes),
+   numlist(0, M.ndim0(), Axes),
    Dict = M.max(Axes).
 M.max(Axes) := Dict :-
    Dict = M.max(Axes, false).
 M.max(Axes, KeepDim) := Dict :-
    Dict = M.reduce(Axes, <, KeepDim).
 M.cumalu(Axis, Op) := Dict :-
-   N1 #= M.ndim() - 1,
-   M1 = M.swapaxes(N1, Axis),
-   debug(cumalu, "Swapped1 ~p", [M1.shape()]),
+   M1 = M.swapaxes(M.ndim0(), Axis),
    length(Padding, M1.ndim()),
    last(M1.shape(), Dim),
    Dim1 #= Dim - 1,
    once(append(ZeroPadding, [Dim1-0], Padding)),
    maplist(=(0-0), ZeroPadding),
-   M2 = M1.pad(Padding),
-   debug(cumalu, "Padded ~p", [M2.shape()]),
+   identity(Op, Identity),
+   M2 = M1.pad(Padding, [constant(Identity)]),
    M3 = M2.pool([Dim]),
-   debug(cumalu, "Pooled ~p", [M3.shape()]),
-   N2 #= M3.ndim() - 1,
-   M4 = M3.reduce([N2], Op, false),
-   debug(cumalu, "reduced ~p", [M4.shape()]),
-   M5 = M4.swapaxes(Axis, N1),
-   debug(cumalu, "Swapped2 ~p", [M5.shape()]),
+   M4 = M3.reduce([M3.ndim0()], Op, false),
+   M5 = M4.swapaxes(Axis, M.ndim0()),
    Dict = M5.
 
+identity(+, 0).
+identity(*, 1).
+identity(<, -inf).
 
 M.contiguous() := Dict :-
    (  M.is_contiguous()
@@ -429,25 +408,7 @@ M.compile(prolog, view(_)) := Dict :-
 M.compile(prolog, constant(_)) := Dict :-
    Dict = M.put(kernel, true).
 M.compile(prolog, contiguous(Parent)) := Dict :-
-   variant_sha1(M, KernelId), % TODO: restrict to correct dependencies
-   length(Index, M.ndim()),
-   Head =.. [KernelId, M.id, Parent.id | Index],
-   ModuleHead = kernel:Head,
-   ParentAST-ParentValue = Parent.index_input(Index),
-   MIndexExpr-MValidExpr = M.index_expr(Index),
-   mkconj(
-      ParentAST, 
-      (  MValidExpr
-      -> MIndex is MIndexExpr+1,
-         nb_setarg(MIndex, M.id, ParentValue)
-      ;  true
-      ),
-      Body),
-   Kernel = (ModuleHead :- Body),
-   retractall(ModuleHead),
-   asserta(Kernel),
-   CallHead =.. [KernelId, M.data, Parent.data | Index],
-   Dict = M.put([kernel=(kernel:CallHead), index=Index]).
+   Dict = M.compile(prolog, elementwise(true, [Parent])).
 M.compile(prolog, A<B) := Dict :-
    Dict = M.compile(prolog, elementwise(<, [A, B])).
 M.compile(prolog, A+B) := Dict :-
@@ -465,10 +426,14 @@ M.compile(prolog, elementwise(Op, Args)) := Dict :-
    pairs_keys_values(Pairs, ArgsAsts, ArgsValue),
    MIndexExpr-MValidExpr = M.index_expr(Index),
    foldl(mkconj, ArgsAsts, true, ArgsAst),
-   Expr =.. [Op | ArgsValue],
-   (  Op = (<)
-   -> MExpr = (Expr -> MValue = 1 ; MValue = 0)
-   ;  MExpr = (MValue is Expr)
+   (  Op == true
+   -> ArgsValue = [MValue],
+      MExpr = true
+   ;  Expr =.. [Op | ArgsValue],
+      (  Op = (<)
+      -> MExpr = (Expr -> MValue = 1 ; MValue = 0)
+      ;  MExpr = (MValue is Expr)
+      )
    ),
    mkconj(ArgsAst, MExpr, Body),
    Kernel = (ModuleHead :-
@@ -495,15 +460,14 @@ M.compile(prolog, reduce(Op, Axes, Parent)) := Dict :-
    ParentAST-ParentValue = Parent.index_input(FullIndex),
    MIndexExpr-MValidExpr = M.index_expr(Index),
    AccExpr =.. [Op, AccValue, ParentValue],
+   identity(Op, Identity),
    (  Op = (<)
-   -> Identity is -inf,
-      NewAccExpr = (
+   -> NewAccExpr = (
       (  AccExpr
       -> NewAccValue = ParentValue
       ;  NewAccValue = AccValue
       ))
-   ;  Identity is 0,
-      NewAccExpr = (NewAccValue is AccExpr)
+   ;  NewAccExpr = (NewAccValue is AccExpr)
    ),
    mkconj(ParentAST, (
       arg(1, Acc, AccValue),
@@ -533,10 +497,10 @@ M.compile(prolog, reduce(Op, Axes, Parent)) := Dict :-
 M.index_expr(Index) := IndexExpr-ValidExpr :-
    M.views = [View | Views],
    foldl([V, Valid, FlatIn, FlatOut]>>(
-            view:reverse_index_expr(FlatIn, V, Index_),
-            view:valid_expr(Index_, V, Valid),
-            view:index_expr(Index_, V, FlatOut)
-         ), Views, Valids, View.index_expr(Index), IndexExpr),
+         view:reverse_index_expr(FlatIn, V, Index_),
+         view:valid_expr(Index_, V, Valid),
+         view:index_expr(Index_, V, FlatOut)
+      ), Views, Valids, View.index_expr(Index), IndexExpr),
    foldl(mkconj, Valids, View.valid_expr(Index), ValidExpr).
 
 skip_view(view(M), Op) =>
@@ -582,7 +546,7 @@ eval_(A @ B, C) =>
    eval_(A, A1),
    eval_(B, B1),
    Dim1 = A1.ndim(),
-   Dim2 #= max(B1.ndim() - 1, 1),
+   Dim2 #= max(B1.ndim0(), 1),
    (  A1.ndim() > 1, B1.ndim() > 1
    -> nth1(Dim1, Shape1, 1, A1.shape()),
       nth1(Dim2, Shape2, 1, B1.shape())
