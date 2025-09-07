@@ -8,7 +8,10 @@
 :- use_module(library(pairs)).
 :- use_module(library(dcg/high_order)).
 :- use_module(view).
+:- use_module(runtime_prolog).
 
+% Creation
+% ========
 M.default() := Dict :-
    Dict = M.default([]).
 M.default(Options) := Dict :-
@@ -25,72 +28,11 @@ M.default(Options) := Dict :-
    Dict = array{id: _, views: Views, dtype:DType, device:Device, data: _,
                 datasize: DataSize, op: true}.
 
-push(view(Views), M, Dict) :-
-   M1 = M.put(views, Views),
-   (  M.op = view(_)
-   -> Dict = M1
-   ;  Dict = M1.push_op(view(M))
-   ).
-push(constant(Value, Options), M, Dict) :-
-   merge_options(Options, [dtype(_)], Merged),
-   M1 = M.empty([], Merged),
-   dtype(M1.device, Value, M1.dtype), % TODO: broadcast dtype
-   Dict = M1.push_op(constant(Value)).
-push(contiguous, M, Dict) :-
-   Dict = M.empty(M.shape()).push_op(contiguous(M)).
-push(reduce(Op, Axes), M, Dict) :-
-   foldl(replace_nth0(1), Axes, M.shape(), Shape),
-   sort(Axes, Axes_),
-   Dict = M.empty(Shape).push_op(reduce(Op, Axes_, M)).
-push(A+B, C) :-
-   push(elementwise(+, [A, B]), C).
-push(A*B, C) :-
-   push(elementwise(*, [A, B]), C).
-push(A<B, C) :-
-   push(elementwise(<, [A, B]), C).
-push(elementwise(Op, Args), C) :-
-   (  dicts_same_value_for_key(Args, device, _)
-   -> true
-   ;  domain_error(device, Args)
-   ),
-   (  dicts_same_value_for_key(Args, dtype, _)
-   -> true
-   ;  domain_error(dtype, Args)
-   ),
-   broadcast(Args, [H | T]),
-   Term =.. [Op, H | T],
-   C = H.empty(H.shape()).push_op(Term).
-
-dicts_same_value_for_key(List, Key, Value) :-
-   maplist({Value, Key}/[Dict]>>get_dict(Key, Dict, Value), List).
-
-M.push_op(Op) := Dict :-
-   Dict = M.put([id: _Id, op: Op]).
-
-M.push_view(View) := Dict :-
-   Dict = M.push(view([View | M.views])).
-M.pop_view(View) := Dict :-
-   M.views = [View | Views],
-   Dict = M.push(view(Views)).
-M.replace_view(Old, New) := Dict :-
-   Dict = M.pop_view(Old).push_view(New).
-M.replace_view(View) := Dict :-
-   Dict = M.replace_view(_, View).
-M.view() := View :-
-   M.views = [View | _].
-M.size() := Size :-
-   Size = M.view().size().
-M.shape() := Shape :-
-   Shape = M.view().shape.
-M.ndim() := NDim :-
-   NDim = M.view().ndim().
-M.ndim0() := NDim :-
-   NDim #= M.ndim() - 1.
-
 M.empty(Shape) := Dict :-
    Dict = M.empty(Shape, []).
 M.empty(Shape, Options) := Dict :-
    Dict = M.default([shape(Shape) | Options]).
+
 M.fromlist(List) := Dict :-
    Dict = M.fromlist(List, []).
 M.fromlist(List, Options) := Dict :-
@@ -98,31 +40,40 @@ M.fromlist(List, Options) := Dict :-
    flatten(List, Flat),
    M1 = M.empty(Shape, Options),
    Device = M1.device,
-   DType = M1.dtype,
-   debug(fromlist, "DType ~p", [DType]),
-   maplist({Device, DType}/[X]>>dtype(Device, X, DType), Flat), % TODO: type broadcasting
-   compound_name_arguments(M1.data, data, Flat),
-   Dict = M1.
-
-dtype(prolog, X, float), integer(X) => true.
-dtype(prolog, X, R), float(X) => R = float.
-dtype(prolog, X, R), integer(X) => R = integer.
-dtype(prolog, true, R) => R = boolean.
-dtype(prolog, false, R) => R = boolean.
-dtype(prolog, X, DType) => when(ground(X), dtype(prolog, X, DType)).
+   foldl({Device}/[X, In, Out]>>(
+      dtype(Device, X, DType),
+      common_dtype(Device, DType, In, Out)
+   ), Flat, boolean, DType),
+   common_dtype_(Device, DType, M1.dtype, M1.dtype),
+   (  option(dtype(FinalDType), Options)
+   -> M2 = M1.put(dtype, FinalDType)
+   ;  M2 = M1.put(dtype, DType)
+   ),
+   compound_name_arguments(M2.data, data, Flat),
+   Dict = M2.
+list_shape(L, Shape) :-
+   list_shape_(Shape, L).
+list_shape_(Shape, L), is_list(L) =>
+   length(L, Dim),
+   Shape = [Dim | Dims],
+   maplist(list_shape_(Dims), L).
+list_shape_(Shape, _) => Shape = [].
 
 M.full(Shape, Value) := Dict :-
    Dict = M.full(Shape, Value, []).
 M.full(Shape, Value, Options) := Dict :-
    Dict = M.push(constant(Value, Options)).expand(Shape).
+
 M.zeros(Shape) := Dict :-
    Dict = M.zeros(Shape, []).
 M.zeros(Shape, Options) := Dict :-
    Dict = M.full(Shape, 0, Options).
+
 M.ones(Shape) := Dict :-
    Dict = M.ones(Shape, []).
 M.ones(Shape, Options) := Dict :-
    Dict = M.full(Shape, 1, Options).
+
 M.arange(Stop) := Dict :-
    Dict = M.arange(Stop, []).
 M.arange(Stop, Options) := Dict :-
@@ -132,14 +83,10 @@ M.arange(Start, Stop, Options) := Dict :-
 M.arange(Start, Stop, Step, Options) := Dict :-
    N is ceil((Stop - Start) / Step),
    M1 = M.full([N], Step, Options),
-   Offset @= array{}.full([], Start, Options) - array{}.full([], Step, Options),
-   Dict @= M1.cumalu(0, +) + Offset.
+   Dict @= M1.cumalu(0, +) + (Start - Step).
 
-M.tolist() := List :-
-   shape_list(M.shape(), List),
-   flatten(List, Flat),
-   compound_name_arguments(M.contiguous().to(prolog).realize().data, data, Flat).
-
+% Movement
+% ========
 M.reshape(Shape) := Dict :-
    (  shape_size(Shape, M.size())
    -> (  View = M.view().reshape(Shape)
@@ -148,22 +95,30 @@ M.reshape(Shape) := Dict :-
       )
    ;  domain_error(M.shape(), Shape)
    ).
+
 M.transpose() := Dict :-
    Dict = M.replace_view(M.view().transpose()).
+
 M.swapaxes(Axis1, Axis2) := Dict :-
    Dict = M.replace_view(M.view().swapaxes(Axis1, Axis2)).
+
 M.permute(Axes) := Dict :-
    Dict = M.replace_view(M.view().permute(Axes)).
+
 M.expand(Shape) := Dict :-
    Dict = M.replace_view(M.view().expand(Shape)).
+
 M.squeeze() := Dict :-
    Dict = M.replace_view(M.view().squeeze()).
 M.squeeze(Axes) := Dict :-
    Dict = M.replace_view(M.view().squeeze(Axes)).
+
 M.shrink(Shrink) := Dict :-
    Dict = M.replace_view(M.view().shrink(Shrink)).
+
 M.pad(Padding) := Dict :-
    Dict = M.pad(Padding, []).
+
 M.pad(Padding, Options) := Dict :-
    M1 = M.replace_view(M.view().pad(Padding)),
    (  option(constant(Value), Options), Value #\= 0
@@ -172,6 +127,7 @@ M.pad(Padding, Options) := Dict :-
       Dict @= M1 + Mask*Value
    ;  Dict = M1
    ).
+
 M.repeat(Repeat) := Dict :-
    foldl([D, [1, D | Out], Out]>>true, M.shape(), UnsqueezedShape, []),
    foldl([R, D, F, [R, D | Out], Out]>>(F #= R*D),
@@ -211,7 +167,6 @@ M.pool(Kernel, Options) := Dict :-
    once(foldl([A, B, [A, B | R], R]>>true, KernelAxes, DimAxes, PoolAxes, [])),
    append([PrefixAxes, DimAxes, KernelAxes], PermuteAxes),
    Dict = M4.permute(PermuteAxes).
-
 prepare_pool([Dim, KernelDim, Dilation, Stride, OutputDim, StrideOutputDim,
               F, Unfolded, Target, Repeat]) :-
    E #= Dim - Dilation*(KernelDim - 1),
@@ -221,7 +176,6 @@ prepare_pool([Dim, KernelDim, Dilation, Stride, OutputDim, StrideOutputDim,
    Unfolded #= Dim*F+Dilation,
    Target #= KernelDim*Unfolded,
    ceildiv(Target, Dim, Repeat).
-
 M.pool_shrink_reshape(PrefixDims, Shrink, Reshape) := Dict :-
    concat_prefix(Shrink, PrefixDims, PrefixedShrink),
    lpad(M.ndim(), 0, [], Zeros),
@@ -230,15 +184,91 @@ M.pool_shrink_reshape(PrefixDims, Shrink, Reshape) := Dict :-
 
    concat_prefix(Reshape, PrefixDims, PrefixedReshape),
    Dict = M1.reshape(PrefixedReshape).
-
 concat_prefix(In, Prefix, Out) :-
    clpfd:transpose(In, T),
    flatten(T, Flat),
    append(Prefix, Flat, Out).
-
 ceildiv(A, B, C) :-
    C #= (A+B-1)//B.
 
+% Conversion
+% ==========
+M.tolist() := List :-
+   shape_list(M.shape(), List),
+   flatten(List, Flat),
+   compound_name_arguments(M.contiguous().to(prolog).realize().data, data, Flat).
+shape_list([], _).
+shape_list([Dim | Shape], L) :-
+   length(L, Dim),
+   maplist(shape_list(Shape), L).
+
+% Ops
+% ===
+push(view(Views), M, Dict) :-
+   M1 = M.put(views, Views),
+   (  M.op = view(_)
+   -> Dict = M1
+   ;  Dict = M1.push_op(view(M))
+   ).
+push(constant(Value, Options), M, Dict) :-
+   merge_options(Options, [dtype(_)], Merged),
+   M1 = M.empty([], Merged),
+   dtype(M1.device, Value, M1.dtype),
+   Dict = M1.push_op(constant(Value)).
+push(contiguous, M, Dict) :-
+   Dict = M.empty(M.shape()).push_op(contiguous(M)).
+push(reduce(Op, Axes), M, Dict) :-
+   foldl(replace_nth0(1), Axes, M.shape(), Shape),
+   sort(Axes, Axes_),
+   Dict = M.empty(Shape).push_op(reduce(Op, Axes_, M)).
+push(A+B, C) :-
+   push(elementwise(+, [A, B]), C).
+push(A*B, C) :-
+   push(elementwise(*, [A, B]), C).
+push(A<B, C) :-
+   push(elementwise(<, [A, B]), C).
+push(elementwise(Op, Args), C) :-
+   (  dicts_same_value_for_key(Args, device, Device)
+   -> true
+   ;  domain_error(device, Args)
+   ),
+   maplist(get_dict(dtype), Args, DTypes),
+   broadcast_dtypes(Device, DTypes, DType),
+   broadcast(Args, [H | T]),
+   Term =.. [Op, H | T],
+   C = H.empty(H.shape(), [dtype(DType)]).push_op(Term).
+dicts_same_value_for_key(List, Key, Value) :-
+   maplist({Value, Key}/[Dict]>>get_dict(Key, Dict, Value), List).
+
+broadcast(In, Out) :-
+   maplist(view, In, InViews),
+   broadcast_views(InViews, OutViews),
+   maplist(replace_view, OutViews, In, Out).
+
+:- table broadcast_views/2.
+
+broadcast_views(In, Out) :-
+   foldl(broadcast_shape, In, [], Shape),
+   maplist(view:broadcast_view(Shape), In, Out).
+
+broadcast_shape(View, ShapeIn, ShapeOut) :-
+   length(ShapeIn, N1),
+   max_list([View.ndim(), N1], N),
+   lpad(N, 1, View.shape, Shape),
+   lpad(N, 1, ShapeIn, PaddedShapeIn),
+   maplist(broadcast_shape_, Shape, PaddedShapeIn, ShapeOut).
+
+broadcast_shape_(1, Dim, Dim) :-
+   Dim #\= 1.
+broadcast_shape_(Dim, 1, Dim) :-
+   Dim #\= 1.
+broadcast_shape_(Dim, Dim, Dim).
+
+M.push_op(Op) := Dict :-
+   Dict = M.put([id: _Id, op: Op]).
+
+% High level Ops
+% ==============
 M.reduce(Axes, Op, KeepDim) := Dict :-
    must_be(list, Axes),
    must_be(oneof([+, <]), Op),
@@ -247,6 +277,7 @@ M.reduce(Axes, Op, KeepDim) := Dict :-
    -> M1 = Dict
    ;  Dict = M1.squeeze(Axes)
    ).
+
 M.sum() := Dict :-
    numlist(0, M.ndim0(), Axes),
    Dict = M.sum(Axes).
@@ -254,6 +285,7 @@ M.sum(Axes) := Dict :-
    Dict = M.sum(Axes, false).
 M.sum(Axes, KeepDim) := Dict :-
    Dict = M.reduce(Axes, +, KeepDim).
+
 M.max() := Dict :-
    numlist(0, M.ndim0(), Axes),
    Dict = M.max(Axes).
@@ -261,6 +293,7 @@ M.max(Axes) := Dict :-
    Dict = M.max(Axes, false).
 M.max(Axes, KeepDim) := Dict :-
    Dict = M.reduce(Axes, <, KeepDim).
+
 M.cumalu(Axis, Op) := Dict :-
    M1 = M.swapaxes(M.ndim0(), Axis),
    length(Padding, M1.ndim()),
@@ -284,165 +317,11 @@ M.contiguous() := Dict :-
    -> Dict = M
    ;  Dict = M.push(contiguous)
    ).
-M.is_contiguous() := Res :-
-   maplist(view:is_contiguous, M.views, [H | T]),
-   foldl(mkconj, T, H, Res).
 
 M.to(Device) := Dict :-
    (  M.device = Device
    -> Dict = M
    ;  resource_error(to(M.device, Device))
-   ).
-
-M.realize() := M :-
-   % TODO: optimization
-   create_schedule([M], Schedule),  % toposort of graph
-   maplist(compile, Schedule, CompiledSchedule), % generate device specific code 
-   allocate_schedule(Schedule),
-   run_schedule(CompiledSchedule).
-
-M.compile() := Dict :-
-   Dict = M.compile(M.device, M.op),
-   (  debugging(compile), Dict.kernel \== true
-   -> with_output_to(string(S), listing(Dict.kernel)),
-      debug(compile, "~s", S)
-   ;  true
-   ).
-
-M.compile(prolog, true) := Dict :-
-   Dict = M.put(kernel, true).
-M.compile(prolog, view(_)) := Dict :-
-   Dict = M.put(kernel, true).
-M.compile(prolog, constant(_)) := Dict :-
-   Dict = M.put(kernel, true).
-M.compile(prolog, contiguous(Parent)) := Dict :-
-   Dict = M.compile(prolog, elementwise(true, [Parent])).
-M.compile(prolog, A<B) := Dict :-
-   Dict = M.compile(prolog, elementwise(<, [A, B])).
-M.compile(prolog, A+B) := Dict :-
-   Dict = M.compile(prolog, elementwise(+, [A, B])).
-M.compile(prolog, A*B) := Dict :-
-   Dict = M.compile(prolog, elementwise(*, [A, B])).
-M.compile(prolog, elementwise(Op, Args)) := Dict :-
-   variant_sha1(M, KernelId),
-
-   % build predicate head
-   length(Index, M.ndim()),
-   maplist(get_dict(id), Args, Ids),
-   append(Ids, Index, IdsIndex),
-   Head =.. [KernelId, M.id | IdsIndex],
-   ModuleHead = kernel:Head,
-
-   % index inputs
-   maplist(index_input(Index), Args, Pairs),
-   pairs_keys_values(Pairs, ArgsAsts, ArgsValue),
-   foldl(mkconj, ArgsAsts, true, ArgsAst),
-
-   % index output
-   MIndexExpr-MValidExpr = M.index_expr(Index),
-
-   % arithmetic
-   (  Op == true
-   -> ArgsValue = [MValue],
-      MExpr = true
-   ;  Expr =.. [Op | ArgsValue],
-      (  Op = (<)
-      -> MExpr = (Expr -> MValue = 1 ; MValue = 0)
-      ;  MExpr = (MValue is Expr)
-      )
-   ),
-
-   % Head :- Body
-   mkconj(ArgsAst, MExpr, Body),
-   Kernel = (ModuleHead :-
-      Body,
-      (  MValidExpr
-      -> MIndex is MIndexExpr+1,
-         nb_setarg(MIndex, M.id, MValue)
-      ;  true
-      )
-   ),
-   retractall(ModuleHead),
-   asserta(Kernel),
-
-   % callable head
-   maplist(get_dict(data), Args, Datas),
-   append(Datas, Index, DatasIndex),
-   CallHead =.. [KernelId, M.data | DatasIndex],
-   Dict = M.put([kernel=(kernel:CallHead), index=Index]).
-M.compile(prolog, reduce(Op, Axes, Parent)) := Dict :-
-   variant_sha1(M, KernelId),
-   length(Index, M.ndim()),
-   Head =.. [KernelId, M.id, Parent.id | Index],
-   ModuleHead = kernel:Head,
-   same_length(Axes, AccIndex),
-   foldl(replace_nth0, AccIndex, Axes, Index, FullIndex),
-   ParentAST-ParentValue = Parent.index_input(FullIndex),
-   MIndexExpr-MValidExpr = M.index_expr(Index),
-   AccExpr =.. [Op, AccValue, ParentValue],
-   identity(Op, Identity),
-   (  Op = (<)
-   -> NewAccExpr = (
-      (  AccExpr
-      -> NewAccValue = ParentValue
-      ;  NewAccValue = AccValue
-      ))
-   ;  NewAccExpr = (NewAccValue is AccExpr)
-   ),
-   mkconj(ParentAST, (
-      arg(1, Acc, AccValue),
-      NewAccExpr,
-      nb_setarg(1, Acc, NewAccValue)),
-      AccAST),
-   ParentShape = Parent.shape(),
-   maplist({ParentShape}/[Axis, I, between(0, Dim1, I)]>>(
-           nth0(Axis, ParentShape, Dim), Dim1 is Dim-1), 
-           Axes, AccIndex, BList),
-   comma_list(Betweens, BList),
-   Kernel = (ModuleHead :-
-      Acc = acc(Identity, _),
-      forall(Betweens, AccAST),
-      arg(1, Acc, MValue),
-      (  MValidExpr
-      -> MIndex is MIndexExpr+1,
-         nb_setarg(MIndex, M.id, MValue)
-      ;  true
-      )
-   ),
-   retractall(ModuleHead),
-   asserta(Kernel),
-   CallHead =.. [KernelId, M.data, Parent.data | Index],
-   Dict = M.put([kernel=(kernel:CallHead), index=Index]).
-
-M.index_expr(Index) := IndexExpr-ValidExpr :-
-   M.views = [View | Views],
-   foldl([V, Valid, FlatIn, FlatOut]>>(
-         view:reverse_index_expr(FlatIn, V, Index_),
-         view:valid_expr(Index_, V, Valid),
-         view:index_expr(Index_, V, FlatOut)
-      ), Views, Valids, View.index_expr(Index), IndexExpr),
-   foldl(mkconj, Valids, View.valid_expr(Index), ValidExpr).
-
-skip_view(view(M), Op) =>
-   skip_view(M.op, Op).
-skip_view(Op, R) =>
-   R = Op.
-
-M.index_input(Index) := AST-Value :-
-   IndexExpr-ValidExpr = M.index_expr(Index),
-   (  skip_view(M.op, constant(Constant))
-   -> IndexAST = (Value = Constant)
-   ;  IndexAST = (FlatIndex is IndexExpr+1, arg(FlatIndex, M.id, Value))
-   ),
-   (  ValidExpr = true
-   -> (  IndexAST = (Value = Constant)
-      -> Value = Constant, AST = true
-      ;  AST = IndexAST
-      )
-   ;  AST = (  ValidExpr
-            -> IndexAST
-            ;  Value = 0
-            )
    ).
 
 '@='(Left, Right) :-
@@ -456,8 +335,7 @@ eval_(A+B, C) =>
    eval_(B, B1),
    push(A1+B1, C).
 eval_(A-B, C) =>
-   Minus = B.full([], -1, [dtype(B.dtype)]),
-   eval_(A + (Minus*B), C).
+   eval_(A + (-1*B), C).
 eval_(A*B, C) =>
    eval_(A, A1),
    eval_(B, B1),
@@ -482,6 +360,49 @@ eval_(A, R), is_dict(A, array) =>
    A = R.
 eval_(A, R), number(A) =>
    R = array{}.full([], A).
+
+% Properties
+% ==========
+M.view() := View :-
+   M.views = [View | _].
+
+M.size() := Size :-
+   Size = M.view().size().
+
+M.shape() := Shape :-
+   Shape = M.view().shape.
+
+M.ndim() := NDim :-
+   NDim = M.view().ndim().
+
+M.ndim0() := NDim :-
+   NDim #= M.ndim() - 1.
+
+M.is_contiguous() := Res :-
+   maplist(view:is_contiguous, M.views, [H | T]),
+   foldl(mkconj, T, H, Res).
+
+% Runtime
+% =======
+
+M.realize() := M :-
+   % TODO: optimization
+   create_schedule([M], Schedule),  % toposort of graph
+   maplist(compile, Schedule, CompiledSchedule), % generate device specific code 
+   allocate_schedule(Schedule),
+   run_schedule(CompiledSchedule).
+
+% Compilation
+% ============
+M.compile() := Dict :-
+   Dict = M.compile(M.device, M.op),
+   (  debugging(compile), Dict.kernel \== true
+   -> with_output_to(string(S), listing(Dict.kernel)),
+      debug(compile, "~s", S)
+   ;  true
+   ).
+
+:- multifile compile/4.
 
 create_schedule(Arrays, Schedule) :-
    maplist(array_graph, Arrays, Graphs),
@@ -508,6 +429,8 @@ array_graph(Parent, Op) ==>
    ;  []
    ).
 
+% Allocation
+% ==========
 allocate_schedule(Schedule) :-
    maplist(allocate, Schedule).
 
@@ -533,43 +456,77 @@ run_scheduleitem(prolog, M) :-
       forall(Betweens, M.kernel)
    ).
 
+% Helpers
+% =======
+M.push_view(View) := Dict :-
+   Dict = M.push(view([View | M.views])).
 
-shape_list([], _).
-shape_list([Dim | Shape], L) :-
-   length(L, Dim),
-   maplist(shape_list(Shape), L).
-list_shape(L, Shape) :-
-   list_shape_(Shape, L).
-list_shape_(Shape, L), is_list(L) =>
-   length(L, Dim),
-   Shape = [Dim | Dims],
-   maplist(list_shape_(Dims), L).
-list_shape_(Shape, _) => Shape = [].
+M.pop_view(View) := Dict :-
+   M.views = [View | Views],
+   Dict = M.push(view(Views)).
 
+M.replace_view(Old, New) := Dict :-
+   Dict = M.pop_view(Old).push_view(New).
 
-broadcast(In, Out) :-
-   maplist(view, In, InViews),
-   broadcast_views(InViews, OutViews),
-   maplist(replace_view, OutViews, In, Out).
+M.replace_view(View) := Dict :-
+   Dict = M.replace_view(_, View).
 
-:- table broadcast_views/2.
+M.index_expr(Index) := IndexExpr-ValidExpr :-
+   M.views = [View | Views],
+   foldl([V, Valid, FlatIn, FlatOut]>>(
+         view:reverse_index_expr(FlatIn, V, Index_),
+         view:valid_expr(Index_, V, Valid),
+         view:index_expr(Index_, V, FlatOut)
+      ), Views, Valids, View.index_expr(Index), IndexExpr),
+   foldl(mkconj, Valids, View.valid_expr(Index), ValidExpr).
 
-broadcast_views(In, Out) :-
-   foldl(broadcast_shape, In, [], Shape),
-   maplist(view:broadcast_view(Shape), In, Out).
+M.index_input(Index) := AST-Value :-
+   IndexExpr-ValidExpr = M.index_expr(Index),
+   (  skip_view(M.op, constant(Constant))
+   -> IndexAST = (Value = Constant)
+   ;  IndexAST = (FlatIndex is IndexExpr+1, arg(FlatIndex, M.id, Value))
+   ),
+   (  ValidExpr = true
+   -> (  IndexAST = (Value = Constant)
+      -> Value = Constant, AST = true
+      ;  AST = IndexAST
+      )
+   ;  AST = (  ValidExpr
+            -> IndexAST
+            ;  Value = 0
+            )
+   ).
+skip_view(view(M), Op) =>
+   skip_view(M.op, Op).
+skip_view(Op, R) =>
+   R = Op.
 
-broadcast_shape(View, ShapeIn, ShapeOut) :-
-   length(ShapeIn, N1),
-   max_list([View.ndim(), N1], N),
-   lpad(N, 1, View.shape, Shape),
-   lpad(N, 1, ShapeIn, PaddedShapeIn),
-   maplist(broadcast_shape_, Shape, PaddedShapeIn, ShapeOut).
+% DTypes
+% ======
+dtype(prolog, 0, R) => R = boolean.
+dtype(prolog, 1, R) => R = boolean.
+dtype(prolog, X, R), float(X) => R = float.
+dtype(prolog, X, R), integer(X) => R = integer.
+dtype(prolog, X, DType) => when(ground(X), dtype(prolog, X, DType)).
 
-broadcast_shape_(1, Dim, Dim) :-
-   Dim #\= 1.
-broadcast_shape_(Dim, 1, Dim) :-
-   Dim #\= 1.
-broadcast_shape_(Dim, Dim, Dim).
+broadcast_dtype(prolog, boolean, integer).
+broadcast_dtype(prolog, integer, float).
+
+:- table common_dtype/4.
+
+common_dtype(Device, A, B, C) :-
+   common_dtype_(Device, A, B, C).
+common_dtype(Device, A, B, C) :-
+   common_dtype_(Device, B, A, C).
+
+:- table common_dtype_/4.
+common_dtype_(_Device, A, A, A).
+common_dtype_(Device, A, B, C) :-
+   broadcast_dtype(Device, A, A1),
+   common_dtype_(Device, A1, B, C).
+
+broadcast_dtypes(Device, [H | DTypes], DType) :-
+   foldl(common_dtype(Device), DTypes, H, DType).
 
 :- begin_tests(array_reshape).
 
