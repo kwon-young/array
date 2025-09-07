@@ -213,6 +213,12 @@ M.ones(Shape) := Dict :-
    Dict = M.ones(Shape, []).
 M.ones(Shape, Options) := Dict :-
    Dict = M.full(Shape, 1, Options).
+M.arange(Stop) := Dict :-
+   Dict = M.arange(Stop, []).
+M.arange(Stop, Options) := Dict :-
+   Dict = M.arange(0, Stop, Options).
+M.arange(Start, Stop, Options) := Dict :-
+   Dict = M.arange(Start, Stop, 1, Options).
 M.arange(Start, Stop, Step, Options) := Dict :-
    N is ceil((Stop - Start) / Step),
    M1 = M.full([N], Step, Options),
