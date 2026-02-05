@@ -38,7 +38,7 @@ O = array{... shape:[3,2], op:constant(1)}.
 
 ### Operations
 
-Operations are scheduled lazily. The `@=` operator is used to trigger evaluation and unify the result.
+Operations are scheduled lazily. The `@=` operator is used to define an operation without immediately computing it. The actual computation is triggered when the result is requested, for example by calling `.tolist()` or `.realize()`.
 
 ```prolog
 ?- A = array{}.fromlist([[1,2],[3,4]]),
@@ -89,7 +89,7 @@ Array.pl's power comes from a few core concepts:
 -   **`array{}`**: The primary data structure, a Prolog dict representing an N-dimensional array. It contains metadata like shape, data type, and the operation that defines it.
 -   **`view{}`**: A dict that defines how to interpret the underlying data. It holds shape, strides, offset, and mask information. An `array` can have a stack of views, allowing for complex, non-contiguous memory layouts without data duplication.
 -   **`op`**: An operation in the computation graph. It can be a simple constant (`constant(0)`), a transformation on a parent array (`reshape(Parent)`), or an element-wise operation on multiple arrays (`elementwise(+, [A, B])`).
--   **Schedule**: When an array needs to be computed (e.g., via `@=`), Array.pl creates a `schedule` by performing a topological sort of the dependency graph. This schedule is then compiled and executed by the target `device`.
+-   **Schedule**: When an array needs to be computed (e.g., by calling `.tolist()` or `.realize()`), Array.pl creates a `schedule` by performing a topological sort of the dependency graph. This schedule is then compiled and executed by the target `device`.
 -   **Device**: A backend responsible for compilation and execution. The default is `prolog`, which generates and runs Prolog code.
 
 ## Development
