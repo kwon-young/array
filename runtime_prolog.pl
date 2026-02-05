@@ -40,17 +40,12 @@ array:M.compile(prolog, elementwise(Op)) := Dict :-
    MIndexExpr-MValidExpr = M.index_expr(Index),
 
    % arithmetic
-   pairs_keys_values(PairsValues, Args, ArgsValue),
-   ord_list_to_rbtree(ArgsValue, Index),
-   mapsubterms(map_op(Index), Op, OpValue),
-   (  Op == true
-   -> ArgsValue = [MValue],
-      MExpr = true
-   ;  Expr =.. [Op | ArgsValue],
-      (  Op = (<)
-      -> MExpr = (Expr -> MValue = 1 ; MValue = 0)
-      ;  MExpr = (MValue is Expr)
-      )
+   pairs_keys_values(PairsValues, Args, _ArgsValue),
+   ord_list_to_rbtree(PairsValues, ArgTree),
+   phrase(op_expr(Op, Expr, ArgTree), []),
+   (  Expr =.. [<|_]
+   -> MExpr = (Expr -> MValue = 1 ; MValue = 0)
+   ;  MExpr = (MValue is Expr)
    ),
 
    % Head :- Body
@@ -121,8 +116,19 @@ op_args(Op) ==>
    { Op =.. [_ | Args] },
    sequence(op_args, Args).
 
+op_expr(A, R, Index), is_dict(A, array) ==>
+   { rb_lookup(A, R, Index) }.
+op_expr(contiguous(A), R, Index) ==>
+   op_expr(A, R, Index).
 op_expr(A+B, R, Index) ==>
    op_expr(A, A1, Index),
    op_expr(B, B1, Index),
-   { rb_lookup(
-   [R is A1+B1
+   { R = (A1+B1) }.
+op_expr(A*B, R, Index) ==>
+   op_expr(A, A1, Index),
+   op_expr(B, B1, Index),
+   { R = (A1*B1) }.
+op_expr(A<B, R, Index) ==>
+   op_expr(A, A1, Index),
+   op_expr(B, B1, Index),
+   { R = (A1<B1) }.
