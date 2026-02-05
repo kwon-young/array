@@ -11,15 +11,18 @@ array:M.compile(prolog, view(_)) := Dict :-
 array:M.compile(prolog, constant(_)) := Dict :-
    Dict = M.put(kernel, true).
 array:M.compile(prolog, contiguous(Parent)) := Dict :-
-   Dict = M.compile(prolog, elementwise(true, [Parent])).
+   Dict = M.compile(prolog, elementwise(contiguous(Parent))).
 array:M.compile(prolog, A<B) := Dict :-
-   Dict = M.compile(prolog, elementwise(<, [A, B])).
+   Dict = M.compile(prolog, elementwise(A<B)).
 array:M.compile(prolog, A+B) := Dict :-
-   Dict = M.compile(prolog, elementwise(+, [A, B])).
+   Dict = M.compile(prolog, elementwise(A+B)).
 array:M.compile(prolog, A*B) := Dict :-
-   Dict = M.compile(prolog, elementwise(*, [A, B])).
-array:M.compile(prolog, elementwise(Op, Args)) := Dict :-
+   Dict = M.compile(prolog, elementwise(A*B)).
+array:M.compile(prolog, elementwise(Op)) := Dict :-
    variant_sha1(M, KernelId),
+
+   phrase(op_args(Op), AllArgs),
+   list_to_ord_set(AllArgs, Args),
 
    % build predicate head
    length(Index, M.ndim()),
@@ -37,6 +40,9 @@ array:M.compile(prolog, elementwise(Op, Args)) := Dict :-
    MIndexExpr-MValidExpr = M.index_expr(Index),
 
    % arithmetic
+   pairs_keys_values(PairsValues, Args, ArgsValue),
+   ord_list_to_rbtree(ArgsValue, Index),
+   mapsubterms(map_op(Index), Op, OpValue),
    (  Op == true
    -> ArgsValue = [MValue],
       MExpr = true
@@ -114,3 +120,9 @@ op_args(Array), is_dict(Array, array) ==>
 op_args(Op) ==>
    { Op =.. [_ | Args] },
    sequence(op_args, Args).
+
+op_expr(A+B, R, Index) ==>
+   op_expr(A, A1, Index),
+   op_expr(B, B1, Index),
+   { rb_lookup(
+   [R is A1+B1
