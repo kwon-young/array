@@ -4,6 +4,36 @@
 :- use_module(array, []).
 :- use_module(view, [replace_nth0/4]).
 
+setup_kernel_call(M, Args, Index, ModuleHead, CallHead, Dict) :-
+   variant_sha1(M, KernelId),
+   maplist(get_dict(id), Args, Ids),
+   append(Ids, Index, IdsIndex),
+   Head =.. [KernelId, M.id | IdsIndex],
+   ModuleHead = kernel:Head,
+
+   maplist(get_dict(data), Args, Datas),
+   append(Datas, Index, DatasIndex),
+   CallHead =.. [KernelId, M.data | DatasIndex],
+   Dict = M.put([kernel=(kernel:CallHead), index=Index]).
+
+compile_expr(Op, Args, Index, Value, AST) :-
+   % index inputs
+   maplist(array:index_input(Index), Args, Pairs),
+   pairs_keys_values(Pairs, ASTs, Values),
+   foldl(mkconj, ASTs, true, BaseAST),
+
+   % inline elementwise op using op_expr
+   pairs_keys_values(PairsForRbtree, Args, Values),
+   ord_list_to_rbtree(PairsForRbtree, ArgTree),
+   phrase(op_expr(Op, Expr, ArgTree), []),
+
+   % evaluate the expression, handling comparisons
+   (  Expr =.. [<|_]
+   -> EvalAST = (Expr -> Value = 1; Value = 0)
+   ;  EvalAST = (Value is Expr)
+   ),
+   mkconj(BaseAST, EvalAST, AST).
+
 array:M.compile(prolog, true) := Dict :-
    Dict = M.put(kernel, true).
 array:M.compile(prolog, view(_)) := Dict :-
@@ -19,37 +49,17 @@ array:M.compile(prolog, A+B) := Dict :-
 array:M.compile(prolog, A*B) := Dict :-
    Dict = M.compile(prolog, elementwise(A*B)).
 array:M.compile(prolog, elementwise(Op)) := Dict :-
-   variant_sha1(M, KernelId),
-
+   length(Index, M.ndim()),
    phrase(op_args(Op), AllArgs),
    list_to_ord_set(AllArgs, Args),
+   setup_kernel_call(M, Args, Index, ModuleHead, CallHead, Dict),
 
-   % build predicate head
-   length(Index, M.ndim()),
-   maplist(get_dict(id), Args, Ids),
-   append(Ids, Index, IdsIndex),
-   Head =.. [KernelId, M.id | IdsIndex],
-   ModuleHead = kernel:Head,
-
-   % index inputs
-   maplist(array:index_input(Index), Args, Pairs),
-   pairs_keys_values(Pairs, ArgsAsts, ArgsValue),
-   foldl(mkconj, ArgsAsts, true, ArgsAst),
+   compile_expr(Op, Args, Index, MValue, Body),
 
    % index output
    MIndexExpr-MValidExpr = M.index_expr(Index),
 
-   % arithmetic
-   pairs_keys_values(PairsValues, Args, _ArgsValue),
-   ord_list_to_rbtree(PairsValues, ArgTree),
-   phrase(op_expr(Op, Expr, ArgTree), []),
-   (  Expr =.. [<|_]
-   -> MExpr = (Expr -> MValue = 1 ; MValue = 0)
-   ;  MExpr = (MValue is Expr)
-   ),
-
    % Head :- Body
-   mkconj(ArgsAst, MExpr, Body),
    Kernel = (ModuleHead :-
       Body,
       (  MValidExpr
@@ -59,21 +69,19 @@ array:M.compile(prolog, elementwise(Op)) := Dict :-
       )
    ),
    retractall(ModuleHead),
-   asserta(Kernel),
+   asserta(Kernel).
 
-   % callable head
-   maplist(get_dict(data), Args, Datas),
-   append(Datas, Index, DatasIndex),
-   CallHead =.. [KernelId, M.data | DatasIndex],
-   Dict = M.put([kernel=(kernel:CallHead), index=Index]).
 array:M.compile(prolog, reduce(Op, Axes, Parent)) := Dict :-
-   variant_sha1(M, KernelId),
    length(Index, M.ndim()),
-   Head =.. [KernelId, M.id, Parent.id | Index],
-   ModuleHead = kernel:Head,
+   phrase(op_args(Parent), AllArgs),
+   list_to_ord_set(AllArgs, Args),
+   setup_kernel_call(M, Args, Index, ModuleHead, CallHead, Dict),
+
    same_length(Axes, AccIndex),
    foldl(replace_nth0, AccIndex, Axes, Index, FullIndex),
-   ParentAST-ParentValue = Parent.index_input(FullIndex),
+
+   compile_expr(Parent, Args, FullIndex, ParentValue, ParentAST),
+
    MIndexExpr-MValidExpr = M.index_expr(Index),
    AccExpr =.. [Op, AccValue, ParentValue],
    array:identity(Op, Identity),
@@ -90,9 +98,10 @@ array:M.compile(prolog, reduce(Op, Axes, Parent)) := Dict :-
       NewAccExpr,
       nb_setarg(1, Acc, NewAccValue)),
       AccAST),
-   ParentShape = Parent.shape(),
+   [Arg0|_] = Args,
+   ParentShape = Arg0.shape(),
    maplist({ParentShape}/[Axis, I, between(0, Dim1, I)]>>(
-           nth0(Axis, ParentShape, Dim), Dim1 is Dim-1), 
+           nth0(Axis, ParentShape, Dim), Dim1 is Dim-1),
            Axes, AccIndex, BList),
    comma_list(Betweens, BList),
    Kernel = (ModuleHead :-
@@ -106,9 +115,7 @@ array:M.compile(prolog, reduce(Op, Axes, Parent)) := Dict :-
       )
    ),
    retractall(ModuleHead),
-   asserta(Kernel),
-   CallHead =.. [KernelId, M.data, Parent.data | Index],
-   Dict = M.put([kernel=(kernel:CallHead), index=Index]).
+   asserta(Kernel).
 
 op_args(Array), is_dict(Array, array) ==>
    [Array].
