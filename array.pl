@@ -362,8 +362,8 @@ eval_(A @ B, C) =>
    (  A1.ndim() > 1, B1.ndim() > 1
    -> nth1(Dim1, Shape1, 1, A1.shape()),
       nth1(Dim2, Shape2, 1, B1.shape())
-   ;  Shape1 = A.shape,
-      Shape2 = B.shape
+   ;  Shape1 = A1.shape(),
+      Shape2 = B1.shape()
    ),
    A3 = A1.reshape(Shape1).swapaxes(Dim1, Dim2),
    B3 = B1.reshape(Shape2).swapaxes(B1.ndim(), Dim2).swapaxes(Dim1, Dim2),
