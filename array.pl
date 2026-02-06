@@ -4,6 +4,7 @@
    '@='/2
 ]).
 
+:- use_module(library(lists), except([flatten/2])).
 :- use_module(library(clpfd), except([transpose/2, sum/3])).
 :- use_module(library(pairs)).
 :- use_module(library(dcg/high_order)).
@@ -121,6 +122,9 @@ M.unsqueeze(Axis) := Dict :-
 M.shrink(Shrink) := Dict :-
    Dict = M.replace_view(M.view().shrink(Shrink)).
 
+M.flatten_() := Dict :-
+   Dict = M.reshape([M.size()]).
+
 M.pad(Padding) := Dict :-
    Dict = M.pad(Padding, []).
 
@@ -195,6 +199,11 @@ concat_prefix(In, Prefix, Out) :-
    append(Prefix, Flat, Out).
 ceildiv(A, B, C) :-
    C #= (A+B-1)//B.
+
+M.diag() := Dict :-
+   M.shape() = [N],
+   N2 is N*N,
+   Dict = M.unsqueeze(1).pad([0-0, 0-N]).flatten_().shrink([0-N2]).reshape([N, N]).
 
 % Conversion
 % ==========
