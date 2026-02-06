@@ -695,3 +695,13 @@ test('4x4') :-
     maplist([L]>>length(L, 4), List).
 
 :- end_tests(array_tolist).
+
+:- begin_tests(array_matmul).
+
+test('2d @ 1d') :-
+  A = array{}.fromlist([[1,2],[3,4]]),
+  B = array{}.fromlist([5,6]),
+  C @= A @ B,
+  C.tolist() == [17, 39].
+
+:- end_tests(array_matmul).
