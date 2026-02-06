@@ -1,4 +1,4 @@
-:- module(view, [shape_size/2, replace_nth0/4, lpad/4]).
+:- module(view, [replace_nth0/4, lpad/4]).
 
 :- use_module(library(clpfd), except([transpose/2, sum/3])).
 
@@ -19,10 +19,14 @@ M.with_zip(Zip) := View :-
 
 % Movement
 % ========
+
 M.reshape(Shape) := Dict :-
-   merge_dims(M.zip(), MergedPairs),
-   Dict = M.with_shape(Shape),
-   merge_dims(Dict.zip(), MergedPairs).
+   (  shape_size(Shape, M.size())
+   -> merge_dims(M.zip(), MergedPairs),
+      Dict = M.with_shape(Shape),
+      merge_dims(Dict.zip(), MergedPairs)
+   ;  domain_error(M.shape, Shape)
+   ).
 
 :- table merge_dims/2.
 
@@ -76,6 +80,10 @@ M.squeeze(Axes) := Dict :-
    sort(0, @>, Axes, Axes_),
    foldl([Axis, In, Out]>>nth0(Axis, In, 1-_-_, Out), Axes_, M.zip(), Zip),
    Dict = M.with_zip(Zip).
+
+M.unsqueeze(Axis) := Dict :-
+   nth0(Axis, NewShape, 1, M.shape),
+   Dict = M.reshape(NewShape).
 
 M.pad(Padding) := Dict :-
    maplist(pad_dim, Padding, M.zip(), Zip, Offsets),
@@ -299,7 +307,7 @@ test('double permute with merge', [fail]) :-
   Reshaped.mask == [0-16, 0-4].
 
 % --- Masked ---
-test('reshape masked view', [fail]) :-
+test('reshape masked view', [throws(error(domain_error(_,_),_))]) :-
   Start = view{}.from_shape([10]).put(mask, [2-8]),
   NewShape = [3,2],
   Reshaped = Start.reshape(NewShape),
@@ -374,7 +382,7 @@ test('masked permute', [fail]) :-
   NewShape = [4],
   _ = Start.reshape(NewShape).
 
-test('masked split unaligned', [fail]) :-
+test('masked split unaligned', [throws(error(domain_error(_,_),_))]) :-
   Start = view{shape:[10], strides:[1], offset:0, mask:[2-7]}, % mask=((2, 7),) -> size 5
   NewShape = [2,3], % size 6
   _ = Start.reshape(NewShape).

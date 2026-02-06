@@ -4,7 +4,7 @@
 :- use_module(array, []).
 :- use_module(view, [replace_nth0/4]).
 
-setup_kernel_call(M, Args, Index, ModuleHead, CallHead, Dict) :-
+setup_kernel_call(M, Args, Index, ModuleHead, Dict) :-
    variant_sha1(M, KernelId),
    maplist(get_dict(id), Args, Ids),
    append(Ids, Index, IdsIndex),
@@ -25,10 +25,10 @@ compile_expr(Op, Args, Index, Value, AST) :-
    % inline elementwise op using op_expr
    pairs_keys_values(PairsForRbtree, Args, Values),
    ord_list_to_rbtree(PairsForRbtree, ArgTree),
-   phrase(op_expr(Op, Expr, ArgTree), []),
+   op_expr(Op, Expr, ArgTree),
 
    % evaluate the expression, handling comparisons
-   (  Expr =.. [<|_]
+   (  compound(Expr), Expr =.. [<|_]
    -> EvalAST = (Expr -> Value = 1; Value = 0)
    ;  EvalAST = (Value is Expr)
    ),
@@ -52,7 +52,7 @@ array:M.compile(prolog, elementwise(Op)) := Dict :-
    length(Index, M.ndim()),
    phrase(op_args(Op), AllArgs),
    list_to_ord_set(AllArgs, Args),
-   setup_kernel_call(M, Args, Index, ModuleHead, CallHead, Dict),
+   setup_kernel_call(M, Args, Index, ModuleHead, Dict),
 
    compile_expr(Op, Args, Index, MValue, Body),
 
@@ -75,7 +75,7 @@ array:M.compile(prolog, reduce(Op, Axes, Parent)) := Dict :-
    length(Index, M.ndim()),
    phrase(op_args(Parent), AllArgs),
    list_to_ord_set(AllArgs, Args),
-   setup_kernel_call(M, Args, Index, ModuleHead, CallHead, Dict),
+   setup_kernel_call(M, Args, Index, ModuleHead, Dict),
 
    same_length(Axes, AccIndex),
    foldl(replace_nth0, AccIndex, Axes, Index, FullIndex),
@@ -123,19 +123,19 @@ op_args(Op) ==>
    { Op =.. [_ | Args] },
    sequence(op_args, Args).
 
-op_expr(A, R, Index), is_dict(A, array) ==>
-   { rb_lookup(A, R, Index) }.
-op_expr(contiguous(A), R, Index) ==>
+op_expr(A, R, Index), is_dict(A, array) =>
+   rb_lookup(A, R, Index).
+op_expr(contiguous(A), R, Index) =>
    op_expr(A, R, Index).
-op_expr(A+B, R, Index) ==>
+op_expr(A+B, R, Index) =>
    op_expr(A, A1, Index),
    op_expr(B, B1, Index),
-   { R = (A1+B1) }.
-op_expr(A*B, R, Index) ==>
+   R = (A1+B1).
+op_expr(A*B, R, Index) =>
    op_expr(A, A1, Index),
    op_expr(B, B1, Index),
-   { R = (A1*B1) }.
-op_expr(A<B, R, Index) ==>
+   R = (A1*B1).
+op_expr(A<B, R, Index) =>
    op_expr(A, A1, Index),
    op_expr(B, B1, Index),
-   { R = (A1<B1) }.
+   R = (A1<B1).

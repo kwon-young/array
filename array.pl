@@ -87,15 +87,17 @@ M.arange(Start, Stop, Step, Options) := Dict :-
 
 % Movement
 % ========
+M.index(Index) := Dict :-
+   Dict = M.replace_view(M.view().index(Index)).
+
 M.reshape(Shape) := Dict :-
-   (  shape_size(Shape, M.size())
-   -> (  View = M.view().reshape(Shape)
-      -> Dict = M.replace_view(View)
-      ;  Dict = M.push_view(view{}.from_shape(Shape))
-      )
-   ;  domain_error(M.shape(), Shape)
+   (  View = M.view().reshape(Shape)
+   -> Dict = M.replace_view(View)
+   ;  Dict = M.push_view(view{}.from_shape(Shape))
    ).
 
+M.t() := Dict :-
+   Dict = M.transpose().
 M.transpose() := Dict :-
    Dict = M.replace_view(M.view().transpose()).
 
@@ -112,6 +114,9 @@ M.squeeze() := Dict :-
    Dict = M.replace_view(M.view().squeeze()).
 M.squeeze(Axes) := Dict :-
    Dict = M.replace_view(M.view().squeeze(Axes)).
+
+M.unsqueeze(Axis) := Dict :-
+   Dict = M.replace_view(M.view().unsqueeze(Axis)).
 
 M.shrink(Shrink) := Dict :-
    Dict = M.replace_view(M.view().shrink(Shrink)).
