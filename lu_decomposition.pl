@@ -107,3 +107,62 @@ fmat_row(A, N, Offset, J) :-
       J1 is J + 1,
       fmat_row(A, N, Offset, J1)
    ).
+
+lup_solve(A, P, B, N, X) :-
+    lup_solve(A, P, B, N, X, 0),
+    I1 is N - 1,
+    lup_solve_bwd(A, P, N, X, I1).
+
+lup_solve(A, P, B, N, X, I) :-
+    (   I == N
+    ->  true
+    ;   arg0(I, P, PI),
+        arg0(PI, B, ValueB),
+        nb_setarg0(I, X, ValueB),
+        lup_solve(A, P, N, X, I, 0),
+        I1 is I + 1,
+        lup_solve(A, P, B, N, X, I1)
+    ).
+
+lup_solve(A, P, N, X, I, K) :-
+    (   K == I
+    ->  true
+    ;   arg0(I, P, PI),
+        Index is PI * N + K,
+        arg0(Index, A, ValueA),
+        arg0(K, X, ValueK),
+        arg0(I, X, ValueI),
+        ValueI1 is ValueI - ValueA * ValueK,
+        nb_setarg0(I, X, ValueI1),
+        K1 is K + 1,
+        lup_solve(A, P, N, X, I, K1)
+    ).
+
+lup_solve_bwd(A, P, N, X, I) :-
+    (   I < 0
+    ->  true
+    ;   I1 is I + 1,
+        lup_solve_bwd(A, P, N, X, I, I1),
+        arg0(I, P, PI),
+        Index is PI * N + I,
+        arg0(Index, A, ValueA),
+        arg0(I, X, ValueI),
+        ValueI1 is ValueI rdiv ValueA,
+        nb_setarg0(I, X, ValueI1),
+        I_prev is I - 1,
+        lup_solve_bwd(A, P, N, X, I_prev)
+    ).
+
+lup_solve_bwd(A, P, N, X, I, K) :-
+    (   K == N
+    ->  true
+    ;   arg0(I, P, PI),
+        Index is PI * N + K,
+        arg0(Index, A, ValueA),
+        arg0(K, X, ValueK),
+        arg0(I, X, ValueI),
+        ValueI1 is ValueI - ValueA * ValueK,
+        nb_setarg0(I, X, ValueI1),
+        K1 is K + 1,
+        lup_solve_bwd(A, P, N, X, I, K1)
+    ).
