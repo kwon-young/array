@@ -3,6 +3,7 @@
 :- use_module(library(dcg/high_order)).
 :- use_module(array, []).
 :- use_module(view, [replace_nth0/4]).
+:- use_module(lu_decomposition).
 
 setup_kernel_call(M, Args, Index, ModuleHead, Dict) :-
    variant_sha1(M, KernelId),
@@ -14,7 +15,12 @@ setup_kernel_call(M, Args, Index, ModuleHead, Dict) :-
    maplist(get_dict(data), Args, Datas),
    append(Datas, Index, DatasIndex),
    CallHead =.. [KernelId, M.data | DatasIndex],
-   Dict = M.put([kernel=(kernel:CallHead), index=Index]).
+   maplist([Dim, I, between(0, Dim1, I)]>>(Dim1 is Dim-1), M.shape(), Index, L),
+   (  L = []
+   -> Betweens = true
+   ;  comma_list(Betweens, L)
+   ),
+   Dict = M.put([kernel=forall(Betweens, (kernel:CallHead))]).
 
 compile_expr(Op, Args, Index, Value, AST) :-
    % index inputs
@@ -40,6 +46,10 @@ array:M.compile(prolog, view(_)) := Dict :-
    Dict = M.put(kernel, true).
 array:M.compile(prolog, constant(_)) := Dict :-
    Dict = M.put(kernel, true).
+array:M.compile(prolog, solve(A, B)) := Dict :-
+   [N, N] = A.shape(),
+   [N] = B.shape(),
+   Dict = M.put(kernel, lu_decomposition:solve(A.data, B.data, N, M.data)).
 array:M.compile(prolog, contiguous(Parent)) := Dict :-
    Dict = M.compile(prolog, elementwise(contiguous(Parent))).
 array:M.compile(prolog, A<B) := Dict :-
@@ -70,7 +80,6 @@ array:M.compile(prolog, elementwise(Op)) := Dict :-
    ),
    retractall(ModuleHead),
    asserta(Kernel).
-
 array:M.compile(prolog, reduce(Op, Axes, Parent)) := Dict :-
    length(Index, M.ndim()),
    phrase(op_args(Parent), AllArgs),
