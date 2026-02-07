@@ -1,3 +1,5 @@
+:- use_module(library(plunit)).
+
 a(data(0, 5, 22r3,
        4, 2, 1,
        2, 7, 9)).
@@ -166,3 +168,39 @@ lup_solve_bwd(A, P, N, X, I, K) :-
         K1 is K + 1,
         lup_solve_bwd(A, P, N, X, I, K1)
     ).
+
+:- begin_tests(lup).
+
+test(decompose) :-
+    a(A_orig),
+    copy_term(A_orig, A),
+    N = 3,
+    lup_decompose(A, N, 0.0001, P),
+    A_expected = data(0, 5 rdiv 6, 1 rdiv 4, 4, 2, 1, 1 rdiv 2, 6, 17 rdiv 2),
+    P_expected = data(1, 2, 0, 5),
+    assertion(A == A_expected),
+    assertion(P == P_expected).
+
+test(solve) :-
+    a(A_orig),
+    B = data(32, 11, 43),
+    X_expected = data(1, 2, 3),
+    N = 3,
+    copy_term(A_orig, A),
+    lup_decompose(A, N, 0.0001, P),
+    compound_name_arity(X, data, N),
+    lup_solve(A, P, B, N, X),
+    assertion(approx_equal(X, X_expected, 0.0001)).
+
+approx_equal(T1, T2, Tol) :-
+    compound_name_arguments(T1, data, L1),
+    compound_name_arguments(T2, data, L2),
+    length(L1, N),
+    length(L2, N),
+    forall(between(1, N, I), (
+        nth1(I, L1, V1),
+        nth1(I, L2, V2),
+        abs(V1 - V2) < Tol
+    )).
+
+:- end_tests(lup).
