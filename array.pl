@@ -86,6 +86,14 @@ M.arange(Start, Stop, Step, Options) := Dict :-
    M1 = M.full([N], Step, Options),
    Dict @= M1.cumalu(0, +) + (Start - Step).
 
+M.eye(N) := Dict :-
+   Dict = M.eye(N, []).
+M.eye(N, Options) := Dict :-
+   Dict = M.eye(N, N, Options).
+M.eye(N, M_, Options) := Dict :-
+   A = M.arange(N, Options),
+   Dict @= (A.unsqueeze(A.ndim()) =:= M.arange(M_, Options)).
+
 % Movement
 % ========
 M.index(Index) := Dict :-
@@ -344,10 +352,22 @@ eval_(A<B, C) =>
    eval_(A, A1),
    eval_(B, B1),
    push(A1<B1, C).
+eval_(A>B, C) =>
+   eval_(B<A, C).
+eval_(A=<B, C) =>
+   eval_(-(A>B) + 1, C).
+eval_(A>=B, C) =>
+   eval_(-(A<B) + 1, C).
+eval_(A=\=B, C) =>
+   eval_((A<B)+(A>B), C).
+eval_(A=:=B, C) =>
+   eval_(-(A=\=B)+1, C).
 eval_(A+B, C) =>
    eval_(A, A1),
    eval_(B, B1),
    push(A1+B1, C).
+eval_(-A, C) =>
+   eval_(-1*A, C).
 eval_(A-B, C) =>
    eval_(A + (-1*B), C).
 eval_(A*B, C) =>

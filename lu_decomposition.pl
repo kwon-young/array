@@ -1,8 +1,4 @@
-:- use_module(library(plunit)).
-
-a(data(0, 5, 22r3,
-       4, 2, 1,
-       2, 7, 9)).
+:- module(lu_decomposition, [solve/4]).
 
 arg0(I, T, V) :-
    I1 is I + 1,
@@ -111,6 +107,7 @@ fmat_row(A, N, Offset, J) :-
    ).
 
 lup_solve(A, P, B, N, X) :-
+    compound_name_arity(X, data, N),
     lup_solve(A, P, B, N, X, 0),
     I1 is N - 1,
     lup_solve_bwd(A, P, N, X, I1).
@@ -121,12 +118,12 @@ lup_solve(A, P, B, N, X, I) :-
     ;   arg0(I, P, PI),
         arg0(PI, B, ValueB),
         nb_setarg0(I, X, ValueB),
-        lup_solve(A, P, N, X, I, 0),
+        lup_solve_(A, P, N, X, I, 0),
         I1 is I + 1,
         lup_solve(A, P, B, N, X, I1)
     ).
 
-lup_solve(A, P, N, X, I, K) :-
+lup_solve_(A, P, N, X, I, K) :-
     (   K == I
     ->  true
     ;   arg0(I, P, PI),
@@ -137,7 +134,7 @@ lup_solve(A, P, N, X, I, K) :-
         ValueI1 is ValueI - ValueA * ValueK,
         nb_setarg0(I, X, ValueI1),
         K1 is K + 1,
-        lup_solve(A, P, N, X, I, K1)
+        lup_solve_(A, P, N, X, I, K1)
     ).
 
 lup_solve_bwd(A, P, N, X, I) :-
@@ -169,38 +166,32 @@ lup_solve_bwd(A, P, N, X, I, K) :-
         lup_solve_bwd(A, P, N, X, I, K1)
     ).
 
+solve(A, B, N, X) :-
+   Tol = 1e-12,
+   lup_decompose(A, N, Tol, P),
+   lup_solve(A, P, B, N, X).
+   
 :- begin_tests(lup).
 
+a(data(0, 5, 22r3,
+       4, 2, 1,
+       2, 7, 9)).
+
 test(decompose) :-
-    a(A_orig),
-    copy_term(A_orig, A),
+    a(A),
     N = 3,
     lup_decompose(A, N, 0.0001, P),
-    A_expected = data(0, 5 rdiv 6, 1 rdiv 4, 4, 2, 1, 1 rdiv 2, 6, 17 rdiv 2),
+    A_expected = data(0, 5r6, 1r4, 4, 2, 1, 1r2, 6, 17r2),
     P_expected = data(1, 2, 0, 5),
     assertion(A == A_expected),
     assertion(P == P_expected).
 
 test(solve) :-
-    a(A_orig),
+    a(A),
     B = data(32, 11, 43),
-    X_expected = data(1, 2, 3),
     N = 3,
-    copy_term(A_orig, A),
     lup_decompose(A, N, 0.0001, P),
-    compound_name_arity(X, data, N),
     lup_solve(A, P, B, N, X),
-    assertion(approx_equal(X, X_expected, 0.0001)).
-
-approx_equal(T1, T2, Tol) :-
-    compound_name_arguments(T1, data, L1),
-    compound_name_arguments(T2, data, L2),
-    length(L1, N),
-    length(L2, N),
-    forall(between(1, N, I), (
-        nth1(I, L1, V1),
-        nth1(I, L2, V2),
-        abs(V1 - V2) < Tol
-    )).
+    X == data(1, 2, 3).
 
 :- end_tests(lup).
