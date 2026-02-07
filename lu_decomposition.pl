@@ -105,70 +105,88 @@ fmat_row(A, N, Offset, J) :-
       fmat_row(A, N, Offset, J1)
    ).
 
-lup_solve(A, P, B, N, X) :-
-    compound_name_arity(X, data, N),
-    lup_solve(A, P, B, N, X, 0),
-    I1 is N - 1,
-    lup_solve_bwd(A, P, N, X, I1).
+lup_solve(A, P, B, N, M, X) :-
+    Size is N * M,
+    compound_name_arity(X, data, Size),
+    lup_solve(A, P, B, N, M, X, 0).
 
-lup_solve(A, P, B, N, X, I) :-
+lup_solve(A, P, B, N, M, X, Col) :-
+    (   Col == M
+    ->  true
+    ;   lup_solve_col_fwd(A, P, B, N, M, Col, X, 0),
+        I1 is N - 1,
+        lup_solve_col_bwd(A, P, N, M, Col, X, I1),
+        Col1 is Col + 1,
+        lup_solve(A, P, B, N, M, X, Col1)
+    ).
+
+lup_solve_col_fwd(A, P, B, N, M, Col, X, I) :-
     (   I == N
     ->  true
     ;   arg0(I, P, PI),
-        arg0(PI, B, ValueB),
-        nb_setarg0(I, X, ValueB),
-        lup_solve_(A, P, N, X, I, 0),
+        B_Index is PI * M + Col,
+        arg0(B_Index, B, ValueB),
+        X_Index is I * M + Col,
+        nb_setarg0(X_Index, X, ValueB),
+        lup_solve_col_fwd_(A, P, N, M, Col, X, I, 0),
         I1 is I + 1,
-        lup_solve(A, P, B, N, X, I1)
+        lup_solve_col_fwd(A, P, B, N, M, Col, X, I1)
     ).
 
-lup_solve_(A, P, N, X, I, K) :-
+lup_solve_col_fwd_(A, P, N, M, Col, X, I, K) :-
     (   K == I
     ->  true
     ;   arg0(I, P, PI),
-        Index is PI * N + K,
-        arg0(Index, A, ValueA),
-        arg0(K, X, ValueK),
-        arg0(I, X, ValueI),
+        A_Index is PI * N + K,
+        arg0(A_Index, A, ValueA),
+        XK_Index is K * M + Col,
+        arg0(XK_Index, X, ValueK),
+        XI_Index is I * M + Col,
+        arg0(XI_Index, X, ValueI),
         ValueI1 is ValueI - ValueA * ValueK,
-        nb_setarg0(I, X, ValueI1),
+        nb_setarg0(XI_Index, X, ValueI1),
         K1 is K + 1,
-        lup_solve_(A, P, N, X, I, K1)
+        lup_solve_col_fwd_(A, P, N, M, Col, X, I, K1)
     ).
 
-lup_solve_bwd(A, P, N, X, I) :-
+lup_solve_col_bwd(A, P, N, M, Col, X, I) :-
     (   I < 0
     ->  true
     ;   I1 is I + 1,
-        lup_solve_bwd(A, P, N, X, I, I1),
+        lup_solve_col_bwd_(A, P, N, M, Col, X, I, I1),
         arg0(I, P, PI),
-        Index is PI * N + I,
-        arg0(Index, A, ValueA),
-        arg0(I, X, ValueI),
+        A_Index is PI * N + I,
+        arg0(A_Index, A, ValueA),
+        XI_Index is I * M + Col,
+        arg0(XI_Index, X, ValueI),
         ValueI1 is ValueI / ValueA,
-        nb_setarg0(I, X, ValueI1),
+        nb_setarg0(XI_Index, X, ValueI1),
         I_prev is I - 1,
-        lup_solve_bwd(A, P, N, X, I_prev)
+        lup_solve_col_bwd(A, P, N, M, Col, X, I_prev)
     ).
 
-lup_solve_bwd(A, P, N, X, I, K) :-
+lup_solve_col_bwd_(A, P, N, M, Col, X, I, K) :-
     (   K == N
     ->  true
     ;   arg0(I, P, PI),
-        Index is PI * N + K,
-        arg0(Index, A, ValueA),
-        arg0(K, X, ValueK),
-        arg0(I, X, ValueI),
+        A_Index is PI * N + K,
+        arg0(A_Index, A, ValueA),
+        XK_Index is K * M + Col,
+        arg0(XK_Index, X, ValueK),
+        XI_Index is I * M + Col,
+        arg0(XI_Index, X, ValueI),
         ValueI1 is ValueI - ValueA * ValueK,
-        nb_setarg0(I, X, ValueI1),
+        nb_setarg0(XI_Index, X, ValueI1),
         K1 is K + 1,
-        lup_solve_bwd(A, P, N, X, I, K1)
+        lup_solve_col_bwd_(A, P, N, M, Col, X, I, K1)
     ).
 
 solve(A, B, N, X) :-
    Tol = 1e-12,
    lup_decompose(A, N, Tol, P),
-   lup_solve(A, P, B, N, X).
+   functor(B, _, B_size),
+   M is B_size // N,
+   lup_solve(A, P, B, N, M, X).
    
 :- begin_tests(lup).
 
