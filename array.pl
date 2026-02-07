@@ -358,18 +358,17 @@ eval_(A @ B, C) =>
    eval_(A, A1),
    eval_(B, B1),
    Dim1 = A1.ndim(),
-   Dim2 #= max(B1.ndim0(), 1),
+   Dim2 = B1.ndim0(),
    (  A1.ndim() > 1, B1.ndim() > 1
    -> nth1(Dim1, Shape1, 1, A1.shape()),
       nth1(Dim2, Shape2, 1, B1.shape())
    ;  Shape1 = A1.shape(),
       Shape2 = B1.shape()
    ),
-   A3 = A1.reshape(Shape1).swapaxes(Dim1, Dim2),
-   B3 = B1.reshape(Shape2).swapaxes(B1.ndim(), Dim2).swapaxes(Dim1, Dim2),
+   A3 = A1.reshape(Shape1),
+   B2 = B1.reshape(Shape2), B3 = B2.swapaxes(B2.ndim0(), Dim2),
    eval_(A3 * B3, C1),
-   Axis1 #= C1.ndim() - 2,
-   C = C1.sum([Axis1]).
+   C = C1.sum([C1.ndim0()]).
 eval_(A, R), is_dict(A, array) =>
    A = R.
 eval_(A, R), number(A) =>
@@ -703,5 +702,12 @@ test('2d @ 1d') :-
   B = array{}.fromlist([5,6]),
   C @= A @ B,
   C.tolist() == [17, 39].
+
+test('2d @ 2d') :-
+  A = array{}.arange(9).reshape([3, 3]),
+  C @= A @ A,
+  [[ 15,  18,  21],
+   [ 42,  54,  66],
+   [ 69,  90, 111]] = C.tolist().
 
 :- end_tests(array_matmul).
