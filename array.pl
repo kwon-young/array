@@ -99,6 +99,14 @@ M.rand(Shape) := Dict :-
 M.rand(Shape, Options) := Dict :-
    Dict = M.push(rand(Shape, Options)).
 
+M.randn(Shape) := Dict :-
+   Dict = M.randn(Shape, []).
+M.randn(Shape, Options) := Dict :-
+   U1 = M.rand(Shape, Options),
+   U2 = M.rand(Shape, Options),
+   Pi is pi,
+   Dict @= cos(2*Pi*U1) * sqrt(-2*log(1-U2)).
+
 % Movement
 % ========
 M.index(Index) := Dict :-
@@ -256,6 +264,12 @@ push(A*B, C) :-
    push(elementwise(*, [A, B]), C).
 push(A<B, C) :-
    push(elementwise(<, [A, B]), C).
+push(sin(A), C) :-
+   push(elementwise(sin, [A]), C).
+push(log(A), C) :-
+   push(elementwise(log, [A]), C).
+push(sqrt(A), C) :-
+   push(elementwise(sqrt, [A]), C).
 push(elementwise(Op, Args), C) :-
    (  dicts_same_value_for_key(Args, device, Device)
    -> true
@@ -343,6 +357,8 @@ M.cumalu(Axis, Op) := Dict :-
    M4 = M3.reduce([M3.ndim0()], Op, false),
    M5 = M4.swapaxes(Axis, M.ndim0()),
    Dict = M5.
+M.cumsum(Axis) := Dict :-
+   Dict = M.cumalu(Axis, +).
 
 identity(+, 0).
 identity(*, 1).
@@ -388,6 +404,18 @@ eval_(A*B, C) =>
    eval_(A, A1),
    eval_(B, B1),
    push(A1*B1, C).
+eval_(sin(A), C) =>
+   eval_(A, A1),
+   push(sin(A1), C).
+eval_(cos(A), C) =>
+   Pi2 is pi/2,
+   eval_(sin(Pi2 - A), C).
+eval_(log(A), C) =>
+   eval_(A, A1),
+   push(log(A1), C).
+eval_(sqrt(A), C) =>
+   eval_(A, A1),
+   push(sqrt(A1), C).
 eval_(A @ B, C) =>
    eval_(A, A1),
    eval_(B, B1),

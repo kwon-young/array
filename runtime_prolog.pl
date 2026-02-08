@@ -63,6 +63,12 @@ array:M.compile(prolog, A+B) := Dict :-
    Dict = M.compile(prolog, elementwise(A+B)).
 array:M.compile(prolog, A*B) := Dict :-
    Dict = M.compile(prolog, elementwise(A*B)).
+array:M.compile(prolog, sin(A)) := Dict :-
+   Dict = M.compile(prolog, elementwise(sin(A))).
+array:M.compile(prolog, log(A)) := Dict :-
+   Dict = M.compile(prolog, elementwise(log(A))).
+array:M.compile(prolog, sqrt(A)) := Dict :-
+   Dict = M.compile(prolog, elementwise(sqrt(A))).
 array:M.compile(prolog, elementwise(Op)) := Dict :-
    length(Index, M.ndim()),
    phrase(op_args(Op), AllArgs),
@@ -155,3 +161,12 @@ op_expr(A<B, R, Index) =>
    op_expr(A, A1, Index),
    op_expr(B, B1, Index),
    R = (A1<B1).
+op_expr(sin(A), R, Index) =>
+   op_expr(A, A1, Index),
+   R = sin(A1).
+op_expr(log(A), R, Index) =>
+   op_expr(A, A1, Index),
+   R = log(A1).
+op_expr(sqrt(A), R, Index) =>
+   op_expr(A, A1, Index),
+   R = sqrt(A1).
