@@ -1,4 +1,4 @@
-:- module(lu_decomposition, [solve/4]).
+:- module(lu_decomposition, [solve/5]).
 
 arg0(I, T, V) :-
    I1 is I + 1,
@@ -181,11 +181,12 @@ lup_solve_col_bwd_(A, P, N, M, Col, X, I, K) :-
         lup_solve_col_bwd_(A, P, N, M, Col, X, I, K1)
     ).
 
-solve(A, B, N, X) :-
+solve(A, B, N, M, X) :-
+   debug(solve, "A ~p", [A]),
+   debug(solve, "B ~p", [B]),
+   debug(solve, "N-M ~p", [N-M]),
    Tol = 1e-12,
    lup_decompose(A, N, Tol, P),
-   functor(B, _, B_size),
-   M is B_size // N,
    lup_solve(A, P, B, N, M, X).
    
 :- begin_tests(lup).
@@ -207,7 +208,7 @@ test(solve) :-
     a(A),
     B = data(32, 11, 43),
     N = 3,
-    solve(A, B, N, X),
+    solve(A, B, N, 1, X),
     X == data(1.0000000000000049, 1.9999999999999847, 3.0000000000000107).
 
 :- end_tests(lup).

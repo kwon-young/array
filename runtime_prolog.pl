@@ -48,8 +48,13 @@ array:M.compile(prolog, constant(_)) := Dict :-
    Dict = M.put(kernel, true).
 array:M.compile(prolog, solve(A, B)) := Dict :-
    [N, N] = A.shape(),
-   B.shape() = [N | _],
-   Dict = M.put(kernel, lu_decomposition:solve(A.data, B.data, N, M.data)).
+   (  B.shape() = [N, M_]
+   -> true
+   ;  B.shape() = [N], M_ = 1
+   ),
+   Dict = M.put(kernel, lu_decomposition:solve(A.data, B.data, N, M_, M.data)).
+array:M.compile(prolog, rand) := Dict :-
+   Dict = M.compile(prolog, elementwise(random_float)).
 array:M.compile(prolog, contiguous(Parent)) := Dict :-
    Dict = M.compile(prolog, elementwise(contiguous(Parent))).
 array:M.compile(prolog, A<B) := Dict :-
@@ -132,6 +137,8 @@ op_args(Op) ==>
    { Op =.. [_ | Args] },
    sequence(op_args, Args).
 
+op_expr(random_float, R, _) =>
+   R = random_float.
 op_expr(A, R, Index), is_dict(A, array) =>
    rb_lookup(A, R, Index).
 op_expr(contiguous(A), R, Index) =>

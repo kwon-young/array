@@ -94,6 +94,11 @@ M.eye(N, M_, Options) := Dict :-
    A = M.arange(N, Options),
    Dict @= (A.unsqueeze(A.ndim()) =:= M.arange(M_, Options)).
 
+M.rand(Shape) := Dict :-
+   Dict = M.rand(Shape, []).
+M.rand(Shape, Options) := Dict :-
+   Dict = M.push(rand(Shape, Options)).
+
 % Movement
 % ========
 M.index(Index) := Dict :-
@@ -237,6 +242,8 @@ push(constant(Value, Options), M, Dict) :-
    M1 = M.empty([], Merged),
    dtype(M1.device, Value, M1.dtype),
    Dict = M1.push_op(constant(Value)).
+push(rand(Shape, Options), M, Dict) :-
+   Dict = M.empty(Shape, Options).push_op(rand).
 push(contiguous, M, Dict) :-
    Dict = M.empty(M.shape()).push_op(contiguous(M)).
 push(reduce(Op, Axes), M, Dict) :-
@@ -259,6 +266,13 @@ push(elementwise(Op, Args), C) :-
    broadcast(Args, [H | T]),
    Term =.. [Op, H | T],
    C = H.empty(H.shape(), [dtype(DType)]).push_op(Term).
+push(solve(A, B), X) :-
+   (  dicts_same_value_for_key([A, B], device, Device)
+   -> true
+   ;  domain_error(device, [A, B])
+   ),
+   broadcast_dtypes(Device, [A.dtype, B.dtype], DType),
+   X = A.empty(B.shape(), [dtype(DType)]).push_op(solve(A, B)).
 dicts_same_value_for_key(List, Key, Value) :-
    maplist({Value, Key}/[Dict]>>get_dict(Key, Dict, Value), List).
 
@@ -389,6 +403,10 @@ eval_(A @ B, C) =>
    B2 = B1.reshape(Shape2), B3 = B2.swapaxes(B2.ndim0(), Dim2),
    eval_(A3 * B3, C1),
    C = C1.sum([C1.ndim0()]).
+eval_(solve(A, B), X) =>
+   eval_(A, A1),
+   eval_(B, B1),
+   push(solve(A1.contiguous(), B1.contiguous()), X).
 eval_(A, R), is_dict(A, array) =>
    A = R.
 eval_(A, R), number(A) =>
@@ -429,13 +447,18 @@ M.realize() := M :-
 % ============
 M.compile() := Dict :-
    Dict = M.compile(M.device, M.op),
-   (  debugging(compile), Dict.kernel \== true
-   -> with_output_to(string(S), listing(Dict.kernel)),
-      debug(compile, "~s", S)
+   (  debugging(compile)
+   -> debug(compile, "~p", Dict.kernel)
    ;  true
    ).
+   % (  debugging(compile), Dict.kernel \== true
+   % -> with_output_to(string(S), listing(Dict.kernel)),
+   %    debug(compile, "~s", S)
+   % ;  true
+   % ).
 
 :- multifile compile/4.
+:- det(compile/4).
 
 create_schedule(Arrays, Schedule) :-
    maplist(array_graph, Arrays, Graphs),
@@ -479,15 +502,7 @@ run_schedule(Schedule) :-
 run_scheduleitem(M) :-
    run_scheduleitem(M.device, M).
 run_scheduleitem(prolog, M) :-
-   (  M.kernel = true
-   -> true
-   ;  maplist([Dim, I, between(0, Dim1, I)]>>(Dim1 is Dim-1), M.shape(), M.index, L),
-      (  L = []
-      -> Betweens = true
-      ;  comma_list(Betweens, L)
-      ),
-      forall(Betweens, M.kernel)
-   ).
+   call(M.kernel).
 
 % Helpers
 % =======
@@ -539,11 +554,13 @@ skip_view(Op, R) =>
 dtype(prolog, 0, R) => R = boolean.
 dtype(prolog, 1, R) => R = boolean.
 dtype(prolog, X, R), float(X) => R = float.
+dtype(prolog, X, R), rational(X) => R = rational.
 dtype(prolog, X, R), integer(X) => R = integer.
 dtype(prolog, X, DType) => when(ground(X), dtype(prolog, X, DType)).
 
 broadcast_dtype(prolog, boolean, integer).
-broadcast_dtype(prolog, integer, float).
+broadcast_dtype(prolog, integer, rational).
+broadcast_dtype(prolog, rational, float).
 
 :- table common_dtype/4.
 
