@@ -788,4 +788,10 @@ test('comparison op returns boolean dtype') :-
     C @= (A < B),
     C.dtype == boolean.
 
+test('derived comparison op returns boolean dtype', [fail]) :-
+    A = array{}.fromlist([1.0, 2.0, 3.0]),
+    B = array{}.fromlist([3.0, 2.0, 1.0]),
+    C @= (A =< B),
+    C.dtype == boolean.
+
 :- end_tests(array_comparison).
