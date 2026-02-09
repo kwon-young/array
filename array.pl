@@ -388,13 +388,17 @@ eval_(A<B, C) =>
 eval_(A>B, C) =>
    eval_(B<A, C).
 eval_(A=<B, C) =>
-   eval_(-(A>B) + 1, C).
+   eval_(-(A>B) + 1, C1),
+   C = C1.put([dtype=boolean]).
 eval_(A>=B, C) =>
-   eval_(-(A<B) + 1, C).
+   eval_(-(A<B) + 1, C1),
+   C = C1.put([dtype=boolean]).
 eval_(A=\=B, C) =>
-   eval_((A<B)+(A>B), C).
+   eval_((A<B)+(A>B), C1),
+   C = C1.put([dtype=boolean]).
 eval_(A=:=B, C) =>
-   eval_(-(A=\=B)+1, C).
+   eval_(-(A=\=B)+1, C1),
+   C = C1.put([dtype=boolean]).
 eval_(A+B, C) =>
    eval_(A, A1),
    eval_(B, B1),
@@ -788,7 +792,7 @@ test('comparison op returns boolean dtype') :-
     C @= (A < B),
     C.dtype == boolean.
 
-test('derived comparison op returns boolean dtype', [fail]) :-
+test('derived comparison op returns boolean dtype') :-
     A = array{}.fromlist([1.0, 2.0, 3.0]),
     B = array{}.fromlist([3.0, 2.0, 1.0]),
     C @= (A =< B),

@@ -10,7 +10,7 @@ The `array.pl` module contains code that is specific to the Prolog runtime. This
 
 -   **Execution Logic**:
     -   `allocate_schedule/1` and `allocate/1` (which use Prolog-specific term creation).
-    -   `run_schedule/1`, `run_scheduleitem/1`, and `run_scheduleitem/2` (which use `call/1` to execute kernels).
+    -   compile the schedule so that it is a simple predicate call
 -   **Data Access and Conversion**:
     -   `M.fromlist/1-2` and `M.tolist/1` (which rely on Prolog compound terms for data storage).
     -   `M.index_input/2` (which generates code using `arg/3` to access elements).
@@ -19,13 +19,6 @@ The `array.pl` module contains code that is specific to the Prolog runtime. This
     -   `dtype/3` predicate.
     -   `broadcast_dtype/3` predicate.
     -   The part of `push(constant(...), ...)` that infers dtype from a constant value.
-
-## 2. Bug Fixes
-
-### Non-termination in `dtype/3`
-
--   **Problem**: The `dtype/3` predicate in `array.pl` has a clause `when(ground(X), ...)` that causes infinite recursion if an unsupported ground term (like an atom) is passed to it, for example via `M.fromlist`.
--   **Solution**: Fix the clause to handle unknown types gracefully, likely by throwing an error instead of recursing.
 
 ## 3. Improve Dtype Handling
 
