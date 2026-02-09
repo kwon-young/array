@@ -584,7 +584,7 @@ dtype(prolog, 1, R) => R = boolean.
 dtype(prolog, X, R), float(X) => R = float.
 dtype(prolog, X, R), rational(X) => R = rational.
 dtype(prolog, X, R), integer(X) => R = integer.
-dtype(prolog, X, DType) => when(ground(X), dtype(prolog, X, DType)).
+dtype(prolog, X, DType), var(X) => when(ground(X), dtype(prolog, X, DType)).
 
 broadcast_dtype(prolog, boolean, integer).
 broadcast_dtype(prolog, integer, rational).
