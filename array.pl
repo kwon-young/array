@@ -582,8 +582,8 @@ skip_view(Op, R) =>
 dtype(prolog, 0, R) => R = boolean.
 dtype(prolog, 1, R) => R = boolean.
 dtype(prolog, X, R), float(X) => R = float.
-dtype(prolog, X, R), rational(X) => R = rational.
 dtype(prolog, X, R), integer(X) => R = integer.
+dtype(prolog, X, R), rational(X) => R = rational.
 dtype(prolog, X, DType), var(X) => when(ground(X), dtype(prolog, X, DType)).
 
 broadcast_dtype(prolog, boolean, integer).
