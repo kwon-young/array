@@ -776,3 +776,13 @@ test('2d @ 2d') :-
    [ 69,  90, 111]] = C.tolist().
 
 :- end_tests(array_matmul).
+
+:- begin_tests(array_comparison).
+
+test('comparison op returns boolean dtype', [fail]) :-
+    A = array{}.fromlist([1.0, 2.0, 3.0]),
+    B = array{}.fromlist([3.0, 2.0, 1.0]),
+    C @= A < B,
+    C.dtype == boolean.
+
+:- end_tests(array_comparison).
