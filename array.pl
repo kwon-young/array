@@ -275,8 +275,11 @@ push(elementwise(Op, Args), C) :-
    -> true
    ;  domain_error(device, Args)
    ),
-   maplist(get_dict(dtype), Args, DTypes),
-   broadcast_dtypes(Device, DTypes, DType),
+   (  Op == (<)
+   -> DType = boolean
+   ;  maplist(get_dict(dtype), Args, DTypes),
+      broadcast_dtypes(Device, DTypes, DType)
+   ),
    broadcast(Args, [H | T]),
    Term =.. [Op, H | T],
    C = H.empty(H.shape(), [dtype(DType)]).push_op(Term).
@@ -779,10 +782,10 @@ test('2d @ 2d') :-
 
 :- begin_tests(array_comparison).
 
-test('comparison op returns boolean dtype', [fail]) :-
+test('comparison op returns boolean dtype') :-
     A = array{}.fromlist([1.0, 2.0, 3.0]),
     B = array{}.fromlist([3.0, 2.0, 1.0]),
-    C @= A < B,
+    C @= (A < B),
     C.dtype == boolean.
 
 :- end_tests(array_comparison).
