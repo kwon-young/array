@@ -24,8 +24,6 @@ The `array.pl` module contains code that is specific to the Prolog runtime. This
 
 The current data type (dtype) handling has several weaknesses that need to be addressed.
 
--   **Reduce Operations**: The result of `sum` or `max` operations currently defaults to `float`. It should preserve the dtype of the input array. For example, summing an `integer` array should result in an `integer` array.
--   **Comparison Operations**: Operations like `A < B` produce boolean results but currently return an array with the same dtype as the inputs (e.g., `float`). The output dtype should be `boolean` or `integer`.
 -   **Inconsistent `dtype` Option**: In `M.full/3`, providing a `dtype` in the options acts as a type check, not a cast. This should be changed to cast the fill value to the specified `dtype`.
 -   **Inefficient Type Inference**: `M.fromlist` infers the dtype by promoting from `boolean` upwards. This is inefficient if the list contains higher-precision types like `float`. The inference should be more direct.
 -   **Hardcoded Dtypes in Helpers**: `M.zeros` and `M.ones` create arrays with the default `float` dtype. They should infer the dtype from the value (i.e., `integer`).
