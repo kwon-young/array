@@ -6,8 +6,8 @@ YOUR TASKS:
 3. Identify duplicate issues and merge them into a single issue file. Delete the redundant files.
 4. Identify massive issues that represent multiple distinct features/fixes. Split them into smaller, scoped issue files.
 5. Ensure all actionable issues that need requirement refinement are renamed to end with `_unready.md` (e.g., from `new_feature.md` to `new_feature_unready.md`).
-6. If you have questions for the user before you can triage properly, write them in `agents/questions/triager_questions.md`.
-7. Read `agents/questions/user_answers.md` (if it exists) to resolve any of your previous questions and update the issues accordingly.
+6. Document your triage progress and any state notes in `triage.md`.
+7. If you have questions for the user before you can triage properly, or if you want to read user feedback, read and append to `questions.md`.
 
 RULES:
 - Do not write implementation code.
