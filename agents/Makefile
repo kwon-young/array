@@ -3,6 +3,10 @@
 UNREADY_ISSUES = $(wildcard issues/*_unready.md)
 READY_ISSUES   = $(wildcard issues/*_ready.md)
 
+# Define the repository files to be provided as read-only context
+READ_FILES ?= $(wildcard ../*.pl)
+AIDER ?= aider $(if $(READ_FILES),--read $(READ_FILES))
+
 all: triage.md
 	@$(MAKE) generate_issues
 	@$(MAKE) generate_plans
@@ -14,15 +18,15 @@ generate_plans: $(READY_ISSUES:issues/%_ready.md=plans/%.md)
 # triage always run, uses triage.md as its state generate unready issues
 triage.md: questions.md
 	@echo "--- Triaging Issues ---"
-	aider --message-file issue_triager.txt triage.md issues/*.md questions.md
+	$(AIDER) --message-file issue_triager.txt triage.md issues/*.md questions.md
 
 # each issue generating depends on triaging
 issues/%_ready.md: issues/%_unready.md questions.md triage.md
 	@echo "--- Generating ready issue for $< ---"
-	aider --message-file issue_generator.txt $@ $< questions.md
+	$(AIDER) --message-file issue_generator.txt $@ $< questions.md
 
 # plan generation depends on ready issue
 plans/%.md: issues/%_ready.md questions.md
 	@echo "--- Planning modifications for $< ---"
-	aider --message-file modification_planner.txt $@ $< questions.md
+	$(AIDER) --message-file modification_planner.txt $@ $< questions.md
 	@touch $@
