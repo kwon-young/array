@@ -13,6 +13,10 @@ To support modular runtimes (such as a future C or GPU backend), the `array.pl` 
 - [ ] Implementations in `runtime_prolog.pl` correctly attach to the multifile predicates defined in `array.pl` (e.g., by qualifying them like `array:dtype(prolog, 0, R) => R = boolean.`).
 - [ ] All existing tests continue to pass without modification.
 
+## Edge Cases
+- Ensure that fallback behavior for unknown devices throws a clear `resource_error` (or `domain_error`) if `run_scheduleitem/2` or `dtype/3` fails to match when a user requests an unimplemented device.
+- `array.pl` handles device resolution during operations (e.g., checking `dicts_same_value_for_key(Args, device, Device)`). Make sure these dynamic dispatch predicates correctly propagate those resolved device tags.
+
 ## Technical Notes
 - The default device fallback in `M.default` (`option(device(Device), Merged, prolog)`) can remain in `array.pl` for ease of use.
 - The forced conversion in `M.tolist()` (`M.contiguous().to(prolog).realize()`) is acceptable as it specifically converts internal data structures into a native Prolog list format.
