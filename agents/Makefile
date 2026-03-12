@@ -4,8 +4,7 @@ UNREADY_ISSUES = $(wildcard issues/*_unready.md)
 READY_ISSUES   = $(wildcard issues/*_ready.md)
 
 # Define the repository files to be provided as read-only context
-READ_FILES ?= $(wildcard ../*.pl)
-AIDER ?= aider $(if $(READ_FILES),--read $(READ_FILES))
+AIDER ?= aider --yes --read ../array.pl --read ../runtime_prolog.pl --read ../view.pl --no-auto-lint --no-gitignore --model gemini --no-auto-commits
 
 all: triage.md
 	@$(MAKE) generate_issues
