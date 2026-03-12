@@ -20,10 +20,8 @@ setup:
 triage: .triage.sentinel
 
 .triage.sentinel: $(ALL_ISSUES) $(USER_ANSWERS)
-	@if ls issues/*.md 1> /dev/null 2>&1; then \
-		echo "--- Triaging Issues ---"; \
-		aider --message-file issue_triager.txt issues/*.md questions/*.md; \
-	fi
+	@echo "--- Triaging Issues ---"
+	aider --message-file issue_triager.txt issues/*.md questions/*.md
 	@touch .triage.sentinel
 
 # 2. Generator reacts to modified unready issues
