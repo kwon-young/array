@@ -1,4 +1,15 @@
-.PHONY: triage.md
+.PHONY: all triage.md generate_issues generate_plans
+
+UNREADY_ISSUES = $(wildcard issues/*_unready.md)
+READY_ISSUES   = $(wildcard issues/*_ready.md)
+
+all: triage.md
+	@$(MAKE) generate_issues
+	@$(MAKE) generate_plans
+
+generate_issues: $(UNREADY_ISSUES:_unready.md=_ready.md)
+
+generate_plans: $(READY_ISSUES:issues/%_ready.md=plans/%.md)
 
 # triage always run, uses triage.md as its state generate unready issues
 triage.md: questions.md
