@@ -19,10 +19,10 @@ echo "We need to refactor the database layer to use async I/O. Please figure out
 
 ## Running the Workflow
 
-Run the automated loop (by default, it loops 3 times to allow agents to pass tasks down the pipeline):
+Run a single pass of the workflow. Because of the Makefile dependencies, this will automatically run the Triager, then the Generator, and finally the Planner:
 ```bash
 cd agents
-make loop
+make all
 ```
 
 ## Agent Roles
