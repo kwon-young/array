@@ -44,7 +44,12 @@ static foreign_t alloc_buffer(term_t t, term_t count, term_t zero_t)
     if (p)
     {
       int zero;
-      if (PL_get_bool_ex(zero_t, &zero) && zero)
+      if (!PL_get_bool_ex(zero_t, &zero))
+      {
+        free(p);
+        return FALSE;
+      }
+      if (zero)
       {
         memset(p, 0, size);
       }
@@ -87,10 +92,11 @@ static foreign_t free_buffer(term_t t)
     return FALSE;
   }
   atom_t atom;
-  if (PL_get_atom_ex(t, &atom))
+  if (!PL_get_atom_ex(t, &atom))
   {
-    PL_free_blob(atom);
+    return FALSE;
   }
+  PL_free_blob(atom);
   return TRUE;
 }
 
