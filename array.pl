@@ -228,10 +228,13 @@ M.diag() := Dict :-
 
 % Conversion
 % ==========
+:- multifile extract_data/3.
+
 M.tolist() := List :-
    shape_list(M.shape(), List),
    flatten(List, Flat),
-   compound_name_arguments(M.contiguous().to(prolog).realize().data, data, Flat).
+   Realized = M.contiguous().to(prolog).realize(),
+   extract_data(Realized.device, Realized, Flat).
 shape_list([], _).
 shape_list([Dim | Shape], L) :-
    length(L, Dim),
@@ -536,10 +539,10 @@ allocate(M) :-
 run_schedule(Schedule) :-
    maplist(run_scheduleitem, Schedule).
 
+:- multifile run_scheduleitem/2.
+
 run_scheduleitem(M) :-
    run_scheduleitem(M.device, M).
-run_scheduleitem(prolog, M) :-
-   call(M.kernel).
 
 % Helpers
 % =======
