@@ -196,7 +196,9 @@ static foreign_t to_compound(term_t comp_out, term_t t, term_t type_t, term_t of
     }
     
     term_t comp = PL_new_term_ref();
-    PL_cons_functor_v(comp, PL_new_functor(name, size), args);
+    if (!PL_cons_functor_v(comp, PL_new_functor(name, size), args)) {
+      return FALSE;
+    }
     return PL_unify(comp_out, comp);
   }
   return FALSE;
