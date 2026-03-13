@@ -28,7 +28,7 @@ static PL_blob_t buffer_blob = {
   NULL
 };
 
-static foreign_t alloc_buffer(term_t t, term_t count, term_t zero_t)
+static foreign_t c_buffer_alloc(term_t t, term_t count, term_t zero_t)
 {
   if (!PL_is_variable(t))
   {
@@ -66,7 +66,7 @@ static foreign_t alloc_buffer(term_t t, term_t count, term_t zero_t)
   return FALSE;
 }
 
-static foreign_t buffer_size(term_t t, term_t count)
+static foreign_t c_buffer_size(term_t t, term_t count)
 {
   PL_blob_t *blob_type;
   if (!PL_is_blob(t, &blob_type) || blob_type != &buffer_blob)
@@ -83,7 +83,7 @@ static foreign_t buffer_size(term_t t, term_t count)
   return FALSE;
 }
 
-static foreign_t free_buffer(term_t t)
+static foreign_t c_buffer_free(term_t t)
 {
   PL_blob_t *blob_type;
   if (!PL_is_blob(t, &blob_type) || blob_type != &buffer_blob)
@@ -100,7 +100,7 @@ static foreign_t free_buffer(term_t t)
   return TRUE;
 }
 
-static foreign_t set_buffer(term_t t, term_t type_t, term_t i, term_t v)
+static foreign_t c_buffer_set(term_t t, term_t type_t, term_t i, term_t v)
 {
   atom_t type;
   size_t size;
@@ -119,7 +119,7 @@ static foreign_t set_buffer(term_t t, term_t type_t, term_t i, term_t v)
   return FALSE;
 }
 
-static foreign_t load_buffer(term_t t, term_t type_t, term_t i, term_t v)
+static foreign_t c_buffer_load(term_t t, term_t type_t, term_t i, term_t v)
 {
   atom_t type;
   size_t offset, size;
@@ -137,7 +137,7 @@ static foreign_t load_buffer(term_t t, term_t type_t, term_t i, term_t v)
   return FALSE;
 }
 
-static foreign_t type_size(term_t type_t, term_t size)
+static foreign_t c_buffer_type_size(term_t type_t, term_t size)
 {
   atom_t type;
   size_t size_;
@@ -148,7 +148,7 @@ static foreign_t type_size(term_t type_t, term_t size)
   return FALSE;
 }
 
-static foreign_t from_compound(term_t comp, term_t t, term_t type_t, term_t offset_t, term_t it_size)
+static foreign_t c_buffer_from_compound(term_t comp, term_t t, term_t type_t, term_t offset_t, term_t it_size)
 {
   atom_t type, name;
   size_t arity, size, buffer_size, type_size, comp_offset;
@@ -175,7 +175,7 @@ static foreign_t from_compound(term_t comp, term_t t, term_t type_t, term_t offs
   return FALSE;
 }
 
-static foreign_t to_compound(term_t comp_out, term_t t, term_t type_t, term_t offset_t, term_t it_size, term_t name_t)
+static foreign_t c_buffer_to_compound(term_t comp_out, term_t t, term_t type_t, term_t offset_t, term_t it_size, term_t name_t)
 {
   atom_t type, name;
   size_t buffer_size, size, type_size, buffer_offset;
@@ -210,7 +210,7 @@ static foreign_t to_compound(term_t comp_out, term_t t, term_t type_t, term_t of
   return FALSE;
 }
 
-static foreign_t pointer_buffer(term_t p, term_t t, term_t offset_t)
+static foreign_t c_buffer_pointer(term_t p, term_t t, term_t offset_t)
 {
   size_t offset, size;
   void *buffer;
@@ -227,16 +227,16 @@ static foreign_t pointer_buffer(term_t p, term_t t, term_t offset_t)
 }
 
 
-install_t install(void)
+install_t install_buffer(void)
 {
   install_types();
-  PL_register_foreign("cbuffer_alloc", 3, alloc_buffer, 0);
-  PL_register_foreign("cbuffer_size", 2, buffer_size, 0);
-  PL_register_foreign("cbuffer_free", 1, free_buffer, 0);
-  PL_register_foreign("cbuffer_load", 4, load_buffer, 0);
-  PL_register_foreign("cbuffer_set", 4, set_buffer, 0);
-  PL_register_foreign("cbuffer_type_size", 2, type_size, 0);
-  PL_register_foreign("cbuffer_from_compound", 5, from_compound, 0);
-  PL_register_foreign("cbuffer_to_compound", 6, to_compound, 0);
-  PL_register_foreign("cbuffer_pointer", 3, pointer_buffer, 0);
+  PL_register_foreign("c_buffer_alloc", 3, c_buffer_alloc, 0);
+  PL_register_foreign("c_buffer_size", 2, c_buffer_size, 0);
+  PL_register_foreign("c_buffer_free", 1, c_buffer_free, 0);
+  PL_register_foreign("c_buffer_load", 4, c_buffer_load, 0);
+  PL_register_foreign("c_buffer_set", 4, c_buffer_set, 0);
+  PL_register_foreign("c_buffer_type_size", 2, c_buffer_type_size, 0);
+  PL_register_foreign("c_buffer_from_compound", 5, c_buffer_from_compound, 0);
+  PL_register_foreign("c_buffer_to_compound", 6, c_buffer_to_compound, 0);
+  PL_register_foreign("c_buffer_pointer", 3, c_buffer_pointer, 0);
 }

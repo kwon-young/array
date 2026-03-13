@@ -1,25 +1,26 @@
 :- module(buffer, [
-   alloc/4,
-   offset/5,
-   from_data/4
+   buffer_alloc/4,
+   buffer_offset/5,
+   buffer_from_data/4,
+   buffer_to_data/4
 ]).
 
 :- use_foreign_library('buffer.so').
 
-alloc(Buffer, Type, Size, Zero) :-
-   cbuffer_type_size(Type, TypeSize),
+buffer_alloc(Buffer, Type, Size, Zero) :-
+   c_buffer_type_size(Type, TypeSize),
    BufferSize is Size*TypeSize,
-   cbuffer_alloc(Buffer, BufferSize, Zero).
+   c_buffer_alloc(Buffer, BufferSize, Zero).
 
-offset(Buffer, Type, Size, Offset, Pointer) :-
+buffer_offset(Buffer, Type, Size, Offset, Pointer) :-
    Offset =< Size,
-   cbuffer_type_size(Type, TypeSize),
+   c_buffer_type_size(Type, TypeSize),
    PointerOffset is Offset * TypeSize,
-   cbuffer_pointer(Pointer, Buffer, PointerOffset).
+   c_buffer_pointer(Pointer, Buffer, PointerOffset).
 
-from_data(Data, Type, Size, Buffer) :-
-   alloc(Buffer, Type, Size, false),
-   cbuffer_from_compound(Data, Buffer, Type, 0, Size).
+buffer_from_data(Data, Type, Size, Buffer) :-
+   buffer_alloc(Buffer, Type, Size, false),
+   c_buffer_from_compound(Data, Buffer, Type, 0, Size).
 
-to_data(Buffer, Type, Size, Data) :-
-   cbuffer_to_compound(Data, Buffer, Type, 0, Size, data).
+buffer_to_data(Buffer, Type, Size, Data) :-
+   c_buffer_to_compound(Data, Buffer, Type, 0, Size, data).
