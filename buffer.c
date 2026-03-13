@@ -216,13 +216,13 @@ static foreign_t pointer_buffer(term_t p, term_t t, term_t offset_t)
 install_t install(void)
 {
   install_types();
-  PL_register_foreign("alloc_buffer", 3, alloc_buffer, 0);
-  PL_register_foreign("buffer_size", 2, buffer_size, 0);
-  PL_register_foreign("free_buffer", 1, free_buffer, 0);
-  PL_register_foreign("load_buffer", 4, load_buffer, 0);
-  PL_register_foreign("set_buffer", 4, set_buffer, 0);
-  PL_register_foreign("type_size", 2, type_size, 0);
-  PL_register_foreign("from_list", 3, from_list, 0);
-  PL_register_foreign("to_list", 5, to_list, 0);
-  PL_register_foreign("pointer_buffer", 3, pointer_buffer, 0);
+  PL_register_foreign("cbuffer_alloc", 3, alloc_buffer, 0);
+  PL_register_foreign("cbuffer_size", 2, buffer_size, 0);
+  PL_register_foreign("cbuffer_free", 1, free_buffer, 0);
+  PL_register_foreign("cbuffer_load", 4, load_buffer, 0);
+  PL_register_foreign("cbuffer_set", 4, set_buffer, 0);
+  PL_register_foreign("cbuffer_type_size", 2, type_size, 0);
+  PL_register_foreign("cbuffer_from_list", 3, from_list, 0);
+  PL_register_foreign("cbuffer_to_list", 5, to_list, 0);
+  PL_register_foreign("cbuffer_pointer", 3, pointer_buffer, 0);
 }

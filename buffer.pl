@@ -1,19 +1,28 @@
 :- module(buffer, [
-   alloc_buffer/3,
-   buffer_size/2,
-   free_buffer/1,
-   load_buffer/4,
-   set_buffer/4,
-   type_size/2,
-   % from_list/3,
-   to_list/5,
-   pointer_buffer/3
+   alloc/4,
+   offset/5,
+   from_data/4
 ]).
 
 :- use_foreign_library('buffer.so').
 
-M.id() := Id :-
-   variant_sha1(M, Id).
+alloc(Buffer, Type, Size, Zero) :-
+   cbuffer_type_size(Type, TypeSize),
+   BufferSize is Size*TypeSize,
+   cbuffer_alloc(Buffer, BufferSize, Zero).
 
-M.name() := Name :-
-   atom_concat(buffer_, M.id(), Name).
+offset(Buffer, Type, Size, Offset, Pointer) :-
+   Offset =< Size,
+   cbuffer_type_size(Type, TypeSize),
+   PointerOffset is Offset * TypeSize,
+   cbuffer_pointer(Pointer, Buffer, PointerOffset).
+
+from_data(Data, Type, Size, Buffer) :-
+   compound_name_arguments(Data, data, List),
+   alloc(Buffer, Type, Size, false),
+   cbuffer_from_list(List, Buffer, Type).
+
+to_data(Buffer, Type, Size, Data) :-
+   cbuffer_to_list(L, Buffer, Type, 0, Size),
+   length(L, Size),
+   compound_name_arguments(Data, data, L).
