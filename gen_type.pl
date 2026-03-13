@@ -75,7 +75,9 @@ set(AST) :-
    GetCall =.. [Get, v_t, &v],
    Body = (
       PlCType:v,
-      GetCall,
+      if(GetCall == 'FALSE') {
+         return('FALSE')
+      },
       *(cast(buffer, *CType) + offset) = v,
       return('TRUE')
    ),
