@@ -591,16 +591,8 @@ skip_view(Op, R) =>
 
 % DTypes
 % ======
-dtype(prolog, 0, R) => R = boolean.
-dtype(prolog, 1, R) => R = boolean.
-dtype(prolog, X, R), float(X) => R = float.
-dtype(prolog, X, R), integer(X) => R = integer.
-dtype(prolog, X, R), rational(X) => R = rational.
-dtype(prolog, X, DType), var(X) => when(ground(X), dtype(prolog, X, DType)).
-
-broadcast_dtype(prolog, boolean, integer).
-broadcast_dtype(prolog, integer, rational).
-broadcast_dtype(prolog, rational, float).
+:- multifile dtype/3.
+:- multifile broadcast_dtype/3.
 
 :- table common_dtype/4.
 

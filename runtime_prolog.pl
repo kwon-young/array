@@ -173,3 +173,16 @@ op_expr(sqrt(A), R, Index) =>
 
 array:allocate(prolog, M) :-
    compound_name_arity(M.data, data, M.datasize).
+
+% DTypes
+% ======
+array:dtype(prolog, 0, R) => R = boolean.
+array:dtype(prolog, 1, R) => R = boolean.
+array:dtype(prolog, X, R), float(X) => R = float.
+array:dtype(prolog, X, R), integer(X) => R = integer.
+array:dtype(prolog, X, R), rational(X) => R = rational.
+array:dtype(prolog, X, DType), var(X) => when(ground(X), array:dtype(prolog, X, DType)).
+
+array:broadcast_dtype(prolog, boolean, integer).
+array:broadcast_dtype(prolog, integer, rational).
+array:broadcast_dtype(prolog, rational, float).
