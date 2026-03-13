@@ -23,6 +23,4 @@ from_data(Data, Type, Size, Buffer) :-
    cbuffer_from_list(List, Buffer, Type).
 
 to_data(Buffer, Type, Size, Data) :-
-   cbuffer_to_list(L, Buffer, Type, 0, Size),
-   length(L, Size),
-   compound_name_arguments(Data, data, L).
+   cbuffer_to_compound(Data, Buffer, Type, 0, Size, data).

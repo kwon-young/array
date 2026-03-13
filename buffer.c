@@ -167,31 +167,35 @@ static foreign_t from_list(term_t l, term_t t, term_t type_t)
   return FALSE;
 }
 
-static foreign_t to_list(term_t l, term_t t, term_t type_t, term_t offset_t, term_t it_size)
+static foreign_t to_compound(term_t comp_out, term_t t, term_t type_t, term_t offset_t, term_t it_size, term_t name_t)
 {
-  term_t head = PL_new_term_ref();
-  term_t tail = PL_copy_term_ref(l);
-  atom_t type;
+  atom_t type, name;
   size_t buffer_size, size, type_size, buffer_offset;
   void *buffer;
   PL_blob_t *blob_type;
 
   if (PL_get_atom_ex(type_t, &type)
+      && PL_get_atom_ex(name_t, &name)
       && atom_size(type, &type_size)
       && PL_get_blob(t, &buffer, &buffer_size, &blob_type)
       && blob_type == &buffer_blob
       && PL_get_size_ex(offset_t, &buffer_offset)
       && PL_get_size_ex(it_size, &size))
- {
+  {
     buffer += buffer_offset;
+    
+    term_t args = PL_new_term_refs(size);
+    
     for (size_t offset = 0; offset < size; offset++)
     {
-      if (!PL_unify_list(tail, head, tail)
-          || !load(buffer, buffer_size, type, offset, head)) {
+      if (!load(buffer, buffer_size, type, offset, args + offset)) {
         return FALSE;
       }
     }
-    return PL_unify_nil(tail);
+    
+    term_t comp = PL_new_term_ref();
+    PL_cons_functor_v(comp, PL_new_functor(name, size), args);
+    return PL_unify(comp_out, comp);
   }
   return FALSE;
 }
@@ -223,6 +227,6 @@ install_t install(void)
   PL_register_foreign("cbuffer_set", 4, set_buffer, 0);
   PL_register_foreign("cbuffer_type_size", 2, type_size, 0);
   PL_register_foreign("cbuffer_from_list", 3, from_list, 0);
-  PL_register_foreign("cbuffer_to_list", 5, to_list, 0);
+  PL_register_foreign("cbuffer_to_compound", 6, to_compound, 0);
   PL_register_foreign("cbuffer_pointer", 3, pointer_buffer, 0);
 }
