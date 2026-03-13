@@ -148,7 +148,7 @@ static foreign_t c_buffer_type_size(term_t type_t, term_t size)
   return FALSE;
 }
 
-static foreign_t c_buffer_from_compound(term_t comp, term_t t, term_t type_t, term_t offset_t, term_t it_size)
+static foreign_t c_buffer_from_compound(term_t t, term_t type_t, term_t offset_t, term_t it_size, term_t comp)
 {
   atom_t type, name;
   size_t arity, size, buffer_size, type_size, comp_offset;
@@ -175,7 +175,7 @@ static foreign_t c_buffer_from_compound(term_t comp, term_t t, term_t type_t, te
   return FALSE;
 }
 
-static foreign_t c_buffer_to_compound(term_t comp_out, term_t t, term_t type_t, term_t offset_t, term_t it_size, term_t name_t)
+static foreign_t c_buffer_to_compound(term_t t, term_t type_t, term_t offset_t, term_t it_size, term_t name_t, term_t comp_out)
 {
   atom_t type, name;
   size_t buffer_size, size, type_size, buffer_offset;
@@ -210,7 +210,7 @@ static foreign_t c_buffer_to_compound(term_t comp_out, term_t t, term_t type_t, 
   return FALSE;
 }
 
-static foreign_t c_buffer_pointer(term_t p, term_t t, term_t offset_t)
+static foreign_t c_buffer_pointer(term_t t, term_t offset_t, term_t p)
 {
   size_t offset, size;
   void *buffer;

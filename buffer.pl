@@ -16,11 +16,11 @@ buffer_offset(Buffer, Type, Size, Offset, Pointer) :-
    Offset =< Size,
    c_buffer_type_size(Type, TypeSize),
    PointerOffset is Offset * TypeSize,
-   c_buffer_pointer(Pointer, Buffer, PointerOffset).
+   c_buffer_pointer(Buffer, PointerOffset, Pointer).
 
-buffer_from_data(Data, Type, Size, Buffer) :-
+buffer_from_data(Buffer, Type, Size, Data) :-
    buffer_alloc(Buffer, Type, Size, false),
-   c_buffer_from_compound(Data, Buffer, Type, 0, Size).
+   c_buffer_from_compound(Buffer, Type, 0, Size, Data).
 
 buffer_to_data(Buffer, Type, Size, Data) :-
-   c_buffer_to_compound(Data, Buffer, Type, 0, Size, data).
+   c_buffer_to_compound(Buffer, Type, 0, Size, data, Data).
