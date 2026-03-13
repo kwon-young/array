@@ -142,27 +142,29 @@ static foreign_t type_size(term_t type_t, term_t size)
   return FALSE;
 }
 
-static foreign_t from_list(term_t l, term_t t, term_t type_t)
+static foreign_t from_compound(term_t comp, term_t t, term_t type_t, term_t offset_t, term_t it_size)
 {
-  term_t head = PL_new_term_ref();
-  term_t tail = PL_copy_term_ref(l);
-  atom_t type;
-  size_t offset = 0, size;
+  atom_t type, name;
+  size_t arity, size, buffer_size, type_size, comp_offset;
   void *buffer;
   PL_blob_t *blob_type;
 
   if (PL_get_atom_ex(type_t, &type)
-      && PL_get_blob(t, &buffer, &size, &blob_type)
-      && blob_type == &buffer_blob)
+      && atom_size(type, &type_size)
+      && PL_get_blob(t, &buffer, &buffer_size, &blob_type)
+      && blob_type == &buffer_blob
+      && PL_get_size_ex(offset_t, &comp_offset)
+      && PL_get_size_ex(it_size, &size)
+      && PL_get_compound_name_arity(comp, &name, &arity))
   {
-    while(PL_get_list_ex(tail, head, tail))
+    term_t arg = PL_new_term_ref();
+    for (size_t i = 0; i < size; i++)
     {
-      if (!set(buffer, size, type, offset, head)) {
+      if (!PL_get_arg(comp_offset + i + 1, comp, arg) || !set(buffer, buffer_size, type, i, arg)) {
         return FALSE;
       }
-      offset++;
     }
-    return PL_get_nil_ex(tail);
+    return TRUE;
   }
   return FALSE;
 }
@@ -226,7 +228,7 @@ install_t install(void)
   PL_register_foreign("cbuffer_load", 4, load_buffer, 0);
   PL_register_foreign("cbuffer_set", 4, set_buffer, 0);
   PL_register_foreign("cbuffer_type_size", 2, type_size, 0);
-  PL_register_foreign("cbuffer_from_list", 3, from_list, 0);
+  PL_register_foreign("cbuffer_from_compound", 5, from_compound, 0);
   PL_register_foreign("cbuffer_to_compound", 6, to_compound, 0);
   PL_register_foreign("cbuffer_pointer", 3, pointer_buffer, 0);
 }
