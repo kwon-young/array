@@ -170,3 +170,6 @@ op_expr(log(A), R, Index) =>
 op_expr(sqrt(A), R, Index) =>
    op_expr(A, A1, Index),
    R = sqrt(A1).
+
+array:allocate(prolog, M) :-
+   compound_name_arity(M.data, data, M.datasize).

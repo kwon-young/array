@@ -525,9 +525,11 @@ array_graph(Parent, Op) ==>
 allocate_schedule(Schedule) :-
    maplist(allocate, Schedule).
 
+:- multifile allocate/2.
+
 allocate(M) :-
    (  var(M.data)
-   -> compound_name_arity(M.data, data, M.datasize)
+   -> allocate(M.device, M)
    ;  true
    ).
 
