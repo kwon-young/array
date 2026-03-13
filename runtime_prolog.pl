@@ -5,6 +5,31 @@
 :- use_module(view, [replace_nth0/4]).
 :- use_module(lu_decomposition).
 
+/* 
+ * Runtime Backend Interface
+ * =========================
+ * To be used by array.pl, a runtime backend (device) must implement the
+ * following multifile predicates in the `array` module:
+ *
+ * - array:compile(Device, Op, Array, CompiledDict)
+ *   (Often implemented via dict method: array:Array.compile(Device, Op) := CompiledDict)
+ *   Compiles the operation `Op` for the given `Array` on `Device`. 
+ *   Returns a new dict containing at least a `kernel` key with a callable goal 
+ *   that performs the operation.
+ *
+ * - array:allocate(Device, Array)
+ *   Allocates the physical memory or underlying data storage for `Array` on `Device`.
+ *   Typically binds the `data` field of the Array dict.
+ *
+ * - array:dtype(Device, Value, DType)
+ *   Maps a Prolog `Value` to its corresponding data type representation (e.g., 
+ *   boolean, integer, float) supported by the backend on `Device`.
+ *
+ * - array:broadcast_dtype(Device, DType1, DType2)
+ *   Defines the type promotion rules. It should succeed if `DType1` can be 
+ *   safely broadcast/promoted to `DType2` on the given `Device`.
+ */
+
 setup_kernel_call(M, Args, Index, ModuleHead, Dict) :-
    variant_sha1(M, KernelId),
    maplist(get_dict(id), Args, Ids),
