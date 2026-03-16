@@ -6,6 +6,7 @@
 :- use_module(swipl_ld).
 :- use_module(gen_type).
 :- use_module(runtime_prolog).
+:- use_module(view, [replace_nth0/4]).
 
 % Compiles the operation for the given Array on the 'c' device.
 array:M.compile(c, true) := Dict :-
@@ -34,8 +35,8 @@ array:M.compile(c, sqrt(A)) := Dict :-
    Dict = M.compile(c, elementwise(sqrt(A))).
 array:M.compile(c, elementwise(Op)) := Dict :-
    compile_elementwise(Op, M, Dict).
-array:_M.compile(c, reduce(_Op, _Axes, _Parent)) := _Dict :-
-   throw(not_implemented).
+array:M.compile(c, reduce(Op, Axes, Parent)) := Dict :-
+   compile_reduce(Op, Axes, Parent, M, Dict).
 
 compile_elementwise(Op, M, Dict) :-
    setup_kernel_call(M, Op, Args, Index, Head, RuntimeName-Runtime),
@@ -53,6 +54,60 @@ compile_elementwise(Op, M, Dict) :-
       if MValidExpr {
          Body,
          a0[MIndexExpr] = v0
+      }
+   },
+   Runtime,
+   install_t:install(void) {
+      'PL_register_foreign'(RuntimeStr, N, RuntimeName, 0)
+   }
+   ),
+   once(phrase(translation_unit(AST), Tokens)),
+   once(phrase(tokens(Tokens), Str)),
+   clang_format(Str, In),
+   compile_object(In, Object),
+   link_objects([Object], Library),
+   load_foreign_library(Library),
+   maplist(get_dict(data), Args, Buffers),
+   Buffer = M.data,
+   Kernel =.. [RuntimeName, Buffer | Buffers],
+   Dict = M.put([kernel=runtime_c:Kernel]).
+
+compile_reduce(Op, Axes, Parent, M, Dict) :-
+   setup_kernel_call(M, Parent, Args, Index, Head, RuntimeName-Runtime),
+   length(Axes, NAxes),
+   ids(NAxes, j, int, AccIndex, TypeAccIndex),
+   foldl(replace_nth0, AccIndex, Axes, Index, FullIndex),
+   compile_expr(M, Parent, Args, FullIndex, InnerBody),
+   [Arg0|_] = Args,
+   ParentShape = Arg0.shape(),
+   maplist({ParentShape}/[Axis, Dim]>>nth0(Axis, ParentShape, Dim), Axes, Dims),
+   Expr =.. [Op, acc, v0],
+   (  Op == (<)
+   -> AccExpr = if(Expr) { acc = v0 }
+   ;  AccExpr = (acc = Expr)
+   ),
+   loops(Dims, TypeAccIndex, (InnerBody, AccExpr), InnerLoopAst),
+   MIndexExpr-MValidExpr = M.index_expr(Index),
+   atom_string(RuntimeName, RuntimeStr),
+   length(Args, NArgs),
+   N is 1 + NArgs,
+   array:identity(Op, Identity),
+   (  Identity == -inf
+   -> c_identity(M.dtype, Identity, CIdentity)
+   ;  CIdentity = Identity
+   ),
+   type(M.dtype, MDType, _, _),
+   AST = (
+   #(include(<>, 'SWI-Prolog.h')),
+   #(include(<>, 'stdint.h')),
+   #(include(<>, 'stddef.h')),
+   #(include(<>, 'stdbool.h')),
+   #(include(<>, 'math.h')),
+   void:Head {
+      if MValidExpr {
+         MDType:acc = CIdentity,
+         InnerLoopAst,
+         a0[MIndexExpr] = acc
       }
    },
    Runtime,
@@ -180,3 +235,19 @@ array:M.to(prolog, c) := Dict :-
    buffer_from_data(Data, DType, M1.datasize, M1.data),
    Dict = M.empty(M1.shape(), [device=c, dtype=DType]),
    Dict.data = Data.
+
+c_identity(int8, -inf, 'INT8_MIN').
+c_identity(int16, -inf, 'INT16_MIN').
+c_identity(int32, -inf, 'INT32_MIN').
+c_identity(int64, -inf, 'INT64_MIN').
+c_identity(integer, -inf, 'INT64_MIN').
+c_identity(uint8, -inf, 0).
+c_identity(uint16, -inf, 0).
+c_identity(uint32, -inf, 0).
+c_identity(uint64, -inf, 0).
+c_identity(float16, -inf, '-INFINITY').
+c_identity(float32, -inf, '-INFINITY').
+c_identity(float64, -inf, '-INFINITY').
+c_identity(float, -inf, '-INFINITY').
+c_identity(bool, -inf, 0).
+c_identity(boolean, -inf, 0).
