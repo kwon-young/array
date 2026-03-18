@@ -1,0 +1,61 @@
+% unified data type representation
+% a data type is represented by a type (boolean, integer, float), a range and a size.
+% type should always be bound
+% range is a clpBNR variable and tracks the actual range of the array
+% size is a clpBNR integer that can either be set by the user, or set by the device when compiling
+% * for integer, device should always use the smallest integer size that can fit the given range
+% * for float, fp32 should be the default size, as it is kind of the expected default precision for a float.
+%   the user can set the size to constrain the possible precision:
+%   * if the user specify size of 16 and the range is larger than fp16, the c device can use bf16 which has a larger range for less precision
+%   * if the user specify size of 64 or 128, then the c device will use double or quad precision floats
+%
+% implicit broadcasting types can be declaratively, using clpfd constraints:
+% * boolean -> integer -> float
+% * range is tracked using clpBNR operation, although care must be taken to correctly model interval for float128 as it cannot be represented by a prolog float
+%   * integer are clpBNR integer
+%   * float are clpBNR real
+% * size is a clpBNR integer, is the number of bits that will store the number and is linked to a maximum range that range cannot exceed
+
+:- use_module(library(clpBNR)).
+
+integer_size(Size) :-
+   N::integer(3, 6),
+   { Size is 2^N }.
+signed_integer_range_size(Min-Max, Size) :-
+   {
+      Max is 2^(Size - 1) - 1,
+      Min is -(2^(Size - 1))
+   }.
+unsigned_integer_range_size(0-Max, Size) :-
+   { Max is 2^Size - 1 }.
+
+type_range_precision(boolean, Range, _) :-
+   Range::boolean.
+type_range(integer, Range, Options) :-
+   option(size(Size), Options),
+   option(signed(Signed), Options),
+   integer_size(Size),
+   domain(Range, integer(Min, Max)),
+   signed_integer_range_size(SignedMin-SignedMax, Size),
+   unsigned_integer_range_size(UnsignedMin-UnsignedMax, Size),
+   {
+      Signed is (Min < 0),
+      (Signed and (SignedMin =< Min) and (Max =< SignedMax))
+      or (~Signed and (UnsignedMin =< Min) and (Max =< UnsignedMax))
+   },
+   global_minimize(Size, Size).
+type_range(float, Range, Options) :-
+   option(size(Size), Options),
+   option(precision(Precision), Options),
+   [E, M]::integer(1, _),
+   option(exponent(E), Options, E),
+   option(mantissa(M), Options, M),
+   domain(Range, real(RMin, RMax)),
+   N::integer(2, 4),
+   {  Size is 2^N,
+      Size is E + M,
+      EMax is 2^(E - 1) - 1,
+      Max is (2 - 2^(-M)) * 2^EMax,
+      Min is -Max,
+      ((Min =< RMin) and (RMax =< Max))
+   }.
