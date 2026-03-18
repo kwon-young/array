@@ -37,7 +37,10 @@ type_range(integer, Range, Options) :-
    option(min(Min), Options, _),
    option(max(Max), Options, _),
    integer_size(Size),
-   domain(Range, integer(RMin, RMax)),
+   (  domain(Range, integer(RMin, RMax))
+   -> true
+   ;  instantiation_error(Range)
+   ),
    signed_integer_range_size(SignedMin-SignedMax, Size),
    unsigned_integer_range_size(UnsignedMin-UnsignedMax, Size),
    {
@@ -59,7 +62,10 @@ type_range(float, Range, Options) :-
    option(min(Min), Options, _),
    Infinity::boolean,
    option(infinity(Infinity), Options, Infinity),
-   domain(Range, real(RMin, RMax)),
+   (  domain(Range, real(RMin, RMax))
+   -> true
+   ;  instantiation_error(Range)
+   ),
    N::integer(3, 7),
    {  Size is 2^N,
       Size is 1 + E + M,
