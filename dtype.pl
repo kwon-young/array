@@ -34,14 +34,18 @@ type_range_precision(boolean, Range, _) :-
 type_range(integer, Range, Options) :-
    option(size(Size), Options),
    option(signed(Signed), Options),
+   option(min(Min), Options, _),
+   option(max(Max), Options, _),
    integer_size(Size),
    domain(Range, integer(RMin, RMax)),
    signed_integer_range_size(SignedMin-SignedMax, Size),
    unsigned_integer_range_size(UnsignedMin-UnsignedMax, Size),
    {
       Signed is (RMin < 0),
-      (Signed and (SignedMin =< RMin) and (RMax =< SignedMax))
-      or (~Signed and (UnsignedMin =< RMin) and (RMax =< UnsignedMax))
+      (Signed and (Min == SignedMin) and (Max == SignedMax))
+      or (~Signed and (Min == UnsignedMin) and (Max == UnsignedMax)),
+      Min =< RMin,
+      RMax =< Max
    },
    global_minimize(Size, Size).
 type_range(float, Range, Options) :-
