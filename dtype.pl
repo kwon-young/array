@@ -35,29 +35,37 @@ type_range(integer, Range, Options) :-
    option(size(Size), Options),
    option(signed(Signed), Options),
    integer_size(Size),
-   domain(Range, integer(Min, Max)),
+   domain(Range, integer(RMin, RMax)),
    signed_integer_range_size(SignedMin-SignedMax, Size),
    unsigned_integer_range_size(UnsignedMin-UnsignedMax, Size),
    {
-      Signed is (Min < 0),
-      (Signed and (SignedMin =< Min) and (Max =< SignedMax))
-      or (~Signed and (UnsignedMin =< Min) and (Max =< UnsignedMax))
+      Signed is (RMin < 0),
+      (Signed and (SignedMin =< RMin) and (RMax =< SignedMax))
+      or (~Signed and (UnsignedMin =< RMin) and (RMax =< UnsignedMax))
    },
    global_minimize(Size, Size).
 type_range(float, Range, Options) :-
    option(size(Size), Options),
    option(precision(Precision), Options),
-   [E, M]::integer(1, _),
+   E::integer(2, 15),
+   M::integer(1, 112),
    option(exponent(E), Options, E),
    option(mantissa(M), Options, M),
+   option(emax(EMax), Options, _),
+   option(max(Max), Options, _),
+   option(min(Min), Options, _),
+   Infinity::boolean,
+   option(infinity(Infinity), Options, Infinity),
    domain(Range, real(RMin, RMax)),
-   N::integer(2, 4),
+   N::integer(3, 7),
    {  Size is 2^N,
-      Size is E + M,
-      EMax is 2^(E - 1) - 1,
+      Size is 1 + E + M,
+      EMax is 2^(E - 1) - Infinity,
       Max is (2 - 2^(-M)) * 2^EMax,
       Min is -Max,
       ((Min =< RMin) and (RMax =< Max)),
       MaxMag is max(abs(RMin), abs(RMax)),
       MaxMag * 2^(-M) =< Precision
-   }.
+   },
+   global_minimize(Size, Size),
+   enumerate([E, M]).
