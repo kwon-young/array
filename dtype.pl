@@ -57,5 +57,7 @@ type_range(float, Range, Options) :-
       EMax is 2^(E - 1) - 1,
       Max is (2 - 2^(-M)) * 2^EMax,
       Min is -Max,
-      ((Min =< RMin) and (RMax =< Max))
+      ((Min =< RMin) and (RMax =< Max)),
+      MaxMag is max(abs(RMin), abs(RMax)),
+      MaxMag * 2^(-M) =< Precision
    }.
