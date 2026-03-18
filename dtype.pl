@@ -44,8 +44,7 @@ type_range(integer, Range, Options) :-
       Signed is (RMin < 0),
       (Signed and (Min == SignedMin) and (Max == SignedMax))
       or (~Signed and (Min == UnsignedMin) and (Max == UnsignedMax)),
-      Min =< RMin,
-      RMax =< Max
+      Min =< RMin, RMax =< Max
    },
    global_minimize(Size, Size).
 type_range(float, Range, Options) :-
