@@ -71,6 +71,14 @@ dtype_info(int64, Var, Precision, Size) :-
    Var::integer,
    Size = 64,
    type_info(Var, Precision, Size, [signed(1)]).
+dtype_info(float8_e4m3, Var, Precision, Size) :-
+   Var::real,
+   Size = 8,
+   type_info(Var, Precision, Size, [exponent(4), mantissa(3), infinity(0)]).
+dtype_info(float8_e5m2, Var, Precision, Size) :-
+   Var::real,
+   Size = 8,
+   type_info(Var, Precision, Size, [exponent(5), mantissa(2), infinity(1)]).
 dtype_info(float16, Var, Precision, Size) :-
    Var::real,
    Size = 16,
