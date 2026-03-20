@@ -38,11 +38,10 @@ is_domain(Range, Domain) :-
    ;  instantiation_error(Range::Domain)
    ).
 
-type_info(uint8, Var, Precision, Size, Options) :-
+dtype_info(uint8, Var, Precision, Size) :-
    Var::integer,
    Size = 8,
-   select_option(signed(0), Options, RestOptions, _),
-   type_info(Var, Precision, Size, [signed(0) | RestOptions]).
+   type_info(Var, Precision, Size, [signed(0)]).
 type_info(Var, Precision, Size, Options) :-
    domain(Var, Domain),
    domain_info(Domain, Precision, Size, Options).
