@@ -16,10 +16,13 @@
 %   * float are clpBNR real
 % * size is a clpBNR integer, is the number of bits that will store the number and is linked to a maximum range that range cannot exceed
 
+:- module(dtype, [type_range/6]).
+
 :- use_module(library(clpBNR)).
 
 integer_size(Size) :-
    N::integer(3, 6),
+   Size::integer,
    { Size is 2^N }.
 signed_integer_range_size(Min-Max, Size) :-
    {
@@ -29,52 +32,52 @@ signed_integer_range_size(Min-Max, Size) :-
 unsigned_integer_range_size(0-Max, Size) :-
    { Max is 2^Size - 1 }.
 
-type_range_precision(boolean, Range, _) :-
-   Range::boolean.
-type_range(integer, Range, Options) :-
-   option(size(Size), Options),
-   option(signed(Signed), Options),
-   option(min(Min), Options, _),
-   option(max(Max), Options, _),
-   integer_size(Size),
-   (  domain(Range, integer(RMin, RMax))
+is_domain(Range, Domain) :-
+   (  domain(Range, Domain)
    -> true
-   ;  instantiation_error(Range)
-   ),
+   ;  instantiation_error(Range::Domain)
+   ).
+
+type_info(uint8, Var, Precision, Size, Min, Max, Options) :-
+   Var::integer,
+   Size = 8,
+   select_option(signed(0), Options, RestOptions, _),
+   type_info(Var, Precision, Size, Min, Max, [signed(0) | RestOptions]).
+type_info(Var, Precision, Size, Min, Max, Options) :-
+   domain(Var, Domain),
+   domain_info(Domain, Precision, Size, Min, Max, Options).
+domain_info(boolean, 1, _, 0, 1, _).
+domain_info(integer(RMin, RMax), 1, Size, Min, Max, Options) :-
+   option(signed(Signed), Options, _),
+   Signed::boolean,
+   integer_size(Size),
    signed_integer_range_size(SignedMin-SignedMax, Size),
    unsigned_integer_range_size(UnsignedMin-UnsignedMax, Size),
    {
-      Signed is (RMin < 0),
+      RMin =< RMax,
       (Signed and (Min == SignedMin) and (Max == SignedMax))
       or (~Signed and (Min == UnsignedMin) and (Max == UnsignedMax)),
       Min =< RMin, RMax =< Max
-   },
-   global_minimize(Size, Size).
-type_range(float, Range, Options) :-
-   option(size(Size), Options),
-   option(precision(Precision), Options),
-   E::integer(2, 15),
-   M::integer(1, 112),
-   option(exponent(E), Options, E),
-   option(mantissa(M), Options, M),
+   }.
+domain_info(float(RMin, RMax), Precision, Size, Min, Max, Options) :-
+   option(exponent(E), Options, _),
+   option(mantissa(M), Options, _),
    option(emax(EMax), Options, _),
-   option(max(Max), Options, _),
-   option(min(Min), Options, _),
+   option(infinity(Infinity), Options, _),
    Infinity::boolean,
-   option(infinity(Infinity), Options, Infinity),
-   (  domain(Range, real(RMin, RMax))
-   -> true
-   ;  instantiation_error(Range)
-   ),
-   N::integer(3, 7),
-   {  Size is 2^N,
+   Size::integer(8, 64),
+   E::integer(4, 15),
+   M::integer(2, 112),
+   N::integer(3, 6),
+   {  
+      RMin =< RMax,
+      Size is 2^N,
       Size is 1 + E + M,
       EMax is 2^(E - 1) - Infinity,
-      Max is (2 - 2^(-M)) * 2^EMax,
+      Max is (2 - 2^(-M + 1 - Infinity)) * 2^EMax,
       Min is -Max,
-      ((Min =< RMin) and (RMax =< Max)),
-      MaxMag is max(abs(RMin), abs(RMax)),
-      MaxMag * 2^(-M) =< Precision
-   },
-   global_minimize(Size, Size),
-   enumerate([E, M]).
+      Min =< RMin, RMax =< Max,
+      MaxRange is max(abs(RMin), abs(RMax)),
+      MaxRange * 2^(-M) == PrecisionRange,
+      PrecisionRange =< Precision
+   }.
