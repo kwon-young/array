@@ -42,6 +42,35 @@ dtype_info(uint8, Var, Precision, Size) :-
    Var::integer,
    Size = 8,
    type_info(Var, Precision, Size, [signed(0)]).
+dtype_info(uint16, Var, Precision, Size) :-
+   Var::integer,
+   Size = 16,
+   type_info(Var, Precision, Size, [signed(0)]).
+dtype_info(uint32, Var, Precision, Size) :-
+   Var::integer,
+   Size = 32,
+   type_info(Var, Precision, Size, [signed(0)]).
+dtype_info(uint64, Var, Precision, Size) :-
+   Var::integer,
+   Size = 64,
+   type_info(Var, Precision, Size, [signed(0)]).
+
+dtype_info(int8, Var, Precision, Size) :-
+   Var::integer,
+   Size = 8,
+   type_info(Var, Precision, Size, [signed(1)]).
+dtype_info(int16, Var, Precision, Size) :-
+   Var::integer,
+   Size = 16,
+   type_info(Var, Precision, Size, [signed(1)]).
+dtype_info(int32, Var, Precision, Size) :-
+   Var::integer,
+   Size = 32,
+   type_info(Var, Precision, Size, [signed(1)]).
+dtype_info(int64, Var, Precision, Size) :-
+   Var::integer,
+   Size = 64,
+   type_info(Var, Precision, Size, [signed(1)]).
 type_info(Var, Precision, Size, Options) :-
    domain(Var, Domain),
    domain_info(Domain, Precision, Size, Options).
