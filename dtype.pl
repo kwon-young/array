@@ -67,6 +67,10 @@ dtype_info(int32, Var, Precision, Size) :-
    Var::integer,
    Size = 32,
    type_info(Var, Precision, Size, [signed(1)]).
+dtype_info(int64, Var, Precision, Size) :-
+   Var::integer,
+   Size = 64,
+   type_info(Var, Precision, Size, [signed(1)]).
 dtype_info(float16, Var, Precision, Size) :-
    Var::real,
    Size = 16,
@@ -83,10 +87,6 @@ dtype_info(float64, Var, Precision, Size) :-
    Var::real,
    Size = 64,
    type_info(Var, Precision, Size, [exponent(11), mantissa(52), infinity(1)]).
-dtype_info(int64, Var, Precision, Size) :-
-   Var::integer,
-   Size = 64,
-   type_info(Var, Precision, Size, [signed(1)]).
 type_info(Var, Precision, Size, Options) :-
    domain(Var, Domain),
    domain_info(Domain, Precision, Size, Options).
