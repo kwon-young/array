@@ -38,16 +38,20 @@ is_domain(Range, Domain) :-
    ;  instantiation_error(Range::Domain)
    ).
 
-type_info(uint8, Var, Precision, Size, Min, Max, Options) :-
+type_info(uint8, Var, Precision, Size, Options) :-
    Var::integer,
    Size = 8,
    select_option(signed(0), Options, RestOptions, _),
-   type_info(Var, Precision, Size, Min, Max, [signed(0) | RestOptions]).
-type_info(Var, Precision, Size, Min, Max, Options) :-
+   type_info(Var, Precision, Size, [signed(0) | RestOptions]).
+type_info(Var, Precision, Size, Options) :-
    domain(Var, Domain),
-   domain_info(Domain, Precision, Size, Min, Max, Options).
-domain_info(boolean, 1, _, 0, 1, _).
-domain_info(integer(RMin, RMax), 1, Size, Min, Max, Options) :-
+   domain_info(Domain, Precision, Size, Options).
+domain_info(boolean, 1, _, Options) :-
+   option(min(0), Options, _),
+   option(max(1), Options, _).
+domain_info(integer(RMin, RMax), 1, Size, Options) :-
+   option(min(Min), Options, _),
+   option(max(Max), Options, _),
    option(signed(Signed), Options, _),
    Signed::boolean,
    integer_size(Size),
@@ -59,7 +63,9 @@ domain_info(integer(RMin, RMax), 1, Size, Min, Max, Options) :-
       or (~Signed and (Min == UnsignedMin) and (Max == UnsignedMax)),
       Min =< RMin, RMax =< Max
    }.
-domain_info(float(RMin, RMax), Precision, Size, Min, Max, Options) :-
+domain_info(float(RMin, RMax), Precision, Size, Options) :-
+   option(min(Min), Options, _),
+   option(max(Max), Options, _),
    option(exponent(E), Options, _),
    option(mantissa(M), Options, _),
    option(emax(EMax), Options, _),
