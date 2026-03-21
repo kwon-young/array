@@ -36,29 +36,29 @@ is_domain(Range, Domain) :-
    ;  instantiation_error(Range::Domain)
    ).
 
-dtype_info(uint8, integer(Min, Max), Precision, Size) :-
+dtype_info(uint8, integer(Min, Max), Size) :-
    Size = 8,
    domain_info(integer(Min, Max), [size(Size), signed(0)]).
-dtype_info(uint16, integer(Min, Max), Precision, Size) :-
+dtype_info(uint16, integer(Min, Max), Size) :-
    Size = 16,
    domain_info(integer(Min, Max), [size(Size), signed(0)]).
-dtype_info(uint32, integer(Min, Max), Precision, Size) :-
+dtype_info(uint32, integer(Min, Max), Size) :-
    Size = 32,
    domain_info(integer(Min, Max), [size(Size), signed(0)]).
-dtype_info(uint64, integer(Min, Max), Precision, Size) :-
+dtype_info(uint64, integer(Min, Max), Size) :-
    Size = 64,
    domain_info(integer(Min, Max), [size(Size), signed(0)]).
 
-dtype_info(int8, integer(Min, Max), Precision, Size) :-
+dtype_info(int8, integer(Min, Max), Size) :-
    Size = 8,
    domain_info(integer(Min, Max), [size(Size), signed(1)]).
-dtype_info(int16, integer(Min, Max), Precision, Size) :-
+dtype_info(int16, integer(Min, Max), Size) :-
    Size = 16,
    domain_info(integer(Min, Max), [size(Size), signed(1)]).
-dtype_info(int32, integer(Min, Max), Precision, Size) :-
+dtype_info(int32, integer(Min, Max), Size) :-
    Size = 32,
    domain_info(integer(Min, Max), [size(Size), signed(1)]).
-dtype_info(int64, integer(Min, Max), Precision, Size) :-
+dtype_info(int64, integer(Min, Max), Size) :-
    Size = 64,
    domain_info(integer(Min, Max), [size(Size), signed(1)]).
 
