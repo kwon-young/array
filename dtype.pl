@@ -16,8 +16,6 @@
 %   * float are clpBNR real
 % * size is a clpBNR integer, is the number of bits that will store the number and is linked to a maximum range that range cannot exceed
 
-:- module(dtype, [type_range/6]).
-
 :- use_module(library(clpBNR)).
 
 integer_size(Size) :-
@@ -91,20 +89,23 @@ dtype_info(float32, Var, Precision, Size) :-
    Var::real,
    Size = 32,
    type_info(Var, Precision, Size, [exponent(8), mantissa(23), infinity(1)]).
-dtype_info(float64, Var, Precision, Size) :-
-   Var::real,
+dtype_info(float64, float(Min, Max), Precision, Size) :-
    Size = 64,
-   type_info(Var, Precision, Size, [exponent(11), mantissa(52), infinity(1)]).
-type_info(Var, Precision, Size, Options) :-
-   domain(Var, Domain),
-   domain_info(Domain, Precision, Size, Options).
-domain_info(boolean, 1, _, Options) :-
+   domain_info(float(Min, Max), [size(Size), precision(Precision), exponent(11), mantissa(52), infinity(1)]).
+domain_info(boolean(RMin, RMax), Options) :-
    option(min(0), Options, _),
-   option(max(1), Options, _).
-domain_info(integer(RMin, RMax), 1, Size, Options) :-
+   option(max(1), Options, _),
+   [RMin, RMax]::boolean,
+   {
+      RMin =< RMax,
+      0 =< RMin, RMax =< 1
+   }.
+domain_info(integer(RMin, RMax), Options) :-
+   option(size(Size), Options, _),
    option(min(Min), Options, _),
    option(max(Max), Options, _),
    option(signed(Signed), Options, _),
+   [RMin, RMax]::integer,
    Signed::boolean,
    integer_size(Size),
    signed_integer_range_size(SignedMin-SignedMax, Size),
@@ -115,13 +116,17 @@ domain_info(integer(RMin, RMax), 1, Size, Options) :-
       or (~Signed and (Min == UnsignedMin) and (Max == UnsignedMax)),
       Min =< RMin, RMax =< Max
    }.
-domain_info(float(RMin, RMax), Precision, Size, Options) :-
+domain_info(float(RMin, RMax), Options) :-
+   option(precision(Precision), Options, _),
+   option(size(Size), Options, _),
    option(min(Min), Options, _),
    option(max(Max), Options, _),
    option(exponent(E), Options, _),
    option(mantissa(M), Options, _),
    option(emax(EMax), Options, _),
    option(infinity(Infinity), Options, _),
+   [RMin, RMax]::real,
+   Precision::real(0, _),
    Infinity::boolean,
    Size::integer(8, 64),
    E::integer(4, 15),
