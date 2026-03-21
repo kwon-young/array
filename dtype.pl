@@ -36,51 +36,69 @@ is_domain(Range, Domain) :-
    ;  instantiation_error(Range::Domain)
    ).
 
-dtype_info(uint8, integer(Min, Max), Size) :-
+dtype_info(uint8, integer(Min, Max), Options) :-
    Size = 8,
+   option(size(Size), Options, _),
    domain_info(integer(Min, Max), [size(Size), signed(0)]).
-dtype_info(uint16, integer(Min, Max), Size) :-
+dtype_info(uint16, integer(Min, Max), Options) :-
    Size = 16,
+   option(size(Size), Options, _),
    domain_info(integer(Min, Max), [size(Size), signed(0)]).
-dtype_info(uint32, integer(Min, Max), Size) :-
+dtype_info(uint32, integer(Min, Max), Options) :-
    Size = 32,
+   option(size(Size), Options, _),
    domain_info(integer(Min, Max), [size(Size), signed(0)]).
-dtype_info(uint64, integer(Min, Max), Size) :-
+dtype_info(uint64, integer(Min, Max), Options) :-
    Size = 64,
+   option(size(Size), Options, _),
    domain_info(integer(Min, Max), [size(Size), signed(0)]).
 
-dtype_info(int8, integer(Min, Max), Size) :-
+dtype_info(int8, integer(Min, Max), Options) :-
    Size = 8,
+   option(size(Size), Options, _),
    domain_info(integer(Min, Max), [size(Size), signed(1)]).
-dtype_info(int16, integer(Min, Max), Size) :-
+dtype_info(int16, integer(Min, Max), Options) :-
    Size = 16,
+   option(size(Size), Options, _),
    domain_info(integer(Min, Max), [size(Size), signed(1)]).
-dtype_info(int32, integer(Min, Max), Size) :-
+dtype_info(int32, integer(Min, Max), Options) :-
    Size = 32,
+   option(size(Size), Options, _),
    domain_info(integer(Min, Max), [size(Size), signed(1)]).
-dtype_info(int64, integer(Min, Max), Size) :-
+dtype_info(int64, integer(Min, Max), Options) :-
    Size = 64,
+   option(size(Size), Options, _),
    domain_info(integer(Min, Max), [size(Size), signed(1)]).
 
-dtype_info(float8_e4m3, float(Min, Max), Precision, Size) :-
+dtype_info(float8_e4m3, float(Min, Max), Options) :-
    Size = 8,
+   option(size(Size), Options, _),
+   option(precision(Precision), Options, _),
    domain_info(float(Min, Max), [size(Size), precision(Precision), exponent(4), mantissa(3), infinity(0)]).
-dtype_info(float8_e5m2, float(Min, Max), Precision, Size) :-
+dtype_info(float8_e5m2, float(Min, Max), Options) :-
    Size = 8,
+   option(size(Size), Options, _),
+   option(precision(Precision), Options, _),
    domain_info(float(Min, Max), [size(Size), precision(Precision), exponent(5), mantissa(2), infinity(1)]).
-dtype_info(float16, float(Min, Max), Precision, Size) :-
+dtype_info(float16, float(Min, Max), Options) :-
    Size = 16,
+   option(size(Size), Options, _),
+   option(precision(Precision), Options, _),
    domain_info(float(Min, Max), [size(Size), precision(Precision), exponent(5), mantissa(10), infinity(1)]).
-dtype_info(bfloat16, float(Min, Max), Precision, Size) :-
+dtype_info(bfloat16, float(Min, Max), Options) :-
    Size = 16,
+   option(size(Size), Options, _),
+   option(precision(Precision), Options, _),
    domain_info(float(Min, Max), [size(Size), precision(Precision), exponent(8), mantissa(7), infinity(1)]).
-dtype_info(float32, float(Min, Max), Precision, Size) :-
+dtype_info(float32, float(Min, Max), Options) :-
    Size = 32,
+   option(size(Size), Options, _),
+   option(precision(Precision), Options, _),
    domain_info(float(Min, Max), [size(Size), precision(Precision), exponent(8), mantissa(23), infinity(1)]).
 dtype_info(float64, float(Min, Max), Options) :-
    Size = 64,
    option(size(Size), Options, _),
-   option(size(Precision), Options, _),
+   option(precision(Precision), Options, _),
    domain_info(float(Min, Max), [size(Size), precision(Precision), exponent(11),
                                  mantissa(52), infinity(1)]).
 domain_info(boolean(RMin, RMax), Options) :-
