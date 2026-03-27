@@ -92,11 +92,12 @@ dtype_info(bfloat16, float(Min, Max), Options) :-
    option(size(Size), Options, _),
    option(precision(Precision), Options, _),
    domain_info(float(Min, Max), [size(Size), precision(Precision), exponent(8), mantissa(7), infinity(1)]).
-dtype_info(float32, float(Min, Max), Options) :-
-   Size = 32,
-   option(size(Size), Options, _),
+dtype_info(float32, Range, Options) :-
    option(precision(Precision), Options, _),
-   domain_info(float(Min, Max), [size(Size), precision(Precision), exponent(8), mantissa(23), infinity(1)]).
+   option(min(Min), Options, _),
+   option(max(Max), Options, _),
+   type_info(float, Range, [size(32), precision(Precision), min(Min), max(Max), exponent(8),
+                            mantissa(23), infinity(1)]).
 dtype_info(float64, Range, Options) :-
    option(precision(Precision), Options, _),
    option(min(Min), Options, _),
