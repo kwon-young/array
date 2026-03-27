@@ -9,7 +9,16 @@
 :- use_module(library(pairs)).
 :- use_module(library(dcg/high_order)).
 :- use_module(view).
+:- use_module(dtype).
+
+:- multifile compile/4.
+:- multifile allocate/2.
+:- multifile dtype/3.
+:- multifile broadcast_dtype/3.
+:- multifile to/4.
+
 :- use_module(runtime_prolog).
+:- use_module(runtime_c).
 
 % Creation
 % ========
@@ -19,6 +28,8 @@ M.default(Options) := Dict :-
    dict_options(M, MOptions),
    merge_options(Options, MOptions, Merged),
    option(dtype(DType), Merged, float),
+   option(range(Range), Merged, _),
+   option(precision(Precision), Merged, _),
    option(device(Device), Merged, prolog),
    (  option(shape(Shape), Merged)
    -> View = view{}.from_shape(Shape),
@@ -27,7 +38,7 @@ M.default(Options) := Dict :-
    ;  Views = []
    ),
    Dict = array{id: _, views: Views, dtype:DType, device:Device, data: _,
-                datasize: DataSize, op: true}.
+                datasize: DataSize, op: true, range: Range, precision: Precision}.
 
 M.empty(Shape) := Dict :-
    Dict = M.empty(Shape, []).
@@ -39,19 +50,22 @@ M.fromlist(List) := Dict :-
 M.fromlist(List, Options) := Dict :-
    list_shape(List, Shape),
    flatten(List, Flat),
-   M1 = M.empty(Shape, Options),
-   Device = M1.device,
-   foldl({Device}/[X, In, Out]>>(
-      dtype(Device, X, DType),
-      common_dtype(Device, DType, In, Out)
+   select_option(device(Device), Options, RestOptions, prolog),
+   M1 = M.empty(Shape, [device(prolog) | RestOptions]),
+   foldl([X, In, Out]>>(
+      dtype(prolog, X, DType),
+      common_dtype(prolog, DType, In, Out)
    ), Flat, boolean, DType),
-   common_dtype_(Device, DType, M1.dtype, M1.dtype),
+   common_dtype_(prolog, DType, M1.dtype, M1.dtype),
    (  option(dtype(FinalDType), Options)
    -> M2 = M1.put(dtype, FinalDType)
    ;  M2 = M1.put(dtype, DType)
    ),
+   min_list(Flat, Min),
+   max_list(Flat, Max),
+   type_min_max_range(M2.dtype, Min, Max, M2.range),
    compound_name_arguments(M2.data, data, Flat),
-   Dict = M2.
+   Dict = M2.to(Device).
 list_shape(L, Shape) :-
    list_shape_(Shape, L).
 list_shape_(Shape, L), is_list(L) =>
@@ -228,13 +242,10 @@ M.diag() := Dict :-
 
 % Conversion
 % ==========
-:- multifile extract_data/3.
-
 M.tolist() := List :-
    shape_list(M.shape(), List),
    flatten(List, Flat),
-   Realized = M.contiguous().to(prolog).realize(),
-   extract_data(Realized.device, Realized, Flat).
+   compound_name_arguments(M.contiguous().to(prolog).realize().data, data, Flat).
 shape_list([], _).
 shape_list([Dim | Shape], L) :-
    length(L, Dim),
@@ -379,7 +390,7 @@ M.contiguous() := Dict :-
 M.to(Device) := Dict :-
    (  M.device = Device
    -> Dict = M
-   ;  resource_error(to(M.device, Device))
+   ;  Dict = M.to(M.device, Device)
    ).
 
 '@='(Left, Right) :-
@@ -448,7 +459,7 @@ eval_(solve(A, B), X) =>
 eval_(A, R), is_dict(A, array) =>
    A = R.
 eval_(A, R), number(A) =>
-   R = array{}.full([], A).
+   R = array{}.full([], A, [device(_)]).
 
 % Properties
 % ==========
@@ -484,19 +495,9 @@ M.realize() := M :-
 % Compilation
 % ============
 M.compile() := Dict :-
-   Dict = M.compile(M.device, M.op),
-   (  debugging(compile)
-   -> debug(compile, "~p", Dict.kernel)
-   ;  true
+   once(
+      Dict = M.compile(M.device, M.op)
    ).
-   % (  debugging(compile), Dict.kernel \== true
-   % -> with_output_to(string(S), listing(Dict.kernel)),
-   %    debug(compile, "~s", S)
-   % ;  true
-   % ).
-
-:- multifile compile/4.
-:- det(compile/4).
 
 create_schedule(Arrays, Schedule) :-
    maplist(array_graph, Arrays, Graphs),
@@ -528,8 +529,6 @@ array_graph(Parent, Op) ==>
 allocate_schedule(Schedule) :-
    maplist(allocate, Schedule).
 
-:- multifile allocate/2.
-
 allocate(M) :-
    (  var(M.data)
    -> allocate(M.device, M)
@@ -539,10 +538,8 @@ allocate(M) :-
 run_schedule(Schedule) :-
    maplist(run_scheduleitem, Schedule).
 
-:- multifile run_scheduleitem/2.
-
 run_scheduleitem(M) :-
-   run_scheduleitem(M.device, M).
+   call(M.kernel).
 
 % Helpers
 % =======
@@ -591,9 +588,6 @@ skip_view(Op, R) =>
 
 % DTypes
 % ======
-:- multifile dtype/3.
-:- multifile broadcast_dtype/3.
-
 :- table common_dtype/4.
 
 common_dtype(Device, A, B, C) :-

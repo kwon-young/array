@@ -121,14 +121,18 @@ exp(A * B) -->
    exp(A), [*], exp(B).
 exp(A / B) -->
    exp(A), [/], exp(B).
+exp(A mod B) -->
+   exp(A), ['%'], exp(B).
+exp(A // B) -->
+   exp(A), [/], exp(B).
 exp(A && B) -->
    exp(A), [&&], exp(B).
 exp(Exp[Size]) -->
-   exp(Exp), ['[', integer(Size), ']'].
+   exp(Exp), ['['], exp(Size), [']'].
 exp(*Exp) -->
    [*, '('], exp(Exp), [')'].
 exp(&Exp) -->
-   [&], exp(Exp).
+   [&, '('], exp(Exp), [')'].
 exp(Exp++) -->
    exp(Exp), [++].
 exp(dot(A, B)) -->

@@ -1,4 +1,4 @@
-:- module(runtime_prolog, []).
+:- module(runtime_prolog, [op_args//1, op_expr/3]).
 
 :- use_module(library(dcg/high_order)).
 :- use_module(array, []).

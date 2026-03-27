@@ -1,21 +1,21 @@
-:- module(gen_type, [main/0, type/3, pl_c_type/2]).
+:- module(gen_type, [main/0, type/4, pl_c_type/2]).
 
 :- use_module(library(dcg/basics)).
 :- use_module(library(dcg/high_order)).
 :- use_module(c99).
 
-type(bool, '_Bool', bool).
-type(int8, int8_t, int64).
-type(int16, int16_t, int64).
-type(int32, int32_t, int64).
-type(int64, int64_t, int64).
-type(uint8, uint8_t, uint64).
-type(uint16, uint16_t, uint64).
-type(uint32, uint32_t, uint64).
-type(uint64, uint64_t, uint64).
-type(float16, '_Float16', float).
-type(float32, '_Float32', float).
-type(float64, '_Float64', float).
+type(bool, '_Bool', bool, boolean).
+type(int8, int8_t, int64, integer).
+type(int16, int16_t, int64, integer).
+type(int32, int32_t, int64, integer).
+type(int64, int64_t, int64, integer).
+type(uint8, uint8_t, uint64, integer).
+type(uint16, uint16_t, uint64, integer).
+type(uint32, uint32_t, uint64, integer).
+type(uint64, uint64_t, uint64, integer).
+type(float16, '_Float16', float, float).
+type(float32, '_Float32', float, float).
+type(float64, '_Float64', float, float).
 
 pl_c_type(int64, int64_t).
 pl_c_type(uint64, uint64_t).

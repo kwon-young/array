@@ -28,10 +28,10 @@ compile_object(In, OutFile) :-
    close(StreamIn),
    tmp_file_stream(OutFile, StreamOut, [extension(o)]),
    close(StreamOut),
-   process_create(path('swipl-ld'), ['-fpic', '-cc-options,-march=native', '-O3', '-c', '-o', OutFile, InFile], [stdout(std), stderr(std)]).
+   process_create(path('swipl-ld'), ['-g', '-fpic', '-c', '-o', OutFile, InFile], [stdout(std), stderr(std)]).
 
 link_objects(Objects, OutFile) :-
    tmp_file_stream(OutFile, StreamOut, [extension(so)]),
    close(StreamOut),
-   append(['-fpic', '-march=native', '-O3', '-shared', '-o', OutFile], Objects, Options),
+   append(['-g', '-fpic', '-shared', '-o', OutFile], Objects, Options),
    process_create(path('swipl-ld'), Options, [stdout(std), stderr(std)]).
