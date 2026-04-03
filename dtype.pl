@@ -38,58 +38,48 @@ is_domain(Range, Domain) :-
    ;  instantiation_error(Range::Domain)
    ).
 
-dtype_info(uint8, Range, _Options) :-
-   type_info(integer, Range, [size(8), signed(0)]).
-dtype_info(uint16, Range, _Options) :-
-   type_info(integer, Range, [size(16), signed(0)]).
-dtype_info(uint32, Range, _Options) :-
-   type_info(integer, Range, [size(32), signed(0)]).
-dtype_info(uint64, Range, _Options) :-
-   type_info(integer, Range, [size(64), signed(0)]).
+dtype_info(uint8, integer(Min, Max), _Options) :-
+   type_info(integer(Min, Max), [size(8), signed(0)]).
+dtype_info(uint16, integer(Min, Max), _Options) :-
+   type_info(integer(Min, Max), [size(16), signed(0)]).
+dtype_info(uint32, integer(Min, Max), _Options) :-
+   type_info(integer(Min, Max), [size(32), signed(0)]).
+dtype_info(uint64, integer(Min, Max), _Options) :-
+   type_info(integer(Min, Max), [size(64), signed(0)]).
 
-dtype_info(int8, Range, _Options) :-
-   type_info(integer, Range, [size(8), signed(1)]).
-dtype_info(int16, Range, _Options) :-
-   type_info(integer, Range, [size(16), signed(1)]).
-dtype_info(int32, Range, _Options) :-
-   type_info(integer, Range, [size(32), signed(1)]).
-dtype_info(int64, Range, _Options) :-
-   type_info(integer, Range, [size(64), signed(1)]).
+dtype_info(int8, integer(Min, Max), _Options) :-
+   type_info(integer(Min, Max), [size(8), signed(1)]).
+dtype_info(int16, integer(Min, Max), _Options) :-
+   type_info(integer(Min, Max), [size(16), signed(1)]).
+dtype_info(int32, integer(Min, Max), _Options) :-
+   type_info(integer(Min, Max), [size(32), signed(1)]).
+dtype_info(int64, integer(Min, Max), _Options) :-
+   type_info(integer(Min, Max), [size(64), signed(1)]).
 
-dtype_info(float8_e4m3, Range, Options) :-
+dtype_info(float8_e4m3, real(Min, Max), Options) :-
    option(precision(Precision), Options, _),
-   option(min(Min), Options, _),
-   option(max(Max), Options, _),
-   type_info(float, Range, [size(8), precision(Precision), min(Min), max(Max), exponent(4),
-                            mantissa(3), infinity(0)]).
-dtype_info(float8_e5m2, Range, Options) :-
+   type_info(real(Min, Max), [size(8), precision(Precision), exponent(4),
+                              mantissa(3), infinity(0)]).
+dtype_info(float8_e5m2, real(Min, Max), Options) :-
    option(precision(Precision), Options, _),
-   option(min(Min), Options, _),
-   option(max(Max), Options, _),
-   type_info(float, Range, [size(8), precision(Precision), min(Min), max(Max), exponent(5),
-                            mantissa(2), infinity(1)]).
-dtype_info(bfloat16, Range, Options) :-
+   type_info(real(Min, Max), [size(8), precision(Precision), exponent(5),
+                              mantissa(2), infinity(1)]).
+dtype_info(bfloat16, real(Min, Max), Options) :-
    option(precision(Precision), Options, _),
-   option(min(Min), Options, _),
-   option(max(Max), Options, _),
-   type_info(float, Range, [size(16), precision(Precision), min(Min), max(Max), exponent(8),
-                            mantissa(7), infinity(1)]).
-dtype_info(float16, Range, Options) :-
+   type_info(real(Min, Max), [size(16), precision(Precision), exponent(8),
+                              mantissa(7), infinity(1)]).
+dtype_info(float16, real(Min, Max), Options) :-
    option(precision(Precision), Options, _),
-   option(min(Min), Options, _),
-   option(max(Max), Options, _),
-   type_info(float, Range, [size(16), precision(Precision), min(Min), max(Max), exponent(5),
-                            mantissa(10), infinity(1)]).
-dtype_info(float32, Range, Options) :-
+   type_info(real(Min, Max), [size(16), precision(Precision), exponent(5),
+                              mantissa(10), infinity(1)]).
+dtype_info(float32, real(Min, Max), Options) :-
    option(precision(Precision), Options, _),
-   option(min(Min), Options, _),
-   option(max(Max), Options, _),
-   type_info(float, Range, [size(32), precision(Precision), min(Min), max(Max), exponent(8),
-                            mantissa(23), infinity(1)]).
+   type_info(real(Min, Max), [size(32), precision(Precision), exponent(8),
+                              mantissa(23), infinity(1)]).
 dtype_info(float64, real(Min, Max), Options) :-
    option(precision(Precision), Options, _),
-   type_info(float, real(Min, Max), [size(64), precision(Precision), exponent(11),
-                                     mantissa(52), infinity(1)]).
+   type_info(real(Min, Max), [size(64), precision(Precision), exponent(11),
+                              mantissa(52), infinity(1)]).
 type_info(boolean, _).
 type_info(integer(RMin, RMax), Options) :-
    option(size(Size), Options, _),
