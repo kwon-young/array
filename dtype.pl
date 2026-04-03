@@ -60,12 +60,14 @@ dtype_info(float8_e4m3, Range, Options) :-
    option(precision(Precision), Options, _),
    option(min(Min), Options, _),
    option(max(Max), Options, _),
-   type_info(float, Range, [size(8), precision(Precision), min(Min), max(Max), exponent(4), mantissa(3), infinity(0)]).
+   type_info(float, Range, [size(8), precision(Precision), min(Min), max(Max), exponent(4),
+                            mantissa(3), infinity(0)]).
 dtype_info(float8_e5m2, Range, Options) :-
    option(precision(Precision), Options, _),
    option(min(Min), Options, _),
    option(max(Max), Options, _),
-   type_info(float, Range, [size(8), precision(Precision), min(Min), max(Max), exponent(5), mantissa(2), infinity(1)]).
+   type_info(float, Range, [size(8), precision(Precision), min(Min), max(Max), exponent(5),
+                            mantissa(2), infinity(1)]).
 dtype_info(bfloat16, Range, Options) :-
    option(precision(Precision), Options, _),
    option(min(Min), Options, _),
@@ -84,50 +86,43 @@ dtype_info(float32, Range, Options) :-
    option(max(Max), Options, _),
    type_info(float, Range, [size(32), precision(Precision), min(Min), max(Max), exponent(8),
                             mantissa(23), infinity(1)]).
-dtype_info(float64, Range, Options) :-
+dtype_info(float64, real(Min, Max), Options) :-
    option(precision(Precision), Options, _),
-   option(min(Min), Options, _),
-   option(max(Max), Options, _),
-   type_info(float, Range, [size(64), precision(Precision), min(Min), max(Max), exponent(11),
-                            mantissa(52), infinity(1)]).
-type_info(boolean, Range, _) :-
-   Range::boolean.
-type_info(integer, Range, Options) :-
+   type_info(float, real(Min, Max), [size(64), precision(Precision), exponent(11),
+                                     mantissa(52), infinity(1)]).
+type_info(boolean, _).
+type_info(integer(RMin, RMax), Options) :-
    option(size(Size), Options, _),
    option(signed(Signed), Options, _),
    Signed::boolean,
    integer_size(Size),
    signed_integer_range_size(SignedMin-SignedMax, Size),
    unsigned_integer_range_size(UnsignedMin-UnsignedMax, Size),
-   Range::integer(-9223372036854775808, 18446744073709551615),
    {
       (Signed and (Min == SignedMin) and (Max == SignedMax))
       or (~Signed and (Min == UnsignedMin) and (Max == UnsignedMax)),
-      Min =< Range, Range =< Max
+      Min =< RMin, RMax =< Max
    }.
-type_info(float, Range, Options) :-
+type_info(real(RMin, RMax), Options) :-
    option(precision(Precision), Options, _),
    option(size(Size), Options, _),
    option(exponent(E), Options, _),
    option(mantissa(M), Options, _),
    option(emax(EMax), Options, _),
    option(infinity(Infinity), Options, _),
-   option(min(RMin), Options, _),
-   option(max(RMax), Options, _),
    Precision::real(0, inf),
    Infinity::boolean,
    Size::integer(8, 64),
    E::integer(4, 15),
    M::integer(2, 112),
    N::integer(3, 6),
-   Range::real(-inf, inf),
    {  
       Size is 2^N,
       Size is 1 + E + M,
       EMax is 2^(E - 1) - Infinity,
       Max is (2 - 2^(-M + 1 - Infinity)) * 2^EMax,
       Min is -Max,
-      Min =< Range, Range =< Max,
+      Min =< RMin, RMax =< Max,
       MaxRange is max(abs(RMin), abs(RMax)),
       MaxRange * 2^(-M) =< Precision, Precision =< Max * 2^(-M)
    }.
