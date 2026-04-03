@@ -82,18 +82,18 @@ dtype_info(float8_e5m2, float(Min, Max), Options) :-
    option(size(Size), Options, _),
    option(precision(Precision), Options, _),
    domain_info(float(Min, Max), [size(Size), precision(Precision), exponent(5), mantissa(2), infinity(1)]).
-dtype_info(float16, Range, Options) :-
-   option(precision(Precision), Options, _),
-   option(min(Min), Options, _),
-   option(max(Max), Options, _),
-   type_info(float, Range, [size(16), precision(Precision), min(Min), max(Max), exponent(5),
-                            mantissa(10), infinity(1)]).
 dtype_info(bfloat16, Range, Options) :-
    option(precision(Precision), Options, _),
    option(min(Min), Options, _),
    option(max(Max), Options, _),
    type_info(float, Range, [size(16), precision(Precision), min(Min), max(Max), exponent(8),
                             mantissa(7), infinity(1)]).
+dtype_info(float16, Range, Options) :-
+   option(precision(Precision), Options, _),
+   option(min(Min), Options, _),
+   option(max(Max), Options, _),
+   type_info(float, Range, [size(16), precision(Precision), min(Min), max(Max), exponent(5),
+                            mantissa(10), infinity(1)]).
 dtype_info(float32, Range, Options) :-
    option(precision(Precision), Options, _),
    option(min(Min), Options, _),
