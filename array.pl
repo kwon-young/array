@@ -128,7 +128,11 @@ M.arange(Start, Stop, Options) := Dict :-
 M.arange(Start, Stop, Step, Options) := Dict :-
    N is ceil((Stop - Start) / Step),
    M1 = M.full([N], Step, Options),
-   Dict @= M1.cumalu(0, +) + (Start - Step).
+   Dict @= M1.cumalu(0, +) + (Start - Step),
+   End is Start + (N - 1) * Step,
+   Min is min(Start, End),
+   Max is max(Start, End),
+   {Min =< Dict.range, Dict.range =< Max}.
 
 M.eye(N) := Dict :-
    Dict = M.eye(N, []).
