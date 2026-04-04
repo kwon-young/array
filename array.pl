@@ -8,18 +8,39 @@
 :- use_module(library(clpfd), except([transpose/2, sum/3])).
 :- use_module(library(pairs)).
 :- use_module(library(dcg/high_order)).
+:- use_module(library(clpBNR), except([domain/2])).
 :- use_module(view).
 :- use_module(dtype).
 
 :- multifile compile/4.
 :- multifile allocate/2.
-:- multifile dtype/3.
-:- multifile broadcast_dtype/3.
+% :- multifile dtype/3.
+% :- multifile broadcast_dtype/3.
 :- multifile to/4.
 
 :- use_module(runtime_prolog).
 :- use_module(runtime_c).
 
+sync_clpfd_clpBNR(Var) :-
+   fd_inf(Var, FDMin),
+   (  FDMin == inf
+   -> Min = -inf
+   ;  Min = FDMin
+   ),
+   fd_sup(Var, FDMax),
+   (  FDMax == sup
+   -> Max = inf
+   ;  Max = FDMax
+   ),
+   Var::integer(Min, Max).
+
+domain(0, R) => R = boolean(0, 0).
+domain(1, R) => R = boolean(1, 1).
+domain(Integer, R), integer(Integer) => R = integer(Integer, Integer).
+domain(Float, R), float(Float) => R = real(Float, Float).
+domain(Boolean, R), clpBNR:domain(Boolean, boolean) => R = boolean(0, 1).
+domain(Integer, R), clpBNR:domain(Integer, Domain) => R = Domain.
+   
 % Creation
 % ========
 M.default() := Dict :-
@@ -27,18 +48,27 @@ M.default() := Dict :-
 M.default(Options) := Dict :-
    dict_options(M, MOptions),
    merge_options(Options, MOptions, Merged),
-   option(dtype(DType), Merged, float),
+   Range::real(-inf, inf),
    option(range(Range), Merged, _),
-   option(precision(Precision), Merged, _),
+   (  domain(Range, real(_, _))
+   -> option(precision(Precision), Merged, 1e-5),
+      Float = true
+   ;  Float = false
+   ),
    option(device(Device), Merged, prolog),
+   option(data(Data), Options, _),
    (  option(shape(Shape), Merged)
    -> View = view{}.from_shape(Shape),
       DataSize = View.size(),
       Views = [View]
    ;  Views = []
    ),
-   Dict = array{id: _, views: Views, dtype:DType, device:Device, data: _,
-                datasize: DataSize, op: true, range: Range, precision: Precision}.
+   M1 = array{id: _, views: Views, device:Device, data: Data,
+                datasize: DataSize, op: true, range: Range},
+   (  Float == true
+   -> Dict = M1.put([precision=Precision])
+   ;  Dict = M1
+   ).
 
 M.empty(Shape) := Dict :-
    Dict = M.empty(Shape, []).
@@ -51,21 +81,21 @@ M.fromlist(List, Options) := Dict :-
    list_shape(List, Shape),
    flatten(List, Flat),
    select_option(device(Device), Options, RestOptions, prolog),
-   M1 = M.empty(Shape, [device(prolog) | RestOptions]),
-   foldl([X, In, Out]>>(
-      dtype(prolog, X, DType),
-      common_dtype(prolog, DType, In, Out)
-   ), Flat, boolean, DType),
-   common_dtype_(prolog, DType, M1.dtype, M1.dtype),
-   (  option(dtype(FinalDType), Options)
-   -> M2 = M1.put(dtype, FinalDType)
-   ;  M2 = M1.put(dtype, DType)
+   (  option(range(_), Options)
+   -> type_error(range, Options)
+   ;  true
    ),
+   foldl([X, In, Out]>>(
+      get_dtype(X, DType_),
+      broadcast_dtype(DType_, In, Out)
+   ), Flat, boolean, DType),
    min_list(Flat, Min),
    max_list(Flat, Max),
-   type_min_max_range(M2.dtype, Min, Max, M2.range),
-   compound_name_arguments(M2.data, data, Flat),
-   Dict = M2.to(Device).
+   Domain =.. [DType, Min, Max],
+   Range::Domain,
+   compound_name_arguments(Data, data, Flat),
+   M1 = M.empty(Shape, [device(prolog), range(Range), data(Data) | RestOptions]),
+   Dict = M1.to(Device).
 list_shape(L, Shape) :-
    list_shape_(Shape, L).
 list_shape_(Shape, L), is_list(L) =>
@@ -169,7 +199,12 @@ M.pad(Padding, Options) := Dict :-
    -> Mask_ = M.ones(M.shape()),
       Mask @= 1 - Mask_.replace_view(Mask_.view().pad(Padding)),
       Dict @= M1 + Mask*Value
-   ;  Dict = M1
+   ;  range_dtype(M1.range, DType),
+      Domain =.. [DType, -inf, inf],
+      Range::Domain,
+      B::boolean,
+      { Range is M.range * B + 0 * (1 - B) },
+      Dict = M1.put([range(Range)])
    ).
 
 M.repeat(Repeat) := Dict :-
@@ -260,18 +295,37 @@ push(view(Views), M, Dict) :-
    ;  Dict = M1.push_op(view(M))
    ).
 push(constant(Value, Options), M, Dict) :-
-   merge_options(Options, [dtype(_)], Merged),
-   M1 = M.empty([], Merged),
-   dtype(M1.device, Value, M1.dtype),
+   M1 = M.empty([], [range(Value) | Options]),
    Dict = M1.push_op(constant(Value)).
 push(rand(Shape, Options), M, Dict) :-
-   Dict = M.empty(Shape, Options).push_op(rand).
+   Range::real(0, 1),
+   Dict = M.empty(Shape, [range(Range) | Options]).push_op(rand).
 push(contiguous, M, Dict) :-
    Dict = M.empty(M.shape()).push_op(contiguous(M)).
 push(reduce(Op, Axes), M, Dict) :-
    foldl(replace_nth0(1), Axes, M.shape(), Shape),
    sort(Axes, Axes_),
-   Dict = M.empty(Shape).push_op(reduce(Op, Axes_, M)).
+   (  Op == (<)
+   -> Range::boolean,
+      Options = [range(Range)]
+   ;  view:shape_size(M.shape(), Size1),
+      view:shape_size(Shape, Size2),
+      N #= Size1 // Size2,
+      sync_clpfd_clpBNR(N),
+      range_dtype(M.range, DType),
+      broadcast_dtype(DType, integer, FinalDType),
+      Domain =.. [FinalDType, -inf, inf],
+      Range::Domain,
+      (  Op == (+)
+      -> { Range == M.range * N }
+      ),
+      (  domain(Range, real(_, _))
+      -> get_dict(precision, M, Precision),
+         Options = [range(Range), precision(Precision)]
+      ;  Options = [range(Range)]
+      )
+   ),
+   Dict = M.empty(Shape, Options).push_op(reduce(Op, Axes_, M)).
 push(A+B, C) :-
    push(elementwise(+, [A, B]), C).
 push(A*B, C) :-
@@ -285,25 +339,47 @@ push(log(A), C) :-
 push(sqrt(A), C) :-
    push(elementwise(sqrt, [A]), C).
 push(elementwise(Op, Args), C) :-
-   (  dicts_same_value_for_key(Args, device, Device)
+   (  dicts_same_value_for_key(Args, device, _Device)
    -> true
-   ;  domain_error(device, Args)
+   ;  type_error(device, Args)
    ),
    (  Op == (<)
-   -> DType = boolean
-   ;  maplist(get_dict(dtype), Args, DTypes),
-      broadcast_dtypes(Device, DTypes, DType)
+   -> Range::boolean,
+      Options = [range(Range)]
+   ;  maplist(get_dict(range), Args, Ranges),
+      Expr =.. [Op | Ranges],
+      maplist(get_dict(range), Args, Ranges),
+      maplist(range_dtype, Ranges, [DType | DTypes]),
+      foldl(broadcast_dtype, DTypes, DType, FinalDType),
+      Domain =.. [FinalDType, -inf, inf],
+      Range::Domain,
+      {Range is Expr},
+      (  domain(Range, real(_, _))
+      -> convlist(get_dict(precision), Args, Precisions),
+         $(min_list(Precisions, Precision)),
+         Options = [range(Range), precision(Precision)]
+      ;  Options = [range(Range)]
+      )
    ),
    broadcast(Args, [H | T]),
    Term =.. [Op, H | T],
-   C = H.empty(H.shape(), [dtype(DType)]).push_op(Term).
+   C = H.empty(H.shape(), Options).push_op(Term).
 push(solve(A, B), X) :-
-   (  dicts_same_value_for_key([A, B], device, Device)
+   (  dicts_same_value_for_key([A, B], device, _)
    -> true
    ;  domain_error(device, [A, B])
    ),
-   broadcast_dtypes(Device, [A.dtype, B.dtype], DType),
-   X = A.empty(B.shape(), [dtype(DType)]).push_op(solve(A, B)).
+   (  [N, N] = A.shape()
+   -> { N * A.range * Range == B.range },
+      (  domain(Range, real(_, _))
+      -> convlist(get_dict(precision), [A, B], Precisions),
+         $(min_list(Precisions, Precision)),
+         Options = [range(Range), precision(Precision)]
+      ;  domain_error(float, A-B)
+      )
+   ;  domain_error(square, A.shape())
+   ),
+   X = A.empty(B.shape(), Options).push_op(solve(A, B)).
 dicts_same_value_for_key(List, Key, Value) :-
    maplist({Value, Key}/[Dict]>>get_dict(Key, Dict, Value), List).
 
@@ -402,17 +478,13 @@ eval_(A<B, C) =>
 eval_(A>B, C) =>
    eval_(B<A, C).
 eval_(A=<B, C) =>
-   eval_(-(A>B) + 1, C1),
-   C = C1.put([dtype=boolean]).
+   eval_(-(A>B) + 1, C).
 eval_(A>=B, C) =>
-   eval_(-(A<B) + 1, C1),
-   C = C1.put([dtype=boolean]).
+   eval_(-(A<B) + 1, C).
 eval_(A=\=B, C) =>
-   eval_((A<B)+(A>B), C1),
-   C = C1.put([dtype=boolean]).
+   eval_((A<B)+(A>B), C).
 eval_(A=:=B, C) =>
-   eval_(-(A=\=B)+1, C1),
-   C = C1.put([dtype=boolean]).
+   eval_(-(A=\=B)+1, C).
 eval_(A+B, C) =>
    eval_(A, A1),
    eval_(B, B1),
@@ -535,6 +607,8 @@ allocate(M) :-
    ;  true
    ).
 
+% :- det(run_schedule/1).
+
 run_schedule(Schedule) :-
    maplist(run_scheduleitem, Schedule).
 
@@ -603,6 +677,39 @@ common_dtype_(Device, A, B, C) :-
 
 broadcast_dtypes(Device, [H | DTypes], DType) :-
    foldl(common_dtype(Device), DTypes, H, DType).
+
+get_dtype(X, R) :-
+   (  X == 0
+   -> R = boolean
+   ;  X == 1
+   -> R = boolean
+   ;  integer(X)
+   -> R = integer
+   ;  float(X)
+   -> R = real
+   ;  domain_error([boolean, integer, float], X)
+   ).
+broadcast_dtype(boolean, boolean, boolean).
+broadcast_dtype(integer, boolean, integer).
+broadcast_dtype(boolean, integer, integer).
+broadcast_dtype(integer, integer, integer).
+broadcast_dtype(real, boolean, real).
+broadcast_dtype(boolean, real, real).
+broadcast_dtype(real, integer, real).
+broadcast_dtype(integer, real, real).
+broadcast_dtype(real, real, real).
+
+range_dtype(Range, DType) :-
+   domain(Range, Domain),
+   Domain =.. [DType | _].
+
+same_dtype(Range1, Range2) :-
+   range_dtype(Range1, DType),
+   Domain =.. [DType, -inf, inf],
+   Range2::Domain.
+
+M.dtype() := DType :-
+   DType = M.dtype(M.device).
 
 :- begin_tests(array_reshape).
 
