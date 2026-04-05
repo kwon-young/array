@@ -79,24 +79,27 @@ dtype_info(float32, real(Min, Max), Options) :-
    option(precision(Precision), Options, _),
    type_info(real(Min, Max), [size(32), precision(Precision), exponent(8),
                               mantissa(23), infinity(1)]).
-dtype_info(float64, real(Min, Max), Options) :-
+dtype_info(float64, float, Min, Max, Options) :-
    option(precision(Precision), Options, _),
    type_info(real(Min, Max), [size(64), precision(Precision), exponent(11),
                               mantissa(52), infinity(1)]).
-type_info(boolean, _).
-type_info(integer(RMin, RMax), Options) :-
+type_info(boolean, RMin, RMax, _) :-
+   [RMin, RMax]::boolean,
+   { 0 =< RMin, RMax =< 1 }.
+type_info(integer, RMin, RMax, Options) :-
    option(size(Size), Options, _),
    option(signed(Signed), Options, _),
    Signed::boolean,
    integer_size(Size),
    signed_integer_range_size(SignedMin-SignedMax, Size),
    unsigned_integer_range_size(UnsignedMin-UnsignedMax, Size),
+   [RMin, RMax]::integer(-inf, inf),
    {
       (Signed and (Min == SignedMin) and (Max == SignedMax))
       or (~Signed and (Min == UnsignedMin) and (Max == UnsignedMax)),
       Min =< RMin, RMax =< Max
    }.
-type_info(real(RMin, RMax), Options) :-
+type_info(float, RMin, RMax, Options) :-
    option(precision(Precision), Options, _),
    option(size(Size), Options, _),
    option(exponent(E), Options, _),
@@ -127,54 +130,3 @@ type_min_max_range(integer, Min, Max, Range) :-
    Range::integer(Min, Max).
 type_min_max_range(float, Min, Max, Range) :-
    Range::real(Min, Max).
-
-% Compile-time helpers for type promotion (approximating NumPy rules)
-% dtype_rank(Type, Kind, Size).
-% Kinds: 0 = bool, 1 = unsigned, 2 = signed, 3 = float
-dtype_rank(bool, 0, 1).
-dtype_rank(uint8, 1, 8).
-dtype_rank(int8, 2, 8).
-dtype_rank(uint16, 1, 16).
-dtype_rank(int16, 2, 16).
-dtype_rank(uint32, 1, 32).
-dtype_rank(int32, 2, 32).
-dtype_rank(uint64, 1, 64).
-dtype_rank(int64, 2, 64).
-dtype_rank(float8_e4m3, 3, 8).
-dtype_rank(float8_e5m2, 3, 9).
-dtype_rank(float16, 3, 16).
-dtype_rank(bfloat16, 3, 17).
-dtype_rank(float32, 3, 32).
-dtype_rank(float64, 3, 64).
-
-numpy_unary_float(T, float32) :-
-   dtype_rank(T, Kind, _),
-   Kind < 3.
-numpy_unary_float(T, T) :-
-   dtype_rank(T, Kind, _),
-   Kind >= 3.
-
-% Term expansion to generate all combinations as static facts
-term_expansion(generate_op_dtypes, Clauses) :-
-   DTypes = [bool, uint8, int8, uint16, int16, uint32, int32, uint64, int64, float8_e4m3, float8_e5m2, float16, bfloat16, float32, float64],
-   
-   findall(op_dtype(Op, [T1, T2], Res), (
-      member(Op, [+, *]),
-      member(T1, DTypes), member(T2, DTypes),
-      numpy_promote(T1, T2, Res)
-   ), BinMathClauses),
-   
-   findall(op_dtype(<, [T1, T2], bool), (
-      member(T1, DTypes), member(T2, DTypes)
-   ), CmpClauses),
-   
-   findall(op_dtype(Op, [T], Res), (
-      member(Op, [sin, log, sqrt]),
-      member(T, DTypes),
-      numpy_unary_float(T, Res)
-   ), UnaryClauses),
-   
-   append([BinMathClauses, CmpClauses, UnaryClauses], Clauses).
-
-% Trigger the term expansion
-generate_op_dtypes.
