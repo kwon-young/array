@@ -39,49 +39,49 @@ is_domain(Range, Domain) :-
    ;  instantiation_error(Range::Domain)
    ).
 
-dtype_info(bool, boolean(_, _), _Options) :-
-   type_info(boolean, []).
-dtype_info(uint8, integer(Min, Max), _Options) :-
-   type_info(integer(Min, Max), [size(8), signed(0)]).
-dtype_info(uint16, integer(Min, Max), _Options) :-
-   type_info(integer(Min, Max), [size(16), signed(0)]).
-dtype_info(uint32, integer(Min, Max), _Options) :-
-   type_info(integer(Min, Max), [size(32), signed(0)]).
-dtype_info(uint64, integer(Min, Max), _Options) :-
-   type_info(integer(Min, Max), [size(64), signed(0)]).
+dtype_info(bool, boolean, Min, Max, _Options) :-
+   type_info(boolean, Min, Max, []).
+dtype_info(uint8, integer, Min, Max, _Options) :-
+   type_info(integer, Min, Max, [size(8), signed(0)]).
+dtype_info(uint16, integer, Min, Max, _Options) :-
+   type_info(integer, Min, Max, [size(16), signed(0)]).
+dtype_info(uint32, integer, Min, Max, _Options) :-
+   type_info(integer, Min, Max, [size(32), signed(0)]).
+dtype_info(uint64, integer, Min, Max, _Options) :-
+   type_info(integer, Min, Max, [size(64), signed(0)]).
 
-dtype_info(int8, integer(Min, Max), _Options) :-
-   type_info(integer(Min, Max), [size(8), signed(1)]).
-dtype_info(int16, integer(Min, Max), _Options) :-
-   type_info(integer(Min, Max), [size(16), signed(1)]).
-dtype_info(int32, integer(Min, Max), _Options) :-
-   type_info(integer(Min, Max), [size(32), signed(1)]).
-dtype_info(int64, integer(Min, Max), _Options) :-
-   type_info(integer(Min, Max), [size(64), signed(1)]).
+dtype_info(int8, integer, Min, Max, _Options) :-
+   type_info(integer, Min, Max, [size(8), signed(1)]).
+dtype_info(int16, integer, Min, Max, _Options) :-
+   type_info(integer, Min, Max, [size(16), signed(1)]).
+dtype_info(int32, integer, Min, Max, _Options) :-
+   type_info(integer, Min, Max, [size(32), signed(1)]).
+dtype_info(int64, integer, Min, Max, _Options) :-
+   type_info(integer, Min, Max, [size(64), signed(1)]).
 
-dtype_info(float8_e4m3, real(Min, Max), Options) :-
+dtype_info(float8_e4m3, float, Min, Max, Options) :-
    option(precision(Precision), Options, _),
-   type_info(real(Min, Max), [size(8), precision(Precision), exponent(4),
+   type_info(float, Min, Max, [size(8), precision(Precision), exponent(4),
                               mantissa(3), infinity(0)]).
-dtype_info(float8_e5m2, real(Min, Max), Options) :-
+dtype_info(float8_e5m2, float, Min, Max, Options) :-
    option(precision(Precision), Options, _),
-   type_info(real(Min, Max), [size(8), precision(Precision), exponent(5),
+   type_info(float, Min, Max, [size(8), precision(Precision), exponent(5),
                               mantissa(2), infinity(1)]).
-dtype_info(bfloat16, real(Min, Max), Options) :-
+dtype_info(bfloat16, float, Min, Max, Options) :-
    option(precision(Precision), Options, _),
-   type_info(real(Min, Max), [size(16), precision(Precision), exponent(8),
+   type_info(float, Min, Max, [size(16), precision(Precision), exponent(8),
                               mantissa(7), infinity(1)]).
-dtype_info(float16, real(Min, Max), Options) :-
+dtype_info(float16, float, Min, Max, Options) :-
    option(precision(Precision), Options, _),
-   type_info(real(Min, Max), [size(16), precision(Precision), exponent(5),
+   type_info(float, Min, Max, [size(16), precision(Precision), exponent(5),
                               mantissa(10), infinity(1)]).
-dtype_info(float32, real(Min, Max), Options) :-
+dtype_info(float32, float, Min, Max, Options) :-
    option(precision(Precision), Options, _),
-   type_info(real(Min, Max), [size(32), precision(Precision), exponent(8),
+   type_info(float, Min, Max, [size(32), precision(Precision), exponent(8),
                               mantissa(23), infinity(1)]).
 dtype_info(float64, float, Min, Max, Options) :-
    option(precision(Precision), Options, _),
-   type_info(real(Min, Max), [size(64), precision(Precision), exponent(11),
+   type_info(float, Min, Max, [size(64), precision(Precision), exponent(11),
                               mantissa(52), infinity(1)]).
 type_info(boolean, RMin, RMax, _) :-
    [RMin, RMax]::boolean,
