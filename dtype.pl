@@ -16,7 +16,7 @@
 %   * float are clpBNR real
 % * size is a clpBNR integer, is the number of bits that will store the number and is linked to a maximum range that range cannot exceed
 
-:- module(dtype, [type_min_max_range/4]).
+:- module(dtype, [dtype_info/3]).
 
 :- use_module(library(clpBNR)).
 
@@ -38,6 +38,8 @@ is_domain(Range, Domain) :-
    ;  instantiation_error(Range::Domain)
    ).
 
+dtype_info(bool, boolean(_, _), _Options) :-
+   type_info(boolean, []).
 dtype_info(uint8, integer(Min, Max), _Options) :-
    type_info(integer(Min, Max), [size(8), signed(0)]).
 dtype_info(uint16, integer(Min, Max), _Options) :-
@@ -124,3 +126,7 @@ type_min_max_range(integer, Min, Max, Range) :-
    Range::integer(Min, Max).
 type_min_max_range(float, Min, Max, Range) :-
    Range::real(Min, Max).
+
+% op_dtype(Op, Args, Result).
+op_dtype(+, [boolean, boolean], boolean).
+op_dtype(+, [int8, int8], int8).
