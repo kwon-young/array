@@ -127,6 +127,76 @@ type_min_max_range(integer, Min, Max, Range) :-
 type_min_max_range(float, Min, Max, Range) :-
    Range::real(Min, Max).
 
-% op_dtype(Op, Args, Result).
-op_dtype(+, [boolean, boolean], boolean).
-op_dtype(+, [int8, int8], int8).
+% Compile-time helpers for type promotion (approximating NumPy rules)
+% dtype_rank(Type, Kind, Size).
+% Kinds: 0 = bool, 1 = unsigned, 2 = signed, 3 = float
+dtype_rank(bool, 0, 1).
+dtype_rank(uint8, 1, 8).
+dtype_rank(int8, 2, 8).
+dtype_rank(uint16, 1, 16).
+dtype_rank(int16, 2, 16).
+dtype_rank(uint32, 1, 32).
+dtype_rank(int32, 2, 32).
+dtype_rank(uint64, 1, 64).
+dtype_rank(int64, 2, 64).
+dtype_rank(float8_e4m3, 3, 8).
+dtype_rank(float8_e5m2, 3, 9).
+dtype_rank(float16, 3, 16).
+dtype_rank(bfloat16, 3, 17).
+dtype_rank(float32, 3, 32).
+dtype_rank(float64, 3, 64).
+
+% 1. Same kind: Take the max of the widths.
+promote_rule(K, S1, K, S2, K, S) :-
+   S is max(S1, S2).
+
+% 2. Different kind, different widths: Take max of widths and max of kinds.
+promote_rule(K1, S1, K2, S2, K, S) :-
+   dif(K1, K2),
+   dif(S1, S2),
+   K is max(K1, K2),
+   S is max(S1, S2).
+
+% 3. Different kind, same width: Multiply width by 2 (capped at 64), take max of kinds.
+promote_rule(K1, S, K2, S, K, SOut) :-
+   dif(K1, K2),
+   K is max(K1, K2),
+   SOut is min(64, S * 2).
+
+numpy_promote(T1, T2, Promoted) :-
+   dtype_rank(T1, K1, S1),
+   dtype_rank(T2, K2, S2),
+   promote_rule(K1, S1, K2, S2, K, S),
+   dtype_rank(Promoted, K, S).
+
+numpy_unary_float(T, float32) :-
+   dtype_rank(T, Kind, _),
+   Kind < 3.
+numpy_unary_float(T, T) :-
+   dtype_rank(T, Kind, _),
+   Kind >= 3.
+
+% Term expansion to generate all combinations as static facts
+term_expansion(generate_op_dtypes, Clauses) :-
+   DTypes = [bool, uint8, int8, uint16, int16, uint32, int32, uint64, int64, float8_e4m3, float8_e5m2, float16, bfloat16, float32, float64],
+   
+   findall(op_dtype(Op, [T1, T2], Res), (
+      member(Op, [+, *]),
+      member(T1, DTypes), member(T2, DTypes),
+      numpy_promote(T1, T2, Res)
+   ), BinMathClauses),
+   
+   findall(op_dtype(<, [T1, T2], bool), (
+      member(T1, DTypes), member(T2, DTypes)
+   ), CmpClauses),
+   
+   findall(op_dtype(Op, [T], Res), (
+      member(Op, [sin, log, sqrt]),
+      member(T, DTypes),
+      numpy_unary_float(T, Res)
+   ), UnaryClauses),
+   
+   append([BinMathClauses, CmpClauses, UnaryClauses], Clauses).
+
+% Trigger the term expansion
+generate_op_dtypes.
