@@ -19,6 +19,7 @@
 :- module(dtype, [dtype_info/3]).
 
 :- use_module(library(clpBNR)).
+:- use_module(promote_types, [numpy_promote/3]).
 
 integer_size(Size) :-
    N::integer(3, 6),
@@ -145,29 +146,6 @@ dtype_rank(float16, 3, 16).
 dtype_rank(bfloat16, 3, 17).
 dtype_rank(float32, 3, 32).
 dtype_rank(float64, 3, 64).
-
-% 1. Same kind: Take the max of the widths.
-promote_rule(K, S1, K, S2, K, S) :-
-   S is max(S1, S2).
-
-% 2. Different kind, different widths: Take max of widths and max of kinds.
-promote_rule(K1, S1, K2, S2, K, S) :-
-   dif(K1, K2),
-   dif(S1, S2),
-   K is max(K1, K2),
-   S is max(S1, S2).
-
-% 3. Different kind, same width: Multiply width by 2 (capped at 64), take max of kinds.
-promote_rule(K1, S, K2, S, K, SOut) :-
-   dif(K1, K2),
-   K is max(K1, K2),
-   SOut is min(64, S * 2).
-
-numpy_promote(T1, T2, Promoted) :-
-   dtype_rank(T1, K1, S1),
-   dtype_rank(T2, K2, S2),
-   promote_rule(K1, S1, K2, S2, K, S),
-   dtype_rank(Promoted, K, S).
 
 numpy_unary_float(T, float32) :-
    dtype_rank(T, Kind, _),
