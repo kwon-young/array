@@ -5,8 +5,17 @@
 :- use_module(c99).
 :- use_module(swipl_ld).
 :- use_module(gen_type).
-:- use_module(runtime_prolog).
+:- use_module(runtime_prolog, except([op_expr/3])).
 :- use_module(view, [replace_nth0/4]).
+:- use_module(dtype).
+
+array:M.dtype(c) := DType :-
+   array:range_min_max(M.range, Min, Max),
+   (  get_dict(precision, M, Precision)
+   -> Options = [precision(Precision)]
+   ;  Options = []
+   ),
+   once(dtype_info(DType, M.dtype, Min, Max, Options)).
 
 % Compiles the operation for the given Array on the 'c' device.
 array:M.compile(c, true) := Dict :-
@@ -33,6 +42,10 @@ array:M.compile(c, log(A)) := Dict :-
    Dict = M.compile(c, elementwise(log(A))).
 array:M.compile(c, sqrt(A)) := Dict :-
    Dict = M.compile(c, elementwise(sqrt(A))).
+array:M.compile(c, float(A)) := Dict :-
+   Dict = M.compile(c, elementwise(cast(A, M.dtype()))).
+array:M.compile(c, integer(A)) := Dict :-
+   Dict = M.compile(c, elementwise(cast(A, M.dtype()))).
 array:M.compile(c, elementwise(Op)) := Dict :-
    compile_elementwise(Op, M, Dict).
 array:M.compile(c, reduce(Op, Axes, Parent)) := Dict :-
@@ -93,10 +106,10 @@ compile_reduce(Op, Axes, Parent, M, Dict) :-
    N is 1 + NArgs,
    array:identity(Op, Identity),
    (  Identity == -inf
-   -> c_identity(M.dtype, Identity, CIdentity)
+   -> c_identity(M.dtype(), Identity, CIdentity)
    ;  CIdentity = Identity
    ),
-   type(M.dtype, MDType, _, _),
+   type(M.dtype(), MDType, _, _),
    AST = (
    #(include(<>, 'SWI-Prolog.h')),
    #(include(<>, 'stdint.h')),
@@ -127,7 +140,10 @@ compile_reduce(Op, Axes, Parent, M, Dict) :-
    Dict = M.put([kernel=runtime_c:Kernel]).
 
 ids(N, Prefix, Type, Args, TypeArgs) :-
-   numlist(1, N, Numbers),
+   (  N == 0
+   -> Numbers = []
+   ;  numlist(1, N, Numbers)
+   ),  
    maplist(atom_concat(Prefix), Numbers, Args),
    (  atom(Type)
    -> length(Types, N),
@@ -146,10 +162,10 @@ setup_kernel_call(M, Op, AllArgs, Index, Head, RuntimeName-Runtime) :-
    ids(M.ndim(), i, int, Index, TypeIndex),
    phrase(op_args(Op), AllArgs),
    length(AllArgs, NArgs),
-   maplist(get_dict(dtype), AllArgs, PrologDTypes),
+   maplist(array:dtype, AllArgs, PrologDTypes),
    maplist(type, PrologDTypes, DTypes, _, _),
    maplist([DType, P]>>atom_concat(DType, *, P), DTypes, Ps),
-   type(M.dtype, MDType, _, _),
+   type(M.dtype(), MDType, _, _),
    atom_concat(MDType, *, Type),
    ids(NArgs, a, Ps, Args, TypeArgs),
    append(TypeArgs, TypeIndex, TypeArgsIndex),
@@ -173,9 +189,13 @@ setup_kernel_call(M, Op, AllArgs, Index, Head, RuntimeName-Runtime) :-
       return('TRUE')
    }
    ).
-loops([], [], Head, Head).
-loops([Dim | Dims], [Type:I | Index], Head, Ast) :-
-   loops(Dims, Index, Head, InnerAst),
+loops([], [], Call, Call).
+loops([Dim | Dims], TypeIndex, Call, Ast) :-
+   loops_([Dim | Dims], TypeIndex, Call, Ast).
+
+loops_([], [], Head, Head).
+loops_([Dim | Dims], [Type:I | Index], Head, Ast) :-
+   loops_(Dims, Index, Head, InnerAst),
    Ast = for(Type:I = 0, I < Dim, I++) {
       InnerAst
    }.
@@ -188,9 +208,40 @@ compile_expr(M, Op, Args, Index, AST) :-
    pairs_keys_values(PairsForRbtree, Args, Values),
    ord_list_to_rbtree(PairsForRbtree, ArgTree),
    op_expr(Op, Expr, ArgTree),
-   type(M.dtype, DType, _, _),
+   type(M.dtype(), DType, _, _),
    EvalAST = (DType:v0 = Expr),
    mkconj(BaseAST, EvalAST, AST).
+
+% op_expr(random_float, R, _) =>
+%    R = random_float.
+op_expr(A, R, Index), is_dict(A, array) =>
+   rb_lookup(A, R, Index).
+op_expr(contiguous(A), R, Index) =>
+   op_expr(A, R, Index).
+op_expr(A+B, R, Index) =>
+   op_expr(A, A1, Index),
+   op_expr(B, B1, Index),
+   R = (A1+B1).
+op_expr(A*B, R, Index) =>
+   op_expr(A, A1, Index),
+   op_expr(B, B1, Index),
+   R = (A1*B1).
+op_expr(A<B, R, Index) =>
+   op_expr(A, A1, Index),
+   op_expr(B, B1, Index),
+   R = (A1<B1).
+op_expr(sin(A), R, Index) =>
+   op_expr(A, A1, Index),
+   R = sin(A1).
+op_expr(log(A), R, Index) =>
+   op_expr(A, A1, Index),
+   R = log(A1).
+op_expr(sqrt(A), R, Index) =>
+   op_expr(A, A1, Index),
+   R = sqrt(A1).
+op_expr(cast(A, Type), R, Index) =>
+   op_expr(A, A1, Index),
+   R = cast(A1, Type).
 
 index_input(Index, Arg, ArgN, AST, V) :-
    IndexExpr-ValidExpr = Arg.index_expr(Index),
@@ -200,7 +251,7 @@ index_input(Index, Arg, ArgN, AST, V) :-
    ),
    atom_concat(a, ArgN, A),
    atom_concat(v, ArgN, V),
-   type(Arg.dtype, DType, _, _),
+   type(Arg.dtype(), DType, _, _),
    AST = (
    DType:V = 0,
    if ValidExpr {
@@ -210,31 +261,20 @@ index_input(Index, Arg, ArgN, AST, V) :-
 
 % Allocates the physical memory or underlying data storage for Array on the 'c' device.
 array:allocate(c, M) :-
-    buffer_alloc(M.data, M.dtype, M.size(), true).
-
-% Maps a Prolog Value to its corresponding data type representation supported by the 'c' device.
-array:dtype(c, Value, Type), integer(Value) =>
-   Type = int64.
+    buffer_alloc(M.data, M.dtype(), M.size(), true).
 
 % Defines the type promotion rules on the 'c' device.
-array:broadcast_dtype(c, int64, int64).
+% array:broadcast_dtype(c, int64, int64).
 
 array:M.to(c, prolog) := Dict :-
    M1 = M.contiguous().realize(),
-   buffer_to_data(M1.data, M1.dtype, M1.datasize, Data),
-   type(M1.dtype, _, _, DType),
-   Dict = M.empty(M1.shape(), [device=prolog, dtype=DType]),
-   Dict.data = Data.
+   buffer_to_data(M1.data, M1.dtype(), M1.datasize, Data),
+   Dict = M.empty(M1.shape(), [device(prolog), data(Data)]).
 
-prolog_c_type(boolean, bool).
-prolog_c_type(integer, int64).
-prolog_c_type(float, float64).
 array:M.to(prolog, c) := Dict :-
    M1 = M.contiguous().realize(),
-   prolog_c_type(M1.dtype, DType),
-   buffer_from_data(Data, DType, M1.datasize, M1.data),
-   Dict = M.empty(M1.shape(), [device=c, dtype=DType]),
-   Dict.data = Data.
+   Dict = M.empty(M1.shape(), [device=c, data(Data)]),
+   buffer_from_data(Data, Dict.dtype(), M1.datasize, M1.data).
 
 c_identity(int8, -inf, 'INT8_MIN').
 c_identity(int16, -inf, 'INT16_MIN').

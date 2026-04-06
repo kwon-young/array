@@ -48,13 +48,9 @@ M.default() := Dict :-
 M.default(Options) := Dict :-
    dict_options(M, MOptions),
    merge_options(Options, MOptions, Merged),
+   option(dtype(DType), Merged, float),
    Range::real(-inf, inf),
    option(range(Range), Merged, _),
-   (  domain(Range, real(_, _))
-   -> option(precision(Precision), Merged, 1e-5),
-      Float = true
-   ;  Float = false
-   ),
    option(device(Device), Merged, prolog),
    option(data(Data), Options, _),
    (  option(shape(Shape), Merged)
@@ -64,9 +60,10 @@ M.default(Options) := Dict :-
    ;  Views = []
    ),
    M1 = array{id: _, views: Views, device:Device, data: Data,
-                datasize: DataSize, op: true, range: Range},
-   (  Float == true
-   -> Dict = M1.put([precision=Precision])
+                datasize: DataSize, op: true, range: Range, dtype: DType},
+   (  DType == float
+   -> option(precision(Precision), Merged, 1e-5),
+      Dict = M1.put([precision=Precision])
    ;  Dict = M1
    ).
 
@@ -80,22 +77,18 @@ M.fromlist(List) := Dict :-
 M.fromlist(List, Options) := Dict :-
    list_shape(List, Shape),
    flatten(List, Flat),
-   select_option(device(Device), Options, RestOptions, prolog),
-   (  option(range(_), Options)
-   -> type_error(range, Options)
-   ;  true
-   ),
+   select_option(device(Device), Options, Options1, prolog),
    foldl([X, In, Out]>>(
       get_dtype(X, DType_),
       broadcast_dtype(DType_, In, Out)
-   ), Flat, boolean, DType),
+   ), Flat, boolean, ListDType),
+   select_option(dtype(DType), Options1, RestOptions, ListDType),
    min_list(Flat, Min),
    max_list(Flat, Max),
-   Domain =.. [DType, Min, Max],
-   Range::Domain,
+   dtype_min_max_range(ListDType, Min, Max, Range),
    compound_name_arguments(Data, data, Flat),
-   M1 = M.empty(Shape, [device(prolog), range(Range), data(Data) | RestOptions]),
-   Dict = M1.to(Device).
+   M1 = M.empty(Shape, [device(prolog), range(Range), dtype(ListDType), data(Data) | RestOptions]),
+   Dict = M1.to(Device).as(DType).
 list_shape(L, Shape) :-
    list_shape_(Shape, L).
 list_shape_(Shape, L), is_list(L) =>
@@ -128,11 +121,12 @@ M.arange(Start, Stop, Options) := Dict :-
 M.arange(Start, Stop, Step, Options) := Dict :-
    N is ceil((Stop - Start) / Step),
    M1 = M.full([N], Step, Options),
-   Dict @= M1.cumalu(0, +) + (Start - Step),
+   M2 @= M1.cumalu(0, +) + (Start - Step),
    End is Start + (N - 1) * Step,
    Min is min(Start, End),
    Max is max(Start, End),
-   {Min =< Dict.range, Dict.range =< Max}.
+   dtype_min_max_range(M2.dtype, Min, Max, Range),
+   Dict = M2.put(range, Range).
 
 M.eye(N) := Dict :-
    Dict = M.eye(N, []).
@@ -203,9 +197,7 @@ M.pad(Padding, Options) := Dict :-
    -> Mask_ = M.ones(M.shape()),
       Mask @= 1 - Mask_.replace_view(Mask_.view().pad(Padding)),
       Dict @= M1 + Mask*Value
-   ;  range_dtype(M1.range, DType),
-      Domain =.. [DType, -inf, inf],
-      Range::Domain,
+   ;  dtype_min_max_range(M1.dtype, -inf, inf, Range),
       B::boolean,
       { Range is M.range * B + 0 * (1 - B) },
       Dict = M1.put([range(Range)])
@@ -299,11 +291,13 @@ push(view(Views), M, Dict) :-
    ;  Dict = M1.push_op(view(M))
    ).
 push(constant(Value, Options), M, Dict) :-
-   M1 = M.empty([], [range(Value) | Options]),
-   Dict = M1.push_op(constant(Value)).
+   get_dtype(Value, ValueDType),
+   select_option(dtype(DType), Options, RestOptions, ValueDType),
+   M1 = M.empty([], [range(Value), dtype(ValueDType) | RestOptions]),
+   Dict = M1.push_op(constant(Value)).as(DType).
 push(rand(Shape, Options), M, Dict) :-
    Range::real(0, 1),
-   Dict = M.empty(Shape, [range(Range) | Options]).push_op(rand).
+   Dict = M.empty(Shape, [range(Range), dtype(float) | Options]).push_op(rand).
 push(contiguous, M, Dict) :-
    Dict = M.empty(M.shape()).push_op(contiguous(M)).
 push(reduce(Op, Axes), M, Dict) :-
@@ -311,25 +305,27 @@ push(reduce(Op, Axes), M, Dict) :-
    sort(Axes, Axes_),
    (  Op == (<)
    -> Range::boolean,
-      Options = [range(Range)]
+      DType = boolean
    ;  view:shape_size(M.shape(), Size1),
       view:shape_size(Shape, Size2),
       N #= Size1 // Size2,
       sync_clpfd_clpBNR(N),
-      range_dtype(M.range, DType),
-      broadcast_dtype(DType, integer, FinalDType),
-      Domain =.. [FinalDType, -inf, inf],
-      Range::Domain,
+      broadcast_dtype(M.dtype, integer, DType),
+      dtype_min_max_range(DType, -inf, inf, Range),
       (  Op == (+)
       -> { Range == M.range * N }
-      ),
-      (  domain(Range, real(_, _))
-      -> get_dict(precision, M, Precision),
-         Options = [range(Range), precision(Precision)]
-      ;  Options = [range(Range)]
       )
    ),
+   (  DType == float
+   -> get_dict(precision, M, Precision),
+      Options = [range(Range), dtype(DType), precision(Precision)]
+   ;  Options = [range(Range), dtype(DType)]
+   ),
    Dict = M.empty(Shape, Options).push_op(reduce(Op, Axes_, M)).
+push(float(A), C) :-
+   push(elementwise(float, [A]), C).
+push(integer(A), C) :-
+   push(elementwise(integer, [A]), C).
 push(A+B, C) :-
    push(elementwise(+, [A, B]), C).
 push(A*B, C) :-
@@ -337,33 +333,40 @@ push(A*B, C) :-
 push(A<B, C) :-
    push(elementwise(<, [A, B]), C).
 push(sin(A), C) :-
-   push(elementwise(sin, [A]), C).
+   push(elementwise(sin, [A.as(float)]), C).
 push(log(A), C) :-
-   push(elementwise(log, [A]), C).
+   push(elementwise(log, [A.as(float)]), C).
 push(sqrt(A), C) :-
-   push(elementwise(sqrt, [A]), C).
+   push(elementwise(sqrt, [A.as(float)]), C).
 push(elementwise(Op, Args), C) :-
    (  dicts_same_value_for_key(Args, device, _Device)
    -> true
    ;  type_error(device, Args)
    ),
    (  Op == (<)
-   -> Range::boolean,
-      Options = [range(Range)]
-   ;  maplist(get_dict(range), Args, Ranges),
-      Expr =.. [Op | Ranges],
-      maplist(get_dict(range), Args, Ranges),
-      maplist(range_dtype, Ranges, [DType | DTypes]),
-      foldl(broadcast_dtype, DTypes, DType, FinalDType),
-      Domain =.. [FinalDType, -inf, inf],
-      Range::Domain,
-      {Range is Expr},
-      (  domain(Range, real(_, _))
-      -> convlist(get_dict(precision), Args, Precisions),
-         $(min_list(Precisions, Precision)),
-         Options = [range(Range), precision(Precision)]
-      ;  Options = [range(Range)]
-      )
+   -> FinalDType = boolean
+   ;  Op == float
+   -> FinalDType = float
+   ;  Op == integer
+   -> FinalDType = integer
+   ;  maplist(get_dict(dtype), Args, [DType | DTypes]),
+      foldl(broadcast_dtype, DTypes, DType, FinalDType)
+   ),
+   maplist(get_dict(range), Args, Ranges),
+   (  (Op == float ; Op == integer)
+   -> Args = [M],
+      range_min_max(M.range, Min, Max),
+      cast(FinalDType, Min, Min1),
+      cast(FinalDType, Max, Max1),
+      dtype_min_max_range(FinalDType, Min1, Max1, Range)
+   ;  Expr =.. [Op | Ranges],
+      dtype_min_max_range(FinalDType, -inf, inf, Range),
+      {Range is Expr}
+   ),
+   convlist(get_dict(precision), Args, Precisions),
+   (  min_list(Precisions, Precision)
+   -> Options = [range(Range), dtype(FinalDType), precision(Precision)]
+   ;  Options = [range(Range), dtype(FinalDType)]
    ),
    broadcast(Args, [H | T]),
    Term =.. [Op, H | T],
@@ -375,11 +378,10 @@ push(solve(A, B), X) :-
    ),
    (  [N, N] = A.shape()
    -> { N * A.range * Range == B.range },
-      (  domain(Range, real(_, _))
-      -> convlist(get_dict(precision), [A, B], Precisions),
-         $(min_list(Precisions, Precision)),
-         Options = [range(Range), precision(Precision)]
-      ;  domain_error(float, A-B)
+      convlist(get_dict(precision), [A, B], Precisions),
+      (  min_list(Precisions, Precision)
+      -> Options = [range(Range), dtype(float), precision(Precision)]
+      ;  Options = [range(Range), dtype(float)]
       )
    ;  domain_error(square, A.shape())
    ),
@@ -473,6 +475,16 @@ M.to(Device) := Dict :-
    ;  Dict = M.to(M.device, Device)
    ).
 
+M.as(DType) := Dict :-
+   (  DType == M.dtype
+   -> Dict = M
+   ;  DType == boolean
+   -> Dict @= (M =\= 0)
+   ;  Op =.. [DType, M],
+      debug(as, "~p", [Op]),
+      push(Op, Dict)
+   ).
+
 '@='(Left, Right) :-
    eval_(Right, Left).
 eval_(A<B, C) =>
@@ -482,13 +494,17 @@ eval_(A<B, C) =>
 eval_(A>B, C) =>
    eval_(B<A, C).
 eval_(A=<B, C) =>
-   eval_(-(A>B) + 1, C).
+   eval_(-(A>B) + 1, C1),
+   C = C1.as(boolean).
 eval_(A>=B, C) =>
-   eval_(-(A<B) + 1, C).
+   eval_(-(A<B) + 1, C1),
+   C = C1.as(boolean).
 eval_(A=\=B, C) =>
-   eval_((A<B)+(A>B), C).
+   eval_((A<B)+(A>B), C1),
+   C = C1.as(boolean).
 eval_(A=:=B, C) =>
-   eval_(-(A=\=B)+1, C).
+   eval_(-(A=\=B)+1, C1),
+   C = C1.as(boolean).
 eval_(A+B, C) =>
    eval_(A, A1),
    eval_(B, B1),
@@ -551,8 +567,10 @@ M.shape() := Shape :-
 M.ndim() := NDim :-
    NDim = M.view().ndim().
 
+M.ndim1() := NDim :-
+   NDim #= max(1, M.ndim()).
 M.ndim0() := NDim :-
-   NDim #= M.ndim() - 1.
+   NDim #= max(0, M.ndim() - 1).
 
 M.is_contiguous() := Res :-
    maplist(view:is_contiguous, M.views, [H | T]),
@@ -690,18 +708,41 @@ get_dtype(X, R) :-
    ;  integer(X)
    -> R = integer
    ;  float(X)
-   -> R = real
+   -> R = float
    ;  domain_error([boolean, integer, float], X)
    ).
 broadcast_dtype(boolean, boolean, boolean).
 broadcast_dtype(integer, boolean, integer).
 broadcast_dtype(boolean, integer, integer).
 broadcast_dtype(integer, integer, integer).
-broadcast_dtype(real, boolean, real).
-broadcast_dtype(boolean, real, real).
-broadcast_dtype(real, integer, real).
-broadcast_dtype(integer, real, real).
-broadcast_dtype(real, real, real).
+broadcast_dtype(float, boolean, float).
+broadcast_dtype(boolean, float, float).
+broadcast_dtype(float, integer, float).
+broadcast_dtype(integer, float, float).
+broadcast_dtype(float, float, float).
+
+cast(boolean, 0, Result) => Result = 0.
+cast(boolean, _, Result) => Result = 1.
+cast(DType, Value, Result) =>
+   Expr =.. [DType, Value],
+   Result is Expr.
+
+dtype_min_max_range(DType, Min, Max, Range) :-
+   (  DType == boolean, Min == Max
+   -> Range = Min
+   ;  ( DType == float
+      -> F = real
+      ;  F = DType
+      ),
+      Domain =.. [F, Min, Max],
+      Range::Domain
+   ).
+
+range_min_max(Number, Min, Max), number(Number) =>
+   Min = Number,
+   Max = Number.
+range_min_max(Range, Min, Max), clpBNR:domain(Range, Domain) =>
+   Domain =.. [_, Min, Max].
 
 range_dtype(Range, DType) :-
    domain(Range, Domain),

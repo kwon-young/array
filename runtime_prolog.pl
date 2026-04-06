@@ -4,6 +4,7 @@
 :- use_module(array, []).
 :- use_module(view, [replace_nth0/4]).
 :- use_module(lu_decomposition).
+:- use_module(library(clpBNR), [domain/2]).
 
 /* 
  * Runtime Backend Interface
@@ -31,7 +32,8 @@
  */
 
 setup_kernel_call(M, Args, Index, ModuleHead, Dict) :-
-   variant_sha1(M, KernelId),
+   mapsubterms_var(domain, M, MDomain),
+   variant_sha1(MDomain, KernelId),
    maplist(get_dict(id), Args, Ids),
    append(Ids, Index, IdsIndex),
    Head =.. [KernelId, M.id | IdsIndex],
@@ -94,6 +96,10 @@ array:M.compile(prolog, log(A)) := Dict :-
    Dict = M.compile(prolog, elementwise(log(A))).
 array:M.compile(prolog, sqrt(A)) := Dict :-
    Dict = M.compile(prolog, elementwise(sqrt(A))).
+array:M.compile(prolog, float(A)) := Dict :-
+   Dict = M.compile(prolog, elementwise(float(A))).
+array:M.compile(prolog, integer(A)) := Dict :-
+   Dict = M.compile(prolog, elementwise(integer(A))).
 array:M.compile(prolog, elementwise(Op)) := Dict :-
    length(Index, M.ndim()),
    phrase(op_args(Op), AllArgs),
@@ -195,19 +201,25 @@ op_expr(log(A), R, Index) =>
 op_expr(sqrt(A), R, Index) =>
    op_expr(A, A1, Index),
    R = sqrt(A1).
+op_expr(float(A), R, Index) =>
+   op_expr(A, A1, Index),
+   R = float(A1).
+op_expr(integer(A), R, Index) =>
+   op_expr(A, A1, Index),
+   R = integer(A1).
 
 array:allocate(prolog, M) :-
    compound_name_arity(M.data, data, M.datasize).
 
 % DTypes
 % ======
-array:dtype(prolog, 0, R) => R = boolean.
-array:dtype(prolog, 1, R) => R = boolean.
-array:dtype(prolog, X, R), float(X) => R = float.
-array:dtype(prolog, X, R), integer(X) => R = integer.
-array:dtype(prolog, X, R), rational(X) => R = rational.
-array:dtype(prolog, X, DType), var(X) => when(ground(X), array:dtype(prolog, X, DType)).
-
-array:broadcast_dtype(prolog, boolean, integer).
-array:broadcast_dtype(prolog, integer, rational).
-array:broadcast_dtype(prolog, rational, float).
+% array:dtype(prolog, 0, R) => R = boolean.
+% array:dtype(prolog, 1, R) => R = boolean.
+% array:dtype(prolog, X, R), float(X) => R = float.
+% array:dtype(prolog, X, R), integer(X) => R = integer.
+% array:dtype(prolog, X, R), rational(X) => R = rational.
+% array:dtype(prolog, X, DType), var(X) => when(ground(X), array:dtype(prolog, X, DType)).
+%
+% array:broadcast_dtype(prolog, boolean, integer).
+% array:broadcast_dtype(prolog, integer, rational).
+% array:broadcast_dtype(prolog, rational, float).

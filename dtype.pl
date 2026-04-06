@@ -16,7 +16,7 @@
 %   * float are clpBNR real
 % * size is a clpBNR integer, is the number of bits that will store the number and is linked to a maximum range that range cannot exceed
 
-:- module(dtype, [dtype_info/3]).
+:- module(dtype, [dtype_info/5]).
 
 :- use_module(library(clpBNR)).
 :- use_module(promote_types, [numpy_promote/3]).
