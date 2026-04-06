@@ -170,8 +170,10 @@ array:M.compile(prolog, reduce(Op, Axes, Parent)) := Dict :-
 
 op_args(Array), is_dict(Array, array) ==>
    [Array].
+op_args(Atom), atom(Atom) ==>
+   [].
 op_args(Op) ==>
-   { Op =.. [_ | Args] },
+   { compound_name_arguments(Op, _, Args) },
    sequence(op_args, Args).
 
 op_expr(random_float, R, _) =>

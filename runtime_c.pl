@@ -8,6 +8,7 @@
 :- use_module(runtime_prolog, except([op_expr/3])).
 :- use_module(view, [replace_nth0/4]).
 :- use_module(dtype).
+:- use_module(library(clpBNR), []).
 
 array:M.dtype(c) := DType :-
    array:range_min_max(M.range, Min, Max),
@@ -26,8 +27,9 @@ array:M.compile(c, constant(_)) := Dict :-
    Dict = M.put(kernel, true).
 array:_M.compile(c, solve(_A, _B)) := _Dict :-
    throw(not_implemented).
-array:_M.compile(c, rand) := _Dict :-
-   throw(not_implemented).
+array:M.compile(c, rand) := Dict :-
+   type(M.dtype(), Type, _, _),
+   Dict = M.compile(c, elementwise(cast(rand(), Type) / 'RAND_MAX')).
 array:M.compile(c, contiguous(Parent)) := Dict :-
    Dict = M.compile(c, elementwise(contiguous(Parent))).
 array:M.compile(c, A<B) := Dict :-
@@ -63,6 +65,7 @@ compile_elementwise(Op, M, Dict) :-
    #(include(<>, 'stdint.h')),
    #(include(<>, 'stddef.h')),
    #(include(<>, 'stdbool.h')),
+   #(include(<>, 'stdlib.h')),
    void:Head {
       if MValidExpr {
          Body,
@@ -158,18 +161,20 @@ get_blob_data(Term, Type:Arg, Ast) :-
       'PL_get_blob'(Term, cast(&Arg, 'void**'), 'NULL', 'NULL')
    ).
 
-setup_kernel_call(M, Op, AllArgs, Index, Head, RuntimeName-Runtime) :-
+setup_kernel_call(M, Op, UniqueArgs, Index, Head, RuntimeName-Runtime) :-
    ids(M.ndim(), i, int, Index, TypeIndex),
    phrase(op_args(Op), AllArgs),
-   length(AllArgs, NArgs),
-   maplist(array:dtype, AllArgs, PrologDTypes),
+   list_to_ord_set(AllArgs, UniqueArgs),
+   length(UniqueArgs, NArgs),
+   maplist(array:dtype, UniqueArgs, PrologDTypes),
    maplist(type, PrologDTypes, DTypes, _, _),
    maplist([DType, P]>>atom_concat(DType, *, P), DTypes, Ps),
    type(M.dtype(), MDType, _, _),
    atom_concat(MDType, *, Type),
    ids(NArgs, a, Ps, Args, TypeArgs),
    append(TypeArgs, TypeIndex, TypeArgsIndex),
-   variant_sha1(M, KernelId),
+   mapsubterms_var(clpBNR:domain, M, MDomain),
+   variant_sha1(MDomain, KernelId),
    atom_concat('kernel_', KernelId, KernelName),
    Head =.. [KernelName, Type:a0 | TypeArgsIndex],
    append(Args, Index, ArgsIndex),
@@ -178,7 +183,10 @@ setup_kernel_call(M, Op, AllArgs, Index, Head, RuntimeName-Runtime) :-
    ids(NArgs, t, term_t, Terms, TypeTerms),
    RuntimeHead =.. [RuntimeName, term_t:t0 | TypeTerms],
    maplist(get_blob_data, Terms, TypeArgs, BlobAstList),
-   comma_list(BlobAsts, BlobAstList),
+   (  BlobAstList == []
+   -> BlobAsts = true
+   ;  comma_list(BlobAsts, BlobAstList)
+   ),
    get_blob_data(t0, Type:a0, BlobAst),
    loops(M.shape(), TypeIndex, Call, LoopAst),
    Runtime = (
@@ -201,7 +209,10 @@ loops_([Dim | Dims], [Type:I | Index], Head, Ast) :-
    }.
 compile_expr(M, Op, Args, Index, AST) :-
    length(Args, NArgs),
-   numlist(1, NArgs, Numbers),
+   (  NArgs == 0
+   -> Numbers = []
+   ;  numlist(1, NArgs, Numbers)
+   ),
    maplist(index_input(Index), Args, Numbers, ASTs, Values),
    foldl(mkconj, ASTs, true, BaseAST),
 
@@ -212,12 +223,14 @@ compile_expr(M, Op, Args, Index, AST) :-
    EvalAST = (DType:v0 = Expr),
    mkconj(BaseAST, EvalAST, AST).
 
-% op_expr(random_float, R, _) =>
-%    R = random_float.
 op_expr(A, R, Index), is_dict(A, array) =>
    rb_lookup(A, R, Index).
 op_expr(contiguous(A), R, Index) =>
    op_expr(A, R, Index).
+op_expr('RAND_MAX', R, _Index) =>
+   R = 'RAND_MAX'.
+op_expr(rand(), R, _Index) =>
+   R = rand().
 op_expr(A+B, R, Index) =>
    op_expr(A, A1, Index),
    op_expr(B, B1, Index),
@@ -226,6 +239,10 @@ op_expr(A*B, R, Index) =>
    op_expr(A, A1, Index),
    op_expr(B, B1, Index),
    R = (A1*B1).
+op_expr(A/B, R, Index) =>
+   op_expr(A, A1, Index),
+   op_expr(B, B1, Index),
+   R = (A1/B1).
 op_expr(A<B, R, Index) =>
    op_expr(A, A1, Index),
    op_expr(B, B1, Index),

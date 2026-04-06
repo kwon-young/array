@@ -589,9 +589,7 @@ M.realize() := M :-
 % Compilation
 % ============
 M.compile() := Dict :-
-   once(
-      Dict = M.compile(M.device, M.op)
-   ).
+   once(Dict = M.compile(M.device, M.op)).
 
 create_schedule(Arrays, Schedule) :-
    maplist(array_graph, Arrays, Graphs),
@@ -742,7 +740,10 @@ range_min_max(Number, Min, Max), number(Number) =>
    Min = Number,
    Max = Number.
 range_min_max(Range, Min, Max), clpBNR:domain(Range, Domain) =>
-   Domain =.. [_, Min, Max].
+   (  Domain == boolean
+   -> Min = 0, Max = 1
+   ;  Domain =.. [_, Min, Max]
+   ).
 
 range_dtype(Range, DType) :-
    domain(Range, Domain),
@@ -920,6 +921,13 @@ test('2d @ 1d') :-
 
 test('2d @ 2d') :-
   A = array{}.arange(9).reshape([3, 3]),
+  C @= A @ A,
+  [[ 15,  18,  21],
+   [ 42,  54,  66],
+   [ 69,  90, 111]] = C.tolist().
+
+test('2d @ 2d c') :-
+  A = array{}.arange(9, [device(c)]).reshape([3, 3]),
   C @= A @ A,
   [[ 15,  18,  21],
    [ 42,  54,  66],
