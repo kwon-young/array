@@ -9,14 +9,17 @@
 :- use_module(library(pairs)).
 :- use_module(library(dcg/high_order)).
 :- use_module(library(clpBNR), except([domain/2])).
+:- use_module(library(rbtrees)).
 :- use_module(view).
 :- use_module(dtype).
+:- use_module(minimalloc).
 
 :- multifile compile/4.
 :- multifile allocate/2.
 % :- multifile dtype/3.
 % :- multifile broadcast_dtype/3.
 :- multifile to/4.
+:- multifile dtype_size/3.
 
 :- use_module(runtime_prolog).
 :- use_module(runtime_c).
@@ -416,6 +419,18 @@ broadcast_shape_(Dim, Dim, Dim).
 M.push_op(Op) := Dict :-
    Dict = M.put([id: _Id, op: Op]).
 
+M.op_args() := Args :-
+   phrase(op_args(M.op), Args).
+
+op_args(Array), is_dict(Array, array) ==>
+   [Array].
+op_args(Atom), atomic(Atom) ==>
+   [].
+op_args(Op) ==>
+   { compound_name_arguments(Op, _, Args) },
+   sequence(op_args, Args).
+
+
 % High level Ops
 % ==============
 M.reduce(Axes, Op, KeepDim) := Dict :-
@@ -590,12 +605,14 @@ M.realize() := M :-
 % ============
 M.compile() := Dict :-
    once(Dict = M.compile(M.device, M.op)).
+   % format("~p~n", [Dict.kernel]).
 
-create_schedule(Arrays, Schedule) :-
+create_schedule(Arrays, NewSchedule) :-
    maplist(array_graph, Arrays, Graphs),
    foldl(ugraph_union, Graphs, [], Graph),
    top_sort(Graph, RSchedule),
-   reverse(RSchedule, Schedule).
+   reverse(RSchedule, Schedule),
+   allocation_scheme(Arrays, Schedule, NewSchedule).
 
 array_graph(Array, Graph) :-
    phrase(array_graph(Array), Edges),
@@ -618,6 +635,91 @@ array_graph(Parent, Op) ==>
 
 % Allocation
 % ==========
+allocation_scheme(Outputs, Schedule, NewSchedule) :-
+   maplist(get_dict(data), Outputs, OutputDatas),
+   sort(OutputDatas, UniqueOutputDatas),
+   maplist([D, (exclude-D)-_]>>true, UniqueOutputDatas, ExcludePairs),
+   ord_list_to_rbtree(ExcludePairs, T1),
+   schedule_lifetime(Schedule, T1, T2, 0),
+   apply_minimalloc(T2, Schedule, NewSchedule).
+
+apply_minimalloc(T, Schedule, NewSchedule) :-
+   rb_keys(T, Keys),
+   convlist([start-D, D]>>true, Keys, Datas),
+   maplist(make_buffer(T), Datas, DeviceBufferPairs),
+   keysort(DeviceBufferPairs, SortedBuffers),
+   group_pairs_by_key(SortedBuffers, GroupedBufferPairs),
+   foldl(apply_device_minimalloc, GroupedBufferPairs, T, T1),
+   maplist(update_schedule(T1), Schedule, NewSchedule).
+
+apply_device_minimalloc(Device-Buffers, T1, T) :-
+   minimalloc(Buffers, [heuristics([wat])]),
+   print_term(Buffers, []), nl,
+   foldl(buffer_size, Buffers, 0, BufferSize),
+   rb_insert_new(T1, Device, _Buffer-BufferSize, T2),
+   foldl(insert_offset, Buffers, T2, T).
+
+insert_offset(buffer(Buffer, _, _, _, Offset), T1, T2) :-
+   rb_insert_new(T1, offset-Buffer, Offset, T2).
+
+buffer_size(buffer(_, _, _, Size, Offset), BufferSize, MaxSize) :-
+   MaxSize is max((Size+Offset), BufferSize).
+
+M.offset(Offset, Options) := Dict :-
+   option(data(Data), Options, M.data),
+   option(datasize(DataSize), Options, M.datasize),
+   reverse(M.views, [View | Views]),
+   NewOffset is View.offset + Offset,
+   reverse([View.put(offset, NewOffset) | Views], OffsetViews),
+   Dict = M.put([data=Data, datasize=DataSize, views=OffsetViews]).
+
+update_schedule(T, Array, NewArray) :-
+   update_op(T, Array.op, NewOp),
+   update_array(T, Array.put(op, NewOp), NewArray).
+update_array(T, Array, NewArray) :-
+   (  rb_lookup(offset-Array.data, ByteOffset, T)
+   -> rb_lookup(Array.device, Buffer-BufferSize, T),
+      Size is BufferSize // Array.dtype_size(),
+      Offset is ByteOffset // Array.dtype_size(),
+      NewArray = Array.offset(Offset, [data(Buffer), datasize(Size)])
+   ;  NewArray = Array
+   ).
+
+update_op(T, Array, NewArray), is_dict(Array, array) =>
+   update_array(T, Array, NewArray).
+update_op(_, Atom, R), atomic(Atom) =>
+   R = Atom.
+update_op(T, Op, NewOp), compound_name_arguments(Op, Name, Args) =>
+   maplist(update_op(T), Args, NewArgs),
+   compound_name_arguments(NewOp, Name, NewArgs).
+
+make_buffer(T, Data, Device-buffer(Data, Start, End, Size, _)) :-
+   rb_lookup(start-Data, Device-Start-DataSize, T),
+   rb_lookup(end-Data, End, T),
+   Size is integer(ceil(DataSize / 8) * 8).
+
+schedule_lifetime([], T, T, _).
+schedule_lifetime([Array | L], T1, T, I) :-
+   I1 is I + 1,
+   Data = Array.data,
+   % exclude output data and already allocated data
+   (  (rb_lookup(exclude-Data, _, T1) ; nonvar(Data))
+   -> T3 = T1
+   ;  (  rb_insert_new(T1, start-Data, Array.device-I-Array.data_byte_size(), T2)
+      -> true
+      ;  T2 = T1
+      ),
+      rb_insert(T2, end-Data, I1, T3)
+   ),
+   foldl(insert_end(I1), Array.op_args(), T3, T4),
+   schedule_lifetime(L, T4, T, I1).
+insert_end(I, Arg, T1, T2) :-
+   Data = Arg.data,
+   (  (rb_lookup(exclude-Data, _, T1) ; nonvar(Data))
+   -> T2 = T1
+   ;  rb_insert(T1, end-Data, I, T2)
+   ).
+
 allocate_schedule(Schedule) :-
    maplist(allocate, Schedule).
 
@@ -756,6 +858,11 @@ same_dtype(Range1, Range2) :-
 
 M.dtype() := DType :-
    DType = M.dtype(M.device).
+
+M.dtype_size() := Size :-
+   Size = M.dtype_size(M.device).
+M.data_byte_size() := Size :-
+   Size is M.datasize * M.dtype_size().
 
 :- begin_tests(array_reshape).
 
