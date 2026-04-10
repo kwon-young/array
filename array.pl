@@ -976,33 +976,33 @@ test('create empty array') :-
 :- begin_tests(create_schedule).
 
 test('one array, no dependencies') :-
-    A = array{data: _, op: true, device: prolog},
+    A = array{data: _, op: true, device: prolog, datasize: 1},
     create_schedule([A], Schedule),
     Schedule == [A].
 
 test('one array, one dependency') :-
-    B = array{data: _, op: true, device: prolog},
-    A = array{data: _, op: op1(B), device: prolog},
+    B = array{data: _, op: true, device: prolog, datasize: 1},
+    A = array{data: _, op: op1(B), device: prolog, datasize: 1},
     create_schedule([A], Schedule),
     Schedule == [B, A].
 
 test('one array, chain of two dependencies') :-
-    C = array{data: _, op: true, device: prolog},
-    B = array{data: _, op: op1(C), device: prolog},
-    A = array{data: _, op: op2(B), device: prolog},
+    C = array{data: _, op: true, device: prolog, datasize: 1},
+    B = array{data: _, op: op1(C), device: prolog, datasize: 1},
+    A = array{data: _, op: op2(B), device: prolog, datasize: 1},
     create_schedule([A], Schedule),
     Schedule == [C, B, A].
 
 test('two independent arrays') :-
-    A = array{data: _, op: true, device: prolog},
-    B = array{data: _, op: true, device: prolog},
+    A = array{data: _, op: true, device: prolog, datasize: 1},
+    B = array{data: _, op: true, device: prolog, datasize: 1},
     create_schedule([A, B], Schedule),
     Schedule == [B, A].
 
 test('C = A+B') :-
-    A = array{data: _, op: true, device: prolog},
-    B = array{data: _, op: true, device: prolog},
-    C = array{data: _, op: A+B, device: prolog},
+    A = array{data: _, op: true, device: prolog, datasize: 1},
+    B = array{data: _, op: true, device: prolog, datasize: 1},
+    C = array{data: _, op: A+B, device: prolog, datasize: 1},
     create_schedule([C], Schedule),
     Schedule == [B, A, C].
 
