@@ -5,9 +5,22 @@
 :- use_module(library(egraph)).
 
 % Operator fusion: fuse elementwise multiplication into reduce to prevent intermediate allocations
-egraph:rewrite(operator_fusion, 
-               array{data:D, datasize:DS, device:Dev, dtype:DT, id:ID, op:reduce(Op, Axes, array{data:D2, datasize:DS2, device:Dev2, dtype:DT2, id:ID2, op:A * B, precision:P2, range:R2, views:V2}), precision:P, range:R, views:V}, 
-               array{data:D, datasize:DS, device:Dev, dtype:DT, id:ID, op:reduce(Op, Axes, A * B), precision:P, range:R, views:V}).
+egraph:rewrite(
+    operator_fusion, 
+    array{
+        data:D, datasize:DS, device:Dev, dtype:DT, id:ID, precision:P, range:R, views:V,
+        op: reduce(Op, Axes,
+            array{
+                data:_, datasize:_, device:_, dtype:_, id:_, precision:_, range:_, views:_,
+                op:A * B
+            }
+        )
+    }, 
+    array{
+        data:D, datasize:DS, device:Dev, dtype:DT, id:ID, precision:P, range:R, views:V,
+        op:reduce(Op, Axes, A * B)
+    }
+).
 
 :- begin_tests(optim).
 
@@ -17,13 +30,15 @@ test('operator_fusion multiplication') :-
     A = array{}.rand([3, 3]),
     B @= A @ A,
     
-    phrase((
-        egraph:add_term(B, Extracted),
-        egraph:saturate([operator_fusion]),
-        egraph:extract
-    ), [], _),
+    once(phrase((
+        add_term(B, Extracted),
+        saturate([operator_fusion]),
+        extract
+    ), [], _)),
     
-    Extracted.op = view(R),
-    R.op = reduce(+, [2], _ * _).
+    % print_term(B, []), nl,
+    array{op: view(R)} :< Extracted,
+    print_term(R, []), nl,
+    array{op: reduce(+, [2], _*_)} :< R.
 
 :- end_tests(optim).
