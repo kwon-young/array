@@ -3,22 +3,23 @@
 ]).
 
 :- use_module(library(egraph)).
+:- use_module(library(macros)).
+
+#define(#(Dict), Full) :-
+    is_dict(Dict, array),
+    Full = array{data:_, datasize:_, device:_, dtype:_, id:_, op:_, precision:_, range:_, views:_},
+    Full >:< Dict.
 
 % Operator fusion: fuse elementwise multiplication into reduce to prevent intermediate allocations
 egraph:rewrite(
     operator_fusion, 
-    array{
+    #array{
         data:D, datasize:DS, device:Dev, dtype:DT, id:ID, precision:P, range:R, views:V,
-        op: reduce(Op, Axes,
-            array{
-                data:_, datasize:_, device:_, dtype:_, id:_, precision:_, range:_, views:_,
-                op:A * B
-            }
-        )
+        op: reduce(Op, Axes, #array{op: A * B})
     }, 
-    array{
+    #array{
         data:D, datasize:DS, device:Dev, dtype:DT, id:ID, precision:P, range:R, views:V,
-        op:reduce(Op, Axes, A * B)
+        op: reduce(Op, Axes, A * B)
     }
 ).
 
