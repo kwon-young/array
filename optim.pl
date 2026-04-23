@@ -61,6 +61,36 @@ egraph:analyze(is_elementwise, #array{op: '$NODE'(Op)}, [elementwise(Op)]) :-
     array{op: #array{op: Op} < A}, [elementwise(Op)],
     array{op: Op<A}, []
 ).
+#rewrite(
+    operator_fusion_float,
+    array{op: float(#array{op: Op})}, [elementwise(Op)],
+    array{op: float(Op)}, []
+).
+#rewrite(
+    operator_fusion_integer,
+    array{op: integer(#array{op: Op})}, [elementwise(Op)],
+    array{op: integer(Op)}, []
+).
+#rewrite(
+    operator_fusion_sin,
+    array{op: sin(#array{op: Op})}, [elementwise(Op)],
+    array{op: sin(Op)}, []
+).
+#rewrite(
+    operator_fusion_log,
+    array{op: log(#array{op: Op})}, [elementwise(Op)],
+    array{op: log(Op)}, []
+).
+#rewrite(
+    operator_fusion_sqrt,
+    array{op: sqrt(#array{op: Op})}, [elementwise(Op)],
+    array{op: sqrt(Op)}, []
+).
+#rewrite(
+    operator_fusion_contiguous,
+    array{op: contiguous(#array{op: Op})}, [elementwise(Op)],
+    array{op: contiguous(Op)}, []
+).
 
 #rewrite(comm_add, array{op: A+B}, array{op: B+A}).
 #rewrite(assoc_add, array{op: (A+B)+C}, array{op: A+(B+C)}).
