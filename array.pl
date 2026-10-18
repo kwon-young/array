@@ -536,20 +536,24 @@ eval_(sqrt(A), C) =>
    eval_(A, A1),
    push(sqrt(A1), C).
 eval_(A @ B, C) =>
-   eval_(A, A1),
-   eval_(B, B1),
-   Dim1 = A1.ndim(),
-   Dim2 = B1.ndim0(),
-   (  A1.ndim() > 1, B1.ndim() > 1
-   -> nth1(Dim1, Shape1, 1, A1.shape()),
-      nth1(Dim2, Shape2, 1, B1.shape())
-   ;  Shape1 = A1.shape(),
-      Shape2 = B1.shape()
-   ),
-   A3 = A1.reshape(Shape1),
-   B2 = B1.reshape(Shape2), B3 = B2.swapaxes(B2.ndim0(), Dim2),
-   eval_(A3 * B3, C1),
-   C = C1.sum([C1.ndim0()]).
+    eval_(A, A1),
+    eval_(B, B1),
+    (  A1.ndim() > 1, B1.ndim() > 1
+    -> nth1(A1.ndim(), Shape1, 1, A1.shape()),
+       nth1(B1.ndim0(), Shape2, 1, B1.shape()),
+       SwapAxis = B1.ndim0()
+    ;  A1.ndim() == 1, B1.ndim() > 1
+    -> SwapAxis is B1.ndim() - 2,
+       Shape1 = A1.shape(),
+       Shape2 = B1.shape()
+    ;  SwapAxis = 0,
+       Shape1 = A1.shape(),
+       Shape2 = B1.shape()
+    ),
+    A3 = A1.reshape(Shape1),
+    B2 = B1.reshape(Shape2), B3 = B2.swapaxes(B2.ndim0(), SwapAxis),
+    eval_(A3 * B3, C1),
+    C = C1.sum([C1.ndim0()]).
 eval_(solve(A, B), X) =>
    eval_(A, A1),
    eval_(B, B1),
@@ -1001,6 +1005,25 @@ test('2d @ 1d') :-
   B = array{}.fromlist([5,6]),
   C @= A @ B,
   C.tolist() == [17, 39].
+
+test('1d @ 1d') :-
+  A = array{}.fromlist([1,2]),
+  B = array{}.fromlist([3,4]),
+  C @= A @ B,
+  C.tolist() == 11.
+
+test('1d @ 2d') :-
+  A = array{}.fromlist([1,2]),
+  B = array{}.fromlist([[3,4],[5,6]]),
+  C @= A @ B,
+  C.tolist() == [13, 16].
+
+test('1d @ 3d') :-
+  A = array{}.fromlist([1,2]),
+  B = array{}.fromlist([[[1,2],[3,4]],[[5,6],[7,8]]]),
+  C @= A @ B,
+  C.tolist() == [[7,10],[19,22]].
+
 
 test('2d @ 2d') :-
   A = array{}.arange(9).reshape([3, 3]),
