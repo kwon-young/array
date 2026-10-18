@@ -501,17 +501,23 @@ eval_(A<B, C) =>
    push(A1<B1, C).
 eval_(A>B, C) =>
    eval_(B<A, C).
+% Derived comparisons only ever hold 0 or 1, but interval arithmetic on their
+% sub-expressions cannot see that, e.g. (A<B)+(A>B) gets the range [0, 2].
 eval_(A=<B, C) =>
    eval_(-(A>B) + 1, C1),
+   C1.range::real(0, 1),
    C = C1.put(dtype, boolean).
 eval_(A>=B, C) =>
    eval_(-(A<B) + 1, C1),
+   C1.range::real(0, 1),
    C = C1.put(dtype, boolean).
 eval_(A=\=B, C) =>
    eval_((A<B)+(A>B), C1),
+   C1.range::real(0, 1),
    C = C1.put(dtype, boolean).
 eval_(A=:=B, C) =>
    eval_(-(A=\=B)+1, C1),
+   C1.range::real(0, 1),
    C = C1.put(dtype, boolean).
 eval_(A+B, C) =>
    eval_(A, A1),
