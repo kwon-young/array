@@ -8,7 +8,7 @@
 :- use_module(library(clpfd), except([transpose/2, sum/3])).
 :- use_module(library(pairs)).
 :- use_module(library(dcg/high_order)).
-:- use_module(library(clpBNR), except([domain/2])).
+:- use_module(library(clpBNR)).
 :- use_module(library(rbtrees)).
 :- use_module(view).
 :- use_module(dtype).
@@ -37,13 +37,6 @@ sync_clpfd_clpBNR(Var) :-
    ),
    Var::integer(Min, Max).
 
-domain(0, R) => R = boolean(0, 0).
-domain(1, R) => R = boolean(1, 1).
-domain(Integer, R), integer(Integer) => R = integer(Integer, Integer).
-domain(Float, R), float(Float) => R = real(Float, Float).
-domain(Boolean, R), clpBNR:domain(Boolean, boolean) => R = boolean(0, 1).
-domain(Integer, R), clpBNR:domain(Integer, Domain) => R = Domain.
-   
 % Creation
 % ========
 M.default() := Dict :-
@@ -88,7 +81,7 @@ M.fromlist(List, Options) := Dict :-
    select_option(dtype(DType), Options1, RestOptions, ListDType),
    min_list(Flat, Min),
    max_list(Flat, Max),
-   dtype_min_max_range(ListDType, Min, Max, Range),
+   Range::real(Min, Max),
    compound_name_arguments(Data, data, Flat),
    M1 = M.empty(Shape, [device(prolog), range(Range), dtype(ListDType), data(Data) | RestOptions]),
    Dict = M1.to(Device).as(DType).
@@ -128,7 +121,7 @@ M.arange(Start, Stop, Step, Options) := Dict :-
    End is Start + (N - 1) * Step,
    Min is min(Start, End),
    Max is max(Start, End),
-   dtype_min_max_range(M2.dtype, Min, Max, Range),
+   Range::real(Min, Max),
    Dict = M2.put(range, Range).
 
 M.eye(N) := Dict :-
@@ -200,8 +193,7 @@ M.pad(Padding, Options) := Dict :-
    -> Mask_ = M.ones(M.shape()),
       Mask @= 1 - Mask_.replace_view(Mask_.view().pad(Padding)),
       Dict @= M1 + Mask*Value
-   ;  dtype_min_max_range(M1.dtype, -inf, inf, Range),
-      B::boolean,
+   ;  B::boolean,
       { Range is M.range * B + 0 * (1 - B) },
       Dict = M1.put([range(Range)])
    ).
@@ -314,7 +306,6 @@ push(reduce(Op, Axes), M, Dict) :-
       N #= Size1 // Size2,
       sync_clpfd_clpBNR(N),
       broadcast_dtype(M.dtype, integer, DType),
-      dtype_min_max_range(DType, -inf, inf, Range),
       (  Op == (+)
       -> { Range == M.range * N }
       )
@@ -352,8 +343,8 @@ push(elementwise(Op, Args), C) :-
    -> FinalDType = float
    ;  Op == integer
    -> FinalDType = integer
-   ;  maplist(get_dict(dtype), Args, [DType | DTypes]),
-      foldl(broadcast_dtype, DTypes, DType, FinalDType)
+   ;  maplist(get_dict(dtype), Args, DTypes),
+      foldl(broadcast_dtype, DTypes, integer, FinalDType)
    ),
    maplist(get_dict(range), Args, Ranges),
    (  (Op == float ; Op == integer)
@@ -361,9 +352,8 @@ push(elementwise(Op, Args), C) :-
       range_min_max(M.range, Min, Max),
       cast(FinalDType, Min, Min1),
       cast(FinalDType, Max, Max1),
-      dtype_min_max_range(FinalDType, Min1, Max1, Range)
+      Range::real(Min1, Max1)
    ;  Expr =.. [Op | Ranges],
-      dtype_min_max_range(FinalDType, -inf, inf, Range),
       {Range is Expr}
    ),
    convlist(get_dict(precision), Args, Precisions),
@@ -491,7 +481,8 @@ M.to(Device) := Dict :-
    ).
 
 M.as(DType) := Dict :-
-   (  DType == M.dtype
+   MDType = M.dtype,
+   (  DType == MDType
    -> Dict = M
    ;  DType == boolean
    -> Dict @= (M =\= 0)
@@ -510,16 +501,16 @@ eval_(A>B, C) =>
    eval_(B<A, C).
 eval_(A=<B, C) =>
    eval_(-(A>B) + 1, C1),
-   C = C1.as(boolean).
+   C = C1.put(dtype, boolean).
 eval_(A>=B, C) =>
    eval_(-(A<B) + 1, C1),
-   C = C1.as(boolean).
+   C = C1.put(dtype, boolean).
 eval_(A=\=B, C) =>
    eval_((A<B)+(A>B), C1),
-   C = C1.as(boolean).
+   C = C1.put(dtype, boolean).
 eval_(A=:=B, C) =>
    eval_(-(A=\=B)+1, C1),
-   C = C1.as(boolean).
+   C = C1.put(dtype, boolean).
 eval_(A+B, C) =>
    eval_(A, A1),
    eval_(B, B1),
@@ -827,17 +818,6 @@ cast(DType, Value, Result) =>
    Expr =.. [DType, Value],
    Result is Expr.
 
-dtype_min_max_range(DType, Min, Max, Range) :-
-   (  DType == boolean, Min == Max
-   -> Range = Min
-   ;  ( DType == float
-      -> F = real
-      ;  F = DType
-      ),
-      Domain =.. [F, Min, Max],
-      Range::Domain
-   ).
-
 range_min_max(Number, Min, Max), number(Number) =>
    Min = Number,
    Max = Number.
@@ -846,15 +826,6 @@ range_min_max(Range, Min, Max), clpBNR:domain(Range, Domain) =>
    -> Min = 0, Max = 1
    ;  Domain =.. [_, Min, Max]
    ).
-
-range_dtype(Range, DType) :-
-   domain(Range, Domain),
-   Domain =.. [DType | _].
-
-same_dtype(Range1, Range2) :-
-   range_dtype(Range1, DType),
-   Domain =.. [DType, -inf, inf],
-   Range2::Domain.
 
 M.dtype() := DType :-
    DType = M.dtype(M.device).
