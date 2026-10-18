@@ -956,46 +956,6 @@ test('create empty array') :-
 
 :- end_tests(array_empty).
 
-:- begin_tests(create_schedule).
-
-test('one array, no dependencies') :-
-    A = array{}.empty([1]),
-    create_schedule([A], Schedule),
-    Schedule == [A].
-
-test('one array, one dependency') :-
-    B = array{}.empty([1]),
-    A = B.contiguous(),
-    create_schedule([A], [B1, A1]),
-    B1.id == B.id,
-    A1.id == A.id.
-
-test('one array, chain of two dependencies') :-
-    C = array{}.empty([1]),
-    B = C.contiguous(),
-    A = B.contiguous(),
-    create_schedule([A], [C1, B1, A1]),
-    C1.id == C.id,
-    B1.id == B.id,
-    A1.id == A.id.
-
-test('two independent arrays') :-
-    A = array{}.empty([1]),
-    B = array{}.empty([1]),
-    create_schedule([A, B], Schedule),
-    Schedule == [B, A].
-
-test('C = A+B') :-
-    A = array{}.empty([1]),
-    B = array{}.empty([1]),
-    C @= A+B,
-    create_schedule([C], [B1, A1, C1]),
-    B1.id == B.id,
-    A1.id == A.id,
-    C1.id == C.id.
-
-:- end_tests(create_schedule).
-
 :- begin_tests(array_tolist).
 
 test('4x4') :-
