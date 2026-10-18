@@ -17,6 +17,8 @@ array:M.dtype(c) := DType :-
    ;  Options = []
    ),
    once(dtype_info(DType, M.dtype, Min, Max, Options)).
+array:M.dtype_size(c) := Size :-
+   buffer_type_size(M.dtype(), Size).
 
 % Compiles the operation for the given Array on the 'c' device.
 array:M.compile(c, true) := Dict :-
@@ -278,7 +280,7 @@ index_input(Index, Arg, ArgN, AST, V) :-
 
 % Allocates the physical memory or underlying data storage for Array on the 'c' device.
 array:allocate(c, M) :-
-    buffer_alloc(M.data, M.dtype(), M.size(), true).
+    buffer_alloc(M.data, M.dtype(), M.datasize, true).
 
 % Defines the type promotion rules on the 'c' device.
 % array:broadcast_dtype(c, int64, int64).

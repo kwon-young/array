@@ -31,6 +31,9 @@
  *   safely broadcast/promoted to `DType2` on the given `Device`.
  */
 
+array:_M.dtype_size(prolog) := 1 :-
+   true.
+
 setup_kernel_call(M, Args, Index, ModuleHead, Dict) :-
    mapsubterms_var(domain, M, MDomain),
    variant_sha1(MDomain, KernelId),

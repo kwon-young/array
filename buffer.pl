@@ -2,10 +2,14 @@
    buffer_alloc/4,
    buffer_offset/5,
    buffer_from_data/4,
-   buffer_to_data/4
+   buffer_to_data/4,
+   buffer_type_size/2
 ]).
 
 :- use_foreign_library('buffer.so').
+
+buffer_type_size(Type, TypeSize) :-
+   c_buffer_type_size(Type, TypeSize).
 
 buffer_alloc(Buffer, Type, Size, Zero) :-
    c_buffer_type_size(Type, TypeSize),
