@@ -13,6 +13,8 @@
 :- use_module(view).
 :- use_module(dtype).
 :- use_module(minimalloc).
+% :- use_module(optim).
+:- use_module(library(egraph)).
 
 :- multifile compile/4.
 :- multifile allocate/2.
@@ -591,7 +593,13 @@ M.is_contiguous() := Res :-
 
 M.realize() := M :-
    % TODO: optimization
-   create_schedule([M], Schedule),  % toposort of graph
+   % once(phrase((
+   %    add_term(M, Id),
+   %    saturate([optim:operator_fusion]),
+   %    extract(Id, M1)
+   % ), [], _)),
+   M1 = M,
+   create_schedule([M1], Schedule),  % toposort of graph
    maplist(compile, Schedule, CompiledSchedule), % generate device specific code 
    allocate_schedule(Schedule),
    run_schedule(CompiledSchedule).
