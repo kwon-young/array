@@ -47,9 +47,16 @@ array:M.compile(c, log(A)) := Dict :-
 array:M.compile(c, sqrt(A)) := Dict :-
    Dict = M.compile(c, elementwise(sqrt(A))).
 array:M.compile(c, float(A)) := Dict :-
-   Dict = M.compile(c, elementwise(cast(A, M.dtype()))).
+   type(M.dtype(), Type, _, _),
+   Dict = M.compile(c, elementwise(cast(A, Type))).
 array:M.compile(c, integer(A)) := Dict :-
-   Dict = M.compile(c, elementwise(cast(A, M.dtype()))).
+   type(M.dtype(), Type, _, _),
+   % round like Prolog integer/1 instead of truncating like a C cast
+   (  A.dtype == float
+   -> Expr = cast(round(A), Type)
+   ;  Expr = cast(A, Type)
+   ),
+   Dict = M.compile(c, elementwise(Expr)).
 array:M.compile(c, elementwise(Op)) := Dict :-
    compile_elementwise(Op, M, Dict).
 array:M.compile(c, reduce(Op, Axes, Parent)) := Dict :-
@@ -68,6 +75,7 @@ compile_elementwise(Op, M, Dict) :-
    #(include(<>, 'stddef.h')),
    #(include(<>, 'stdbool.h')),
    #(include(<>, 'stdlib.h')),
+   #(include(<>, 'math.h')),
    void:Head {
       if MValidExpr {
          Body,
@@ -258,6 +266,9 @@ op_expr(log(A), R, Index) =>
 op_expr(sqrt(A), R, Index) =>
    op_expr(A, A1, Index),
    R = sqrt(A1).
+op_expr(round(A), R, Index) =>
+   op_expr(A, A1, Index),
+   R = round(A1).
 op_expr(cast(A, Type), R, Index) =>
    op_expr(A, A1, Index),
    R = cast(A1, Type).
