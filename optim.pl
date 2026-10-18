@@ -5,7 +5,7 @@
 :- use_module(library(egraph)).
 :- use_module(library(macros)).
 
-#define(array{op: Op}, array{data:_, datasize:_, device:_, dtype:_, id:_, precision:_, range:_, views:_, op:Op}).
+#define(array{op: Op}, array{data:_, datasize:_, device:_, dtype:_, format:_, id:_, precision:_, range:_, views:_, op:Op}).
 #define(
     rewrite(Name, array{op: Left}, array{op: Right}),
     rewrite(Name, array{op: Left}, [], array{op: Right}, [])
@@ -15,13 +15,13 @@
     egraph:rewrite(
         Name,
         array{
-            data:D, datasize:DS, device:Dev, dtype:DT, id:ID, precision:P, range:R,
-            views:V, op: Left
+            data:D, datasize:DS, device:Dev, dtype:DT, format:F, id:ID, precision:P,
+            range:R, views:V, op: Left
         },
         LeftOptions,
         array{
-            data:D, datasize:DS, device:Dev, dtype:DT, id:ID, precision:P, range:R,
-            views:V, op: Right
+            data:D, datasize:DS, device:Dev, dtype:DT, format:F, id:ID, precision:P,
+            range:R, views:V, op: Right
         },
         RightOptions
     )

@@ -16,10 +16,9 @@
 %   * float are clpBNR real
 % * size is a clpBNR integer, is the number of bits that will store the number and is linked to a maximum range that range cannot exceed
 
-:- module(dtype, [dtype_info/5]).
+:- module(dtype, [dtype_info/5, unit_roundoff/2]).
 
 :- use_module(library(clpBNR)).
-:- use_module(promote_types, [numpy_promote/3]).
 
 integer_size(Size) :-
    N::integer(3, 6),
@@ -32,12 +31,6 @@ signed_integer_range_size(Min-Max, Size) :-
    }.
 unsigned_integer_range_size(0-Max, Size) :-
    { Max is 2^Size - 1 }.
-
-is_domain(Range, Domain) :-
-   (  domain(Range, Domain)
-   -> true
-   ;  instantiation_error(Range::Domain)
-   ).
 
 dtype_info(bool, boolean, Min, Max, _Options) :-
    type_info(boolean, Min, Max, []).
@@ -59,30 +52,24 @@ dtype_info(int32, integer, Min, Max, _Options) :-
 dtype_info(int64, integer, Min, Max, _Options) :-
    type_info(integer, Min, Max, [size(64), signed(1)]).
 
-dtype_info(float8_e4m3, float, Min, Max, Options) :-
-   option(precision(Precision), Options, _),
-   type_info(float, Min, Max, [size(8), precision(Precision), exponent(4),
-                              mantissa(3), infinity(0)]).
-dtype_info(float8_e5m2, float, Min, Max, Options) :-
-   option(precision(Precision), Options, _),
-   type_info(float, Min, Max, [size(8), precision(Precision), exponent(5),
-                              mantissa(2), infinity(1)]).
-dtype_info(bfloat16, float, Min, Max, Options) :-
-   option(precision(Precision), Options, _),
-   type_info(float, Min, Max, [size(16), precision(Precision), exponent(8),
-                              mantissa(7), infinity(1)]).
-dtype_info(float16, float, Min, Max, Options) :-
-   option(precision(Precision), Options, _),
-   type_info(float, Min, Max, [size(16), precision(Precision), exponent(5),
-                              mantissa(10), infinity(1)]).
-dtype_info(float32, float, Min, Max, Options) :-
-   option(precision(Precision), Options, _),
-   type_info(float, Min, Max, [size(32), precision(Precision), exponent(8),
-                              mantissa(23), infinity(1)]).
-dtype_info(float64, float, Min, Max, Options) :-
-   option(precision(Precision), Options, _),
-   type_info(float, Min, Max, [size(64), precision(Precision), exponent(11),
-                              mantissa(52), infinity(1)]).
+dtype_info(DType, float, Min, Max, _Options) :-
+   float_layout(DType, Size, Exponent, Mantissa, Infinity),
+   type_info(float, Min, Max, [size(Size), exponent(Exponent),
+                              mantissa(Mantissa), infinity(Infinity)]).
+
+% float_layout(DType, Size, Exponent, Mantissa, Infinity), smallest first
+float_layout(float8_e4m3, 8, 4, 3, 0).
+float_layout(float8_e5m2, 8, 5, 2, 1).
+float_layout(bfloat16, 16, 8, 7, 1).
+float_layout(float16, 16, 5, 10, 1).
+float_layout(float32, 32, 8, 23, 1).
+float_layout(float64, 64, 11, 52, 1).
+
+% Largest relative error of rounding a real number to nearest in DType.
+unit_roundoff(DType, U), float_layout(DType, _, _, Mantissa, _) =>
+   U is 2^(-(Mantissa + 1)).
+unit_roundoff(_, U) =>
+   U = 0.
 type_info(boolean, RMin, RMax, _) :-
    [RMin, RMax]::boolean,
    { 0 =< RMin, RMax =< 1 }.
@@ -100,13 +87,11 @@ type_info(integer, RMin, RMax, Options) :-
       Min =< RMin, RMax =< Max
    }.
 type_info(float, RMin, RMax, Options) :-
-   option(precision(Precision), Options, _),
    option(size(Size), Options, _),
    option(exponent(E), Options, _),
    option(mantissa(M), Options, _),
    option(emax(EMax), Options, _),
    option(infinity(Infinity), Options, _),
-   Precision::real(0, inf),
    Infinity::boolean,
    Size::integer(8, 64),
    E::integer(4, 15),
@@ -118,15 +103,5 @@ type_info(float, RMin, RMax, Options) :-
       EMax is 2^(E - 1) - Infinity,
       Max is (2 - 2^(-M + 1 - Infinity)) * 2^EMax,
       Min is -Max,
-      Min =< RMin, RMax =< Max,
-      MaxRange is max(abs(RMin), abs(RMax)),
-      MaxRange * 2^(-M) =< Precision, Precision =< Max * 2^(-M)
+      Min =< RMin, RMax =< Max
    }.
-
-type_min_max_range(boolean, Min, Max, Range) :-
-   Range::boolean,
-   { Min =< Range, Range =< Max }.
-type_min_max_range(integer, Min, Max, Range) :-
-   Range::integer(Min, Max).
-type_min_max_range(float, Min, Max, Range) :-
-   Range::real(Min, Max).

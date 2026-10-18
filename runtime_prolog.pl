@@ -34,6 +34,15 @@
 array:_M.dtype_size(prolog) := 1 :-
    true.
 
+% Prolog floats are doubles; integers and booleans are exact.
+array:default_format(prolog, M, Format) :-
+   prolog_format(M.dtype, Format).
+
+prolog_format(float, Format) =>
+   Format = float64.
+prolog_format(Kind, Format) =>
+   Format = Kind.
+
 setup_kernel_call(M, Args, Index, ModuleHead, Dict) :-
    mapsubterms_var(domain, M, MDomain),
    variant_sha1(MDomain, KernelId),

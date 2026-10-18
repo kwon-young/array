@@ -22,6 +22,7 @@
 % :- multifile broadcast_dtype/3.
 :- multifile to/4.
 :- multifile dtype_size/3.
+:- multifile default_format/3.
 
 :- use_module(runtime_prolog).
 :- use_module(runtime_c).
@@ -51,13 +52,14 @@ M.default(Options) := Dict :-
    option(range(Range), Merged, _),
    option(device(Device), Merged, prolog),
    option(data(Data), Options, _),
+   option(format(Format), Options, _),
    (  option(shape(Shape), Merged)
    -> View = view{}.from_shape(Shape),
       DataSize = View.size(),
       Views = [View]
    ;  Views = []
    ),
-   M1 = array{id: _, views: Views, device:Device, data: Data,
+   M1 = array{id: _, views: Views, device:Device, data: Data, format: Format,
                 datasize: DataSize, op: true, range: Range, dtype: DType},
    (  DType == float
    -> option(precision(Precision), Merged, 1e-5),
@@ -617,11 +619,16 @@ M.compile() := Dict :-
    % format("~p~n", [Dict.kernel]).
 
 create_schedule(Arrays, NewSchedule) :-
+   graph_schedule(Arrays, Schedule),
+   % pool offsets need each array's dtype size
+   maplist(bind_default_format, Schedule),
+   allocation_scheme(Arrays, Schedule, NewSchedule).
+
+graph_schedule(Arrays, Schedule) :-
    maplist(array_graph, Arrays, Graphs),
    foldl(ugraph_union, Graphs, [], Graph),
    top_sort(Graph, RSchedule),
-   reverse(RSchedule, Schedule),
-   allocation_scheme(Arrays, Schedule, NewSchedule).
+   reverse(RSchedule, Schedule).
 
 array_graph(Array, Graph) :-
    phrase(array_graph(Array), Edges),
@@ -845,8 +852,21 @@ range_min_max(Range, Min, Max), clpBNR:domain(Range, Domain) =>
    ;  Domain =.. [_, Min, Max]
    ).
 
+% The hardware dtype, bound once when the array gets a buffer.
 M.dtype() := DType :-
-   DType = M.dtype(M.device).
+   get_dict(format, M, Format),
+   format_dtype(Format, DType).
+
+format_dtype(Format, DType), atom(Format) =>
+   DType = Format.
+format_dtype(Format, _) =>
+   instantiation_error(Format).
+
+bind_default_format(M), get_dict(format, M, Format), nonvar(Format) =>
+   true.
+bind_default_format(M) =>
+   default_format(M.device, M, Format),
+   M.format = Format.
 
 M.dtype_size() := Size :-
    Size = M.dtype_size(M.device).
@@ -1106,5 +1126,23 @@ test('log reaching zero') :-
     A = array{}.fromlist([0.0, 1.0], [device(c)]),
     C @= log(A),
     C.tolist() == [-1.0Inf, 0.0].
+
+test('floats default to float64') :-
+    A = array{}.fromlist([1.5, 2.5], [device(c)]),
+    C @= A * A,
+    C.tolist() == [2.25, 6.25],
+    A.dtype() == float64,
+    C.dtype() == float64.
+
+test('realized format survives a narrowed range') :-
+    A = array{}.fromlist([0, 100], [device(c)]),
+    B = array{}.fromlist([200, 0], [device(c)]),
+    X @= A + B,
+    X1 = X.realize(),
+    X1.dtype() == uint16,
+    array{range: R} :< X1,
+    R::real(0, 200),
+    X1.dtype() == uint16,
+    X1.tolist() == [200, 100].
 
 :- end_tests(c_dtype).

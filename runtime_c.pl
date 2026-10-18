@@ -10,11 +10,11 @@
 :- use_module(dtype).
 :- use_module(library(clpBNR), []).
 
-array:M.dtype(c) := DType :-
+% Floats default to float64; integers and booleans take the smallest dtype
+% holding their range.
+array:default_format(c, M, Format) :-
    array:range_min_max(M.range, Min, Max),
-   convlist(get_dict(precision), [M], Precisions),
-   precision_options(Precisions, Options),
-   c_dtype(M.dtype, Min, Max, Options, DType).
+   c_default_format(M.dtype, Min, Max, Format).
 array:M.dtype_size(c) := Size :-
    buffer_type_size(M.dtype(), Size).
 
@@ -258,36 +258,42 @@ same_compute_type(Arrays, Args, Types) :-
 compute_dtype(Arrays, DType) :-
    maplist(get_dict(dtype), Arrays, Kinds),
    foldl(array:broadcast_dtype, Kinds, boolean, Kind),
+   compute_dtype(Kind, Arrays, DType).
+
+% Floats compute in the widest float format among the arrays.
+compute_dtype(float, Arrays, DType) =>
+   include([A]>>get_dict(dtype, A, float), Arrays, Floats),
+   maplist(array:dtype, Floats, Formats),
+   maplist(buffer_type_size, Formats, Sizes),
+   pairs_keys_values(Pairs, Sizes, Formats),
+   max_member(_-DType, Pairs).
+compute_dtype(Kind, Arrays, DType) =>
    maplist(get_dict(range), Arrays, Ranges),
    maplist(array:range_min_max, Ranges, Mins, Maxs),
    min_list(Mins, Min),
    max_list(Maxs, Max),
-   convlist(get_dict(precision), Arrays, Precisions),
-   precision_options(Precisions, Options),
-   c_dtype(Kind, Min, Max, Options, DType).
+   c_dtype(Kind, Min, Max, DType).
+
+c_default_format(float, _Min, _Max, Format) =>
+   Format = float64.
+c_default_format(Kind, Min, Max, Format) =>
+   c_dtype(Kind, Min, Max, Format).
 
 % An unbounded range only says that the values are unknown, so no dtype can be
 % proven to hold them: fall back to the default dtype of the kind instead.
-c_dtype(Kind, Min, Max, _Options, DType), unbounded(Min, Max) =>
+c_dtype(Kind, Min, Max, DType), unbounded(Min, Max) =>
    default_dtype(Kind, DType).
-c_dtype(Kind, Min, Max, Options, DType),
-      once(dtype_info(DType0, Kind, Min, Max, Options)) =>
+c_dtype(Kind, Min, Max, DType),
+      once(dtype_info(DType0, Kind, Min, Max, [])) =>
    DType = DType0.
-c_dtype(Kind, Min, Max, Options, _DType) =>
-   existence_error(c_dtype, dtype(Kind, Min, Max, Options)).
+c_dtype(Kind, Min, Max, _DType) =>
+   existence_error(c_dtype, dtype(Kind, Min, Max)).
 
 unbounded(-1.0Inf, _).
 unbounded(_, 1.0Inf).
 
 default_dtype(boolean, bool).
 default_dtype(integer, int64).
-default_dtype(float, float32).
-
-precision_options([], Options) =>
-   Options = [].
-precision_options(Precisions, Options) =>
-   min_list(Precisions, Precision),
-   Options = [precision(Precision)].
 
 op_expr(A, R, Index), is_dict(A, array) =>
    rb_lookup(A, R, Index).
@@ -359,6 +365,7 @@ array:M.to(c, prolog) := Dict :-
 array:M.to(prolog, c) := Dict :-
    M1 = M.contiguous().realize(),
    Dict = M.empty(M1.shape(), [device=c, data(Data)]),
+   array:bind_default_format(Dict),
    buffer_from_data(Data, Dict.dtype(), M1.datasize, M1.data).
 
 c_identity(int8, -inf, 'INT8_MIN').
