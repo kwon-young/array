@@ -51,11 +51,7 @@ array:M.compile(c, float(A)) := Dict :-
    Dict = M.compile(c, elementwise(cast(A, Type))).
 array:M.compile(c, integer(A)) := Dict :-
    type(M.dtype(), Type, _, _),
-   % round like Prolog integer/1 instead of truncating like a C cast
-   (  A.dtype == float
-   -> Expr = cast(round(A), Type)
-   ;  Expr = cast(A, Type)
-   ),
+   integer_cast(A, Type, Expr),
    Dict = M.compile(c, elementwise(Expr)).
 array:M.compile(c, elementwise(Op)) := Dict :-
    compile_elementwise(Op, M, Dict).
@@ -223,7 +219,9 @@ compile_expr(M, Op, Args, Index, AST) :-
    -> Numbers = []
    ;  numlist(1, NArgs, Numbers)
    ),
-   maplist(index_input(Index), Args, Numbers, ASTs, Values),
+   load_types(M, Op, Args, LoadTypes),
+   pairs_keys_values(ArgTypes, Args, LoadTypes),
+   maplist(index_input(Index), ArgTypes, Numbers, ASTs, Values),
    foldl(mkconj, ASTs, true, BaseAST),
 
    pairs_keys_values(PairsForRbtree, Args, Values),
@@ -232,6 +230,49 @@ compile_expr(M, Op, Args, Index, AST) :-
    type(M.dtype(), DType, _, _),
    EvalAST = (DType:v0 = Expr),
    mkconj(BaseAST, EvalAST, AST).
+
+% Round like Prolog integer/1 instead of truncating like a C cast.
+integer_cast(A, Type, Expr), get_dict(dtype, A, float) =>
+   Expr = cast(round(A), Type).
+integer_cast(A, Type, Expr) =>
+   Expr = cast(A, Type).
+
+% C evaluates an operation in the type of its operands, so loading each input
+% in its own type makes e.g. uint32 * uint32 wrap before being stored as
+% uint64, or compares uint32 < int8 as unsigned.
+% Instead, load every input in the smallest type that holds all inputs and,
+% for arithmetic, the result too.
+% A cast must see its input unchanged, so it keeps the input's own type.
+load_types(_M, cast(_, _), Args, Types) =>
+   maplist(array:dtype, Args, DTypes),
+   maplist(type, DTypes, Types, _, _).
+load_types(_M, _<_, Args, Types) =>
+   same_compute_type(Args, Args, Types).
+load_types(M, _Op, Args, Types) =>
+   same_compute_type([M | Args], Args, Types).
+
+same_compute_type(Arrays, Args, Types) :-
+   compute_dtype(Arrays, DType),
+   type(DType, Type, _, _),
+   same_length(Args, Types),
+   maplist(=(Type), Types).
+
+compute_dtype(Arrays, DType) :-
+   maplist(get_dict(dtype), Arrays, Kinds),
+   foldl(array:broadcast_dtype, Kinds, boolean, Kind),
+   maplist(get_dict(range), Arrays, Ranges),
+   maplist(array:range_min_max, Ranges, Mins, Maxs),
+   min_list(Mins, Min),
+   max_list(Maxs, Max),
+   convlist(get_dict(precision), Arrays, Precisions),
+   precision_options(Precisions, Options),
+   once(dtype_info(DType, Kind, Min, Max, Options)).
+
+precision_options([], Options) =>
+   Options = [].
+precision_options(Precisions, Options) =>
+   min_list(Precisions, Precision),
+   Options = [precision(Precision)].
 
 op_expr(A, R, Index), is_dict(A, array) =>
    rb_lookup(A, R, Index).
@@ -273,7 +314,7 @@ op_expr(cast(A, Type), R, Index) =>
    op_expr(A, A1, Index),
    R = cast(A1, Type).
 
-index_input(Index, Arg, ArgN, AST, V) :-
+index_input(Index, Arg-DType, ArgN, AST, V) :-
    IndexExpr-ValidExpr = Arg.index_expr(Index),
    (  array:skip_view(Arg.op, constant(Constant))
    -> IndexAST = (V = Constant)
@@ -281,7 +322,6 @@ index_input(Index, Arg, ArgN, AST, V) :-
    ),
    atom_concat(a, ArgN, A),
    atom_concat(v, ArgN, V),
-   type(Arg.dtype(), DType, _, _),
    AST = (
    DType:V = 0,
    if ValidExpr {
