@@ -165,7 +165,7 @@ get_blob_data(Term, Type:Arg, Ast) :-
 
 setup_kernel_call(M, Op, UniqueArgs, Index, Head, RuntimeName-Runtime) :-
    ids(M.ndim(), i, int, Index, TypeIndex),
-   phrase(op_args(Op), AllArgs),
+   phrase(array:op_args(Op), AllArgs),
    list_to_ord_set(AllArgs, UniqueArgs),
    length(UniqueArgs, NArgs),
    maplist(array:dtype, UniqueArgs, PrologDTypes),

@@ -1,4 +1,4 @@
-:- module(runtime_prolog, [op_args//1, op_expr/3]).
+:- module(runtime_prolog, [op_expr/3]).
 
 :- use_module(library(dcg/high_order)).
 :- use_module(array, []).
@@ -105,7 +105,7 @@ array:M.compile(prolog, integer(A)) := Dict :-
    Dict = M.compile(prolog, elementwise(integer(A))).
 array:M.compile(prolog, elementwise(Op)) := Dict :-
    length(Index, M.ndim()),
-   phrase(op_args(Op), AllArgs),
+   phrase(array:op_args(Op), AllArgs),
    list_to_ord_set(AllArgs, Args),
    setup_kernel_call(M, Args, Index, ModuleHead, Dict),
 
@@ -127,7 +127,7 @@ array:M.compile(prolog, elementwise(Op)) := Dict :-
    asserta(Kernel).
 array:M.compile(prolog, reduce(Op, Axes, Parent)) := Dict :-
    length(Index, M.ndim()),
-   phrase(op_args(Parent), AllArgs),
+   phrase(array:op_args(Parent), AllArgs),
    list_to_ord_set(AllArgs, Args),
    setup_kernel_call(M, Args, Index, ModuleHead, Dict),
 
@@ -170,14 +170,6 @@ array:M.compile(prolog, reduce(Op, Axes, Parent)) := Dict :-
    ),
    retractall(ModuleHead),
    asserta(Kernel).
-
-op_args(Array), is_dict(Array, array) ==>
-   [Array].
-op_args(Atom), atom(Atom) ==>
-   [].
-op_args(Op) ==>
-   { compound_name_arguments(Op, _, Args) },
-   sequence(op_args, Args).
 
 op_expr(random_float, R, _) =>
    R = random_float.
