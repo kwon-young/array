@@ -77,12 +77,18 @@ array:M.compile(prolog, view(_)) := Dict :-
 array:M.compile(prolog, constant(_)) := Dict :-
    Dict = M.put(kernel, true).
 array:M.compile(prolog, solve(A, B)) := Dict :-
-   [N, N] = A.shape(),
-   (  B.shape() = [N, M_]
-   -> true
-   ;  B.shape() = [N], M_ = 1
-   ),
-   Dict = M.put(kernel, lu_decomposition:solve(A.data, B.data, N, M_, M.data)).
+    [N, N] = A.shape(),
+    (  B.shape() = [N, M_]
+    -> true
+    ;  B.shape() = [N], M_ = 1
+    ),
+    OffsetA = A.view().offset,
+    OffsetB = B.view().offset,
+    OffsetX = M.view().offset,
+    Dict = M.put(kernel,
+                 lu_decomposition:solve(A.data, OffsetA,
+                                        B.data, OffsetB,
+                                        N, M_, M.data, OffsetX)).
 array:M.compile(prolog, rand) := Dict :-
    Dict = M.compile(prolog, elementwise(random_float)).
 array:M.compile(prolog, contiguous(Parent)) := Dict :-
