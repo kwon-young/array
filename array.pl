@@ -23,9 +23,13 @@
 :- multifile to/4.
 :- multifile dtype_size/3.
 :- multifile default_format/3.
+:- multifile float_formats/2.
 
 :- use_module(runtime_prolog).
 :- use_module(runtime_c).
+% after the runtimes: the lup tests need to run before clpBNR first sets its
+% arithmetic flags
+:- use_module(precision).
 
 sync_clpfd_clpBNR(Var) :-
    fd_inf(Var, FDMin),
@@ -53,19 +57,17 @@ M.default(Options) := Dict :-
    option(device(Device), Merged, prolog),
    option(data(Data), Options, _),
    option(format(Format), Options, _),
+   % leaf data is exact unless the user declares its error
+   option(precision(Precision), Options, 0),
    (  option(shape(Shape), Merged)
    -> View = view{}.from_shape(Shape),
       DataSize = View.size(),
       Views = [View]
    ;  Views = []
    ),
-   M1 = array{id: _, views: Views, device:Device, data: Data, format: Format,
-                datasize: DataSize, op: true, range: Range, dtype: DType},
-   (  DType == float
-   -> option(precision(Precision), Merged, 1e-5),
-      Dict = M1.put([precision=Precision])
-   ;  Dict = M1
-   ).
+   Dict = array{id: _, views: Views, device:Device, data: Data, format: Format,
+                datasize: DataSize, op: true, range: Range, dtype: DType,
+                precision: Precision}.
 
 M.empty(Shape) := Dict :-
    Dict = M.empty(Shape, []).
@@ -314,12 +316,7 @@ push(reduce(Op, Axes), M, Dict) :-
       -> { Range == M.range * N }
       )
    ),
-   (  DType == float
-   -> get_dict(precision, M, Precision),
-      Options = [range(Range), dtype(DType), precision(Precision)]
-   ;  Options = [range(Range), dtype(DType)]
-   ),
-   Dict = M.empty(Shape, Options).push_op(reduce(Op, Axes_, M)).
+   Dict = M.empty(Shape, [range(Range), dtype(DType)]).push_op(reduce(Op, Axes_, M)).
 push(float(A), C) :-
    push(elementwise(float, [A]), C).
 push(integer(A), C) :-
@@ -360,29 +357,19 @@ push(elementwise(Op, Args), C) :-
    ;  Expr =.. [Op | Ranges],
       {Range is Expr}
    ),
-   convlist(get_dict(precision), Args, Precisions),
-   (  min_list(Precisions, Precision)
-   -> Options = [range(Range), dtype(FinalDType), precision(Precision)]
-   ;  Options = [range(Range), dtype(FinalDType)]
-   ),
    broadcast(Args, [H | T]),
    Term =.. [Op, H | T],
-   C = H.empty(H.shape(), Options).push_op(Term).
+   C = H.empty(H.shape(), [range(Range), dtype(FinalDType)]).push_op(Term).
 push(solve(A, B), X) :-
    (  dicts_same_value_for_key([A, B], device, _)
    -> true
    ;  domain_error(device, [A, B])
    ),
    (  [N, N] = A.shape()
-   -> { N * A.range * Range == B.range },
-      convlist(get_dict(precision), [A, B], Precisions),
-      (  min_list(Precisions, Precision)
-      -> Options = [range(Range), dtype(float), precision(Precision)]
-      ;  Options = [range(Range), dtype(float)]
-      )
+   -> { N * A.range * Range == B.range }
    ;  domain_error(square, A.shape())
    ),
-   X = A.empty(B.shape(), Options).push_op(solve(A, B)).
+   X = A.empty(B.shape(), [range(Range), dtype(float)]).push_op(solve(A, B)).
 dicts_same_value_for_key(List, Key, Value) :-
    maplist({Value, Key}/[Dict]>>get_dict(Key, Dict, Value), List).
 
@@ -411,7 +398,7 @@ broadcast_shape_(Dim, 1, Dim) :-
 broadcast_shape_(Dim, Dim, Dim).
 
 M.push_op(Op) := Dict :-
-   Dict = M.put([id: _Id, op: Op]).
+   post_precision(M.put([id: _Id, op: Op]), Dict).
 
 M.op_args() := Args :-
    phrase(op_args(M.op), Args).

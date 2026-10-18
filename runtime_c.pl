@@ -8,6 +8,7 @@
 :- use_module(runtime_prolog, except([op_expr/3])).
 :- use_module(view, [replace_nth0/4]).
 :- use_module(dtype).
+:- use_module(precision, [transfer_precision/3]).
 :- use_module(library(clpBNR), []).
 
 % Floats default to float64; integers and booleans take the smallest dtype
@@ -15,6 +16,9 @@
 array:default_format(c, M, Format) :-
    array:range_min_max(M.range, Min, Max),
    c_default_format(M.dtype, Min, Max, Format).
+% Float formats that have a C type, smallest first.
+array:float_formats(c, Formats) :-
+   findall(F, (dtype_info(F, float, 0, 0, []), type(F, _, _, _)), Formats).
 array:M.dtype_size(c) := Size :-
    buffer_type_size(M.dtype(), Size).
 
@@ -360,11 +364,13 @@ array:allocate(c, M) :-
 array:M.to(c, prolog) := Dict :-
    M1 = M.contiguous().realize(),
    buffer_to_data(M1.data, M1.dtype(), M1.datasize, Data),
-   Dict = M.empty(M1.shape(), [device(prolog), data(Data)]).
+   % prolog floats hold every C value exactly
+   Dict = M.empty(M1.shape(), [device(prolog), data(Data), precision(M1.precision)]).
 
 array:M.to(prolog, c) := Dict :-
    M1 = M.contiguous().realize(),
-   Dict = M.empty(M1.shape(), [device=c, data(Data)]),
+   Copy = M.empty(M1.shape(), [device=c, data(Data)]),
+   transfer_precision(M1, Copy, Dict),
    array:bind_default_format(Dict),
    buffer_from_data(Data, Dict.dtype(), M1.datasize, M1.data).
 

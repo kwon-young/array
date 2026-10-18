@@ -43,6 +43,8 @@ prolog_format(float, Format) =>
 prolog_format(Kind, Format) =>
    Format = Kind.
 
+array:float_formats(prolog, [float64]).
+
 setup_kernel_call(M, Args, Index, ModuleHead, Dict) :-
    mapsubterms_var(domain, M, MDomain),
    variant_sha1(MDomain, KernelId),
