@@ -12,11 +12,9 @@
 
 array:M.dtype(c) := DType :-
    array:range_min_max(M.range, Min, Max),
-   (  get_dict(precision, M, Precision)
-   -> Options = [precision(Precision)]
-   ;  Options = []
-   ),
-   once(dtype_info(DType, M.dtype, Min, Max, Options)).
+   convlist(get_dict(precision), [M], Precisions),
+   precision_options(Precisions, Options),
+   c_dtype(M.dtype, Min, Max, Options, DType).
 array:M.dtype_size(c) := Size :-
    buffer_type_size(M.dtype(), Size).
 
@@ -266,7 +264,24 @@ compute_dtype(Arrays, DType) :-
    max_list(Maxs, Max),
    convlist(get_dict(precision), Arrays, Precisions),
    precision_options(Precisions, Options),
-   once(dtype_info(DType, Kind, Min, Max, Options)).
+   c_dtype(Kind, Min, Max, Options, DType).
+
+% An unbounded range only says that the values are unknown, so no dtype can be
+% proven to hold them: fall back to the default dtype of the kind instead.
+c_dtype(Kind, Min, Max, _Options, DType), unbounded(Min, Max) =>
+   default_dtype(Kind, DType).
+c_dtype(Kind, Min, Max, Options, DType),
+      once(dtype_info(DType0, Kind, Min, Max, Options)) =>
+   DType = DType0.
+c_dtype(Kind, Min, Max, Options, _DType) =>
+   existence_error(c_dtype, dtype(Kind, Min, Max, Options)).
+
+unbounded(-1.0Inf, _).
+unbounded(_, 1.0Inf).
+
+default_dtype(boolean, bool).
+default_dtype(integer, int64).
+default_dtype(float, float32).
 
 precision_options([], Options) =>
    Options = [].
