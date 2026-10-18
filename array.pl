@@ -275,9 +275,13 @@ M.diag() := Dict :-
 % Conversion
 % ==========
 M.tolist() := List :-
+   List = M.tolist([]).
+% Options are passed to realize/1.
+M.tolist(Options) := List :-
    shape_list(M.shape(), List),
    flatten(List, Flat),
-   compound_name_arguments(M.contiguous().to(prolog).realize().data, data, Flat).
+   M1 = M.contiguous().realize(Options),
+   compound_name_arguments(M1.to(prolog).realize().data, data, Flat).
 shape_list([], _).
 shape_list([Dim | Shape], L) :-
    length(L, Dim),
@@ -586,7 +590,18 @@ M.is_contiguous() := Res :-
 % Runtime
 % =======
 
-M.realize() := M :-
+M.realize() := Dict :-
+   Dict = M.realize([]).
+% Options: precision(T) guarantees an error of at most T on M, choosing the
+% cheapest float formats that keep it.
+M.realize(Options) := M :-
+   realize_array(M, Options).
+
+% Already realized: its inputs may only have lived in the buffer pool.
+realize_array(M, _), get_dict(data, M, Data), nonvar(Data) =>
+   true.
+realize_array(M, Options) =>
+   option(precision(Tolerance), Options, inf),
    % TODO: optimization
    % once(phrase((
    %    add_term(M, Id),
@@ -594,7 +609,7 @@ M.realize() := M :-
    %    extract(Id, M1)
    % ), [], _)),
    M1 = M,
-   create_schedule([M1], Schedule),  % toposort of graph
+   create_schedule([M1], Tolerance, Schedule),  % toposort of graph
    maplist(compile, Schedule, CompiledSchedule), % generate device specific code 
    allocate_schedule(Schedule),
    run_schedule(CompiledSchedule).
@@ -606,9 +621,11 @@ M.compile() := Dict :-
    % format("~p~n", [Dict.kernel]).
 
 create_schedule(Arrays, NewSchedule) :-
+   create_schedule(Arrays, inf, NewSchedule).
+create_schedule(Arrays, Tolerance, NewSchedule) :-
    graph_schedule(Arrays, Schedule),
    % pool offsets need each array's dtype size
-   maplist(bind_default_format, Schedule),
+   choose_formats(Schedule, Arrays, Tolerance),
    allocation_scheme(Arrays, Schedule, NewSchedule).
 
 graph_schedule(Arrays, Schedule) :-

@@ -1,6 +1,7 @@
 :- module(precision, [
    post_precision/2,
    transfer_precision/3,
+   choose_formats/3,
    sup_precision/2
 ]).
 
@@ -13,7 +14,7 @@
 % unit roundoff of its format.
 
 :- use_module(library(clpBNR)).
-:- use_module(dtype, [unit_roundoff/2]).
+:- use_module(dtype, [dtype_info/5, unit_roundoff/2]).
 :- use_module(array).
 
 % post_precision(+Array0, -Array)
@@ -76,7 +77,7 @@ rounding(reduce(+, _, A), M, U, R) =>
 rounding(_, M, U, R) => R = U*abs(M.range).
 
 % The unit roundoff of a float array, bound when its format is.
-% Only its upper bound matters.
+% Only its upper bound matters: 0 lets a probe treat the array as exact.
 rounding_factor(M, U), get_dict(dtype, M, float) =>
    device_float_formats(M.device, Formats),
    maplist(unit_roundoff, Formats, Us),
@@ -108,6 +109,158 @@ sup_precision(A, S) :-
 
 sup(P, S), number(P) => S = P.
 sup(P, S) => domain(P, D), arg(2, D, S).
+
+% Formats
+% =======
+
+% choose_formats(+Schedule, +Outputs, +Tolerance)
+% Bind the format of every array of Schedule, lowering float formats while the
+% guaranteed error of every output stays within Tolerance.
+choose_formats(Schedule, _, Tolerance), Tolerance == inf =>
+   maplist(array:bind_default_format, Schedule).
+choose_formats(Schedule, Outputs, Tolerance) =>
+   format_candidates(Schedule, Candidates),
+   maplist([c(_, F, _), F-float64]>>true, Candidates, Choice0),
+   check_reachable(Schedule, Outputs, Tolerance, Candidates, Choice0),
+   lower_formats(Schedule, Outputs, Tolerance, Candidates, Choice0, Choice),
+   maplist(bind_choice, Choice),
+   maplist(array:bind_default_format, Schedule).
+
+% Float arrays whose format is not chosen yet and could be smaller, largest
+% first, once per buffer (views share their parent's format).
+format_candidates(Schedule, Candidates) :-
+   convlist(format_candidate, Schedule, Candidates0),
+   foldl(add_candidate, Candidates0, [], Candidates1),
+   sort(1, @>=, Candidates1, Candidates).
+
+format_candidate(M, c(Size, F, Fits)) :-
+   get_dict(format, M, F),
+   var(F),
+   get_dict(dtype, M, float),
+   get_dict(device, M, Device),
+   nonvar(Device),
+   array:range_min_max(M.range, Min, Max),
+   array:float_formats(Device, Formats),
+   include([Format]>>dtype_info(Format, float, Min, Max, []), Formats, Fits),
+   Fits = [_, _ | _],
+   Size = M.datasize.
+
+add_candidate(c(_, F, _), Acc, Acc1), member(c(_, F1, _), Acc), F1 == F =>
+   Acc1 = Acc.
+add_candidate(C, Acc, Acc1) =>
+   Acc1 = [C | Acc].
+
+check_reachable(Schedule, Outputs, Tolerance, _, Choice),
+      fits(Schedule, Outputs, Tolerance, Choice) =>
+   true.
+check_reachable(Schedule, Outputs, Tolerance, Candidates, Choice) =>
+   precision_unreachable(Schedule, Outputs, Tolerance, Candidates, Choice).
+
+% Lower one candidate by one format at a time, until no lowering fits anymore.
+lower_formats(Schedule, Outputs, Tolerance, Candidates, Choice0, Choice) :-
+   foldl(lower_one(Schedule, Outputs, Tolerance), Candidates,
+         Choice0-false, Choice1-Changed),
+   lower_again(Changed, Schedule, Outputs, Tolerance, Candidates, Choice1, Choice).
+
+lower_again(true, Schedule, Outputs, Tolerance, Candidates, Choice1, Choice) =>
+   lower_formats(Schedule, Outputs, Tolerance, Candidates, Choice1, Choice).
+lower_again(false, _, _, _, _, Choice1, Choice) =>
+   Choice = Choice1.
+
+lower_one(Schedule, Outputs, Tolerance, c(_, F, Fits), Choice0-Changed0, Choice-Changed) :-
+   choice_format(F, Choice0, Current),
+   try_lower(Schedule, Outputs, Tolerance, F, Fits, Current,
+             Choice0-Changed0, Choice-Changed).
+
+try_lower(Schedule, Outputs, Tolerance, F, Fits, Current, Choice0-_, Choice-Changed),
+      nextto(Lower, Current, Fits),
+      set_choice(F, Lower, Choice0, Choice1),
+      fits(Schedule, Outputs, Tolerance, Choice1) =>
+   Choice = Choice1,
+   Changed = true.
+try_lower(_, _, _, _, _, _, Choice0-Changed0, Choice-Changed) =>
+   Choice = Choice0,
+   Changed = Changed0.
+
+choice_format(F, Choice, Format) :-
+   once(( member(F1-Format, Choice), F1 == F )).
+
+set_choice(F, Format, Choice0, Choice) :-
+   maplist(set_entry(F, Format), Choice0, Choice).
+
+set_entry(F, Format, F1-_, Entry), F1 == F => Entry = F1-Format.
+set_entry(_, _, Entry0, Entry) => Entry = Entry0.
+
+bind_choice(F-Format) :-
+   F = Format.
+
+% Bind the formats tentatively and check every output, then undo it all.
+fits(Schedule, Outputs, Tolerance, Choice) :-
+   \+ \+ ( maplist(bind_choice, Choice),
+           maplist(array:bind_default_format, Schedule),
+           maplist(within(Tolerance), Outputs) ).
+
+within(Tolerance, Out) :-
+   sup_precision(Out, Sup),
+   Sup =< Tolerance.
+
+% Even float64 everywhere is not precise enough: report the bound reached, the
+% part due to the inputs alone, and the array whose rounding costs the most.
+precision_unreachable(Schedule, Outputs, Tolerance, Candidates, Choice) :-
+   maplist([c(_, F, _), F]>>true, Candidates, Formats),
+   probe_bound(Schedule, Outputs, Choice, [], Bound),
+   probe_bound(Schedule, Outputs, [], Formats, Floor),
+   maplist(probe_drop(Schedule, Outputs, Choice, Bound), Formats, Drops),
+   pairs_keys_values(Pairs, Drops, Formats),
+   main_contributor(Schedule, Pairs, Contributor),
+   throw(error(precision_unreachable(Tolerance, Bound, Floor, Contributor), _)).
+
+% Largest output error with the formats of Choice and the arrays of Exact
+% treated as exact.
+probe_bound(Schedule, Outputs, Choice, Exact, Bound) :-
+   findall(B, once(( maplist(make_exact, Exact),
+                     exclude(exact_choice(Exact), Choice, Choice1),
+                     maplist(bind_choice, Choice1),
+                     exclude(exact_array(Exact), Schedule, Schedule1),
+                     maplist(array:bind_default_format, Schedule1),
+                     maplist(sup_precision, Outputs, Sups),
+                     max_list(Sups, B) )), [Bound]).
+
+probe_drop(Schedule, Outputs, Choice, Bound, F, Drop) :-
+   probe_bound(Schedule, Outputs, Choice, [F], B),
+   Drop is Bound - B.
+
+exact_choice(Exact, F-_) :- memberchk_eq(F, Exact).
+exact_array(Exact, M) :- get_dict(format, M, F), memberchk_eq(F, Exact).
+
+memberchk_eq(_, []) => fail.
+memberchk_eq(X, [Y | _]), X == Y => true.
+memberchk_eq(X, [_ | Ys]) => memberchk_eq(X, Ys).
+
+% A format whose rounding factor is 0 rounds nothing.
+make_exact(F) :-
+   frozen(F, Goal),
+   once(sub_term(bind_unit_roundoff(_, U), Goal)),
+   U = 0.
+
+main_contributor(_, [], Contributor) =>
+   Contributor = none.
+main_contributor(Schedule, Pairs, Contributor) =>
+   max_member(_-F, Pairs),
+   once(( member(M, Schedule), get_dict(format, M, F1), F1 == F )),
+   op_summary(M.op, Op),
+   Contributor = array(Op, M.shape()).
+
+op_summary(Op, Summary), compound(Op) =>
+   compound_name_arity(Op, Name, Arity),
+   Summary = Name/Arity.
+op_summary(Op, Summary) => Summary = Op.
+
+:- multifile prolog:error_message//1.
+
+prolog:error_message(precision_unreachable(Tolerance, Bound, Floor, Contributor)) -->
+   [ 'Precision ~w is out of reach: float64 everywhere guarantees ~w, '-[Tolerance, Bound],
+     '~w without rounding the computed arrays; largest rounding: ~p'-[Floor, Contributor] ].
 
 :- begin_tests(precision).
 
@@ -186,5 +339,61 @@ test('precision is kept when moving to prolog') :-
     sup_precision(C, SC),
     sup_precision(P, SP),
     SC =:= SP.
+
+product_plus(A, B, D, C) :-
+    A = array{}.fromlist([37.0, 99.0, 3.0], [device(c)]),
+    B = array{}.fromlist([12.0, 98.0, 7.0], [device(c)]),
+    D @= A * B,
+    C @= D + A.
+
+formats(Arrays, Formats) :-
+    maplist([A, F]>>(array{format: F} :< A), Arrays, Formats).
+
+test('no tolerance keeps float64') :-
+    product_plus(_, _, D, C),
+    _ = C.realize(),
+    formats([D, C], [float64, float64]).
+
+test('tolerance lowers formats',
+     [forall(member(T-Formats, [20-[float16, float16],
+                                6-[float32, float16],
+                                1-[float32, float32]]))]) :-
+    product_plus(_, _, D, C),
+    C1 = C.realize([precision(T)]),
+    formats([D, C1], Formats),
+    sup_precision(C1, S),
+    S =< T.
+
+test('unreachable tolerance',
+     [throws(error(precision_unreachable(1.0e-12, _, _, array((+)/2, [3])), _))]) :-
+    product_plus(_, _, _, C),
+    _ = C.realize([precision(1.0e-12)]).
+
+test('tolist passes the tolerance') :-
+    product_plus(_, _, _, C),
+    C.tolist([precision(20)]) == [481.0, 9800.0, 24.0].
+
+% exact integers on prolog against lowered float formats on c
+test('lowered results stay within the guaranteed error') :-
+    set_random(seed(42)),
+    length(As, 64),
+    length(Bs, 64),
+    maplist([X]>>random_between(0, 100, X), As),
+    maplist([X]>>random_between(0, 100, X), Bs),
+    maplist([X, Y]>>(Y is float(X)), As, FAs),
+    maplist([X, Y]>>(Y is float(X)), Bs, FBs),
+    maplist([A, B, E]>>(E is A*B + A), As, Bs, Exact),
+    FA = array{}.fromlist(FAs, [device(c)]),
+    FB = array{}.fromlist(FBs, [device(c)]),
+    D @= FA * FB,
+    C @= D + FA,
+    C1 = C.realize([precision(20)]),
+    formats([D, C1], [float16, float16]),
+    sup_precision(C1, S),
+    Values = C1.tolist(),
+    forall(nth1(I, Values, V),
+           (  nth1(I, Exact, E),
+              assertion(abs(V - E) =< S)
+           )).
 
 :- end_tests(precision).
