@@ -1030,3 +1030,81 @@ test('derived comparison op returns boolean dtype') :-
     C.dtype == boolean.
 
 :- end_tests(array_comparison).
+
+:- begin_tests(c_dtype).
+
+test('cast integer to float') :-
+    A = array{}.fromlist([1, 2, 3], [device(c)]),
+    C = A.as(float),
+    C.tolist() == [1.0, 2.0, 3.0].
+
+test('cast float to integer rounds like prolog') :-
+    A = array{}.fromlist([2.5, -2.5, 0.5, -0.4], [device(c)]),
+    C = A.as(integer),
+    C.tolist() == [3, -3, 1, 0],
+    C.dtype() == int8.
+
+test('sqrt of float and integer arrays') :-
+    A = array{}.fromlist([1.0, 4.0], [device(c)]),
+    B = array{}.fromlist([1, 4], [device(c)]),
+    C @= sqrt(A),
+    D @= sqrt(B),
+    C.tolist() == [1.0, 2.0],
+    D.tolist() == [1.0, 2.0].
+
+test('derived comparisons are boolean') :-
+    A = array{}.fromlist([1, 2, 3], [device(c)]),
+    C @= (A =:= 2),
+    D @= (A =\= 2),
+    C.tolist() == [0, 1, 0],
+    D.tolist() == [1, 0, 1],
+    C.dtype() == bool,
+    D.dtype() == bool.
+
+test('as boolean with mixed signs') :-
+    A = array{}.fromlist([-2, 0, 2], [device(c)]),
+    C = A.as(boolean),
+    C.tolist() == [1, 0, 1].
+
+test('uint32 product widened to uint64') :-
+    A = array{}.fromlist([0, 70000], [device(c)]),
+    C @= A * A,
+    C.tolist() == [0, 4900000000],
+    C.dtype() == uint64.
+
+test('negation of large uint32') :-
+    A = array{}.fromlist([0, 3000000000], [device(c)]),
+    C @= -A,
+    C.tolist() == [0, -3000000000].
+
+test('int32 sum widened to int64') :-
+    A = array{}.fromlist([-2000000000, 2000000000], [device(c)]),
+    C @= A + A,
+    C.tolist() == [-4000000000, 4000000000].
+
+test('compare uint32 with negative int8') :-
+    A = array{}.fromlist([0, 70000], [device(c)]),
+    B = array{}.fromlist([-5, -1], [device(c)]),
+    C @= (A < B),
+    D @= (B < A),
+    C.tolist() == [0, 0],
+    D.tolist() == [1, 1].
+
+test('large integer plus float') :-
+    A = array{}.fromlist([16777217, 1], [device(c)]),
+    C @= A + 0.5,
+    C.tolist() == [16777217.5, 1.5].
+
+test('unbounded empty arrays') :-
+    A = array{}.empty([2], [device(c)]),
+    B = array{}.empty([2], [device(c), dtype(integer)]),
+    A.tolist() == [0.0, 0.0],
+    B.tolist() == [0, 0],
+    B.dtype() == int64.
+
+test('log reaching zero') :-
+    A = array{}.fromlist([0.0, 1.0], [device(c)]),
+    C @= log(A),
+    C.tolist() == [-1.0Inf, 0.0].
+
+:- end_tests(c_dtype).
