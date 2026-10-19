@@ -45,6 +45,17 @@ prolog_format(Kind, Format) =>
 
 array:float_formats(prolog, [float64]).
 
+% Ops Prolog arithmetic computes from its inputs: it has no comparison
+% function, so a comparison can only be the outermost op of a kernel.
+array:expression_op(prolog, _+_).
+array:expression_op(prolog, _*_).
+array:expression_op(prolog, sin(_)).
+array:expression_op(prolog, log(_)).
+array:expression_op(prolog, sqrt(_)).
+array:expression_op(prolog, float(_)).
+array:expression_op(prolog, integer(_)).
+array:compute_format(prolog, _, float64).
+
 setup_kernel_call(M, Args, Index, ModuleHead, Dict) :-
    mapsubterms_var(domain, M, MDomain),
    variant_sha1(MDomain, KernelId),
@@ -194,6 +205,8 @@ op_expr(A, R, Index), is_dict(A, array) =>
    rb_lookup(A, R, Index).
 op_expr(contiguous(A), R, Index) =>
    op_expr(A, R, Index).
+op_expr(fused(_Node, Expr), R, Index) =>
+   op_expr(Expr, R, Index).
 op_expr(A+B, R, Index) =>
    op_expr(A, A1, Index),
    op_expr(B, B1, Index),

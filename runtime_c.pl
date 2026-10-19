@@ -9,6 +9,7 @@
 :- use_module(view, [replace_nth0/4]).
 :- use_module(dtype).
 :- use_module(precision, [transfer_precision/3]).
+:- use_module(fusion, [inlined_nodes//1]).
 :- use_module(library(clpBNR), []).
 
 % Floats default to float64; integers and booleans take the smallest dtype
@@ -19,6 +20,26 @@ array:default_format(c, M, Format) :-
 % Float formats that have a C type, smallest first.
 array:float_formats(c, Formats) :-
    findall(F, (dtype_info(F, float, 0, 0, []), type(F, _, _, _)), Formats).
+% Ops a C expression computes from its inputs.
+array:expression_op(c, _+_).
+array:expression_op(c, _*_).
+array:expression_op(c, _<_).
+array:expression_op(c, sin(_)).
+array:expression_op(c, log(_)).
+array:expression_op(c, sqrt(_)).
+array:expression_op(c, float(_)).
+array:expression_op(c, integer(_)).
+% Inlined floats are computed in the widest float format of the kernel.
+array:compute_format(c, Formats, Format) :-
+   widest_format(Formats, Format).
+
+widest_format([], Format) =>
+   Format = float64.
+widest_format(Formats, Format) =>
+   maplist(buffer_type_size, Formats, Sizes),
+   pairs_keys_values(Pairs, Sizes, Formats),
+   max_member(_-Format, Pairs).
+
 array:M.dtype_size(c) := Size :-
    buffer_type_size(M.dtype(), Size).
 
@@ -234,7 +255,7 @@ compile_expr(M, Op, Args, Index, AST) :-
    mkconj(BaseAST, EvalAST, AST).
 
 % Round like Prolog integer/1 instead of truncating like a C cast.
-integer_cast(A, Type, Expr), get_dict(dtype, A, float) =>
+integer_cast(A, Type, Expr), operand_dtype(A, float) =>
    Expr = cast(round(A), Type).
 integer_cast(A, Type, Expr) =>
    Expr = cast(A, Type).
@@ -245,13 +266,19 @@ integer_cast(A, Type, Expr) =>
 % Instead, load every input in the smallest type that holds all inputs and,
 % for arithmetic, the result too.
 % A cast must see its input unchanged, so it keeps the input's own type.
-load_types(_M, cast(_, _), Args, Types) =>
+% An inlined node is held in its own format, so the compute type must hold
+% its range too.
+load_types(_M, cast(A, _), Args, Types), is_dict(A, array) =>
    maplist(array:dtype, Args, DTypes),
    maplist(type, DTypes, Types, _, _).
-load_types(_M, _<_, Args, Types) =>
-   same_compute_type(Args, Args, Types).
-load_types(M, _Op, Args, Types) =>
-   same_compute_type([M | Args], Args, Types).
+load_types(_M, A<B, Args, Types) =>
+   phrase(inlined_nodes(A<B), Inlined),
+   append(Inlined, Args, Arrays),
+   same_compute_type(Arrays, Args, Types).
+load_types(M, Op, Args, Types) =>
+   phrase(inlined_nodes(Op), Inlined),
+   append([M | Inlined], Args, Arrays),
+   same_compute_type(Arrays, Args, Types).
 
 same_compute_type(Arrays, Args, Types) :-
    compute_dtype(Arrays, DType),
@@ -303,6 +330,19 @@ op_expr(A, R, Index), is_dict(A, array) =>
    rb_lookup(A, R, Index).
 op_expr(contiguous(A), R, Index) =>
    op_expr(A, R, Index).
+% An inlined node is rounded to its format, as its buffer would be.
+op_expr(fused(Node, Expr), R, Index) =>
+   op_expr(Expr, R1, Index),
+   type(Node.dtype(), Type, _, _),
+   R = cast(R1, Type).
+% The cast is the one of fused/2.
+op_expr(float(A), R, Index) =>
+   op_expr(A, R, Index).
+op_expr(integer(A), R, Index), operand_dtype(A, float) =>
+   op_expr(A, R1, Index),
+   R = round(R1).
+op_expr(integer(A), R, Index) =>
+   op_expr(A, R, Index).
 op_expr('RAND_MAX', R, _Index) =>
    R = 'RAND_MAX'.
 op_expr(rand(), R, _Index) =>
@@ -338,6 +378,11 @@ op_expr(round(A), R, Index) =>
 op_expr(cast(A, Type), R, Index) =>
    op_expr(A, A1, Index),
    R = cast(A1, Type).
+
+operand_dtype(fused(Node, _), DType) =>
+   DType = Node.dtype.
+operand_dtype(A, DType) =>
+   DType = A.dtype.
 
 % index_expr/1 gives the validity of an index as a Prolog goal: C spells its
 % conjunction &&.

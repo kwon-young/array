@@ -13,8 +13,6 @@
 :- use_module(view).
 :- use_module(dtype).
 :- use_module(minimalloc).
-% :- use_module(optim).
-:- use_module(library(egraph)).
 
 :- multifile compile/4.
 :- multifile allocate/2.
@@ -24,12 +22,15 @@
 :- multifile dtype_size/3.
 :- multifile default_format/3.
 :- multifile float_formats/2.
+:- multifile expression_op/2.
+:- multifile compute_format/3.
 
 :- use_module(runtime_prolog).
 :- use_module(runtime_c).
 % after the runtimes: the lup tests need to run before clpBNR first sets its
 % arithmetic flags
 :- use_module(precision).
+:- use_module(fusion).
 
 sync_clpfd_clpBNR(Var) :-
    fd_inf(Var, FDMin),
@@ -411,6 +412,8 @@ op_args(Array), is_dict(Array, array) ==>
    [Array].
 op_args(Atom), atomic(Atom) ==>
    [].
+op_args(fused(_Node, Expr)) ==>
+   op_args(Expr).
 op_args(Op) ==>
    { compound_name_arguments(Op, _, Args) },
    sequence(op_args, Args).
@@ -602,14 +605,7 @@ realize_array(M, _), get_dict(data, M, Data), nonvar(Data) =>
    true.
 realize_array(M, Options) =>
    option(precision(Tolerance), Options, inf),
-   % TODO: optimization
-   % once(phrase((
-   %    add_term(M, Id),
-   %    saturate([optim:operator_fusion]),
-   %    extract(Id, M1)
-   % ), [], _)),
-   M1 = M,
-   create_schedule([M1], Tolerance, Schedule),  % toposort of graph
+   create_schedule([M], Tolerance, Schedule),  % toposort of graph
    maplist(compile, Schedule, CompiledSchedule), % generate device specific code 
    allocate_schedule(Schedule),
    run_schedule(CompiledSchedule).
@@ -623,7 +619,8 @@ M.compile() := Dict :-
 create_schedule(Arrays, NewSchedule) :-
    create_schedule(Arrays, inf, NewSchedule).
 create_schedule(Arrays, Tolerance, NewSchedule) :-
-   graph_schedule(Arrays, Schedule),
+   graph_schedule(Arrays, Schedule0),
+   fuse(Arrays, Schedule0, Schedule),
    % pool offsets need each array's dtype size
    choose_formats(Schedule, Arrays, Tolerance),
    allocation_scheme(Arrays, Schedule, NewSchedule).

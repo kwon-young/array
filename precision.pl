@@ -354,10 +354,11 @@ test('no tolerance keeps float64') :-
     _ = C.realize(),
     formats([D, C], [float64, float64]).
 
+% D is inlined in C's kernel, which computes it in the float64 of its inputs
 test('tolerance lowers formats',
-     [forall(member(T-Formats, [20-[float16, float16],
-                                6-[float32, float16],
-                                1-[float32, float32]]))]) :-
+     [forall(member(T-Formats, [20-[float64, float16],
+                                6-[float64, float16],
+                                1-[float64, float32]]))]) :-
     product_plus(_, _, D, C),
     C1 = C.realize([precision(T)]),
     formats([D, C1], Formats),
@@ -388,7 +389,7 @@ test('lowered results stay within the guaranteed error') :-
     D @= FA * FB,
     C @= D + FA,
     C1 = C.realize([precision(20)]),
-    formats([D, C1], [float16, float16]),
+    formats([D, C1], [float64, float16]),
     sup_precision(C1, S),
     Values = C1.tolist(),
     forall(nth1(I, Values, V),
