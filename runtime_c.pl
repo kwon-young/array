@@ -9,7 +9,6 @@
 :- use_module(dtype).
 :- use_module(precision, [transfer_precision/3]).
 :- use_module(fusion, [inlined_nodes//1, node_index/3, read_shape/2]).
-:- use_module(library(clpBNR), []).
 
 % Floats default to float64; integers and booleans take the smallest dtype
 % holding their range.
@@ -68,7 +67,7 @@ array:M.compile(c, Op) := Dict :-
 % compile_kernel(+M, +Expr, -Dict)
 % Dict is M with a kernel storing the value of Expr at each index of M.
 compile_kernel(M, Expr, Dict) :-
-   setup_kernel_call(M, Expr, Args, Index, Head, RuntimeName-Runtime),
+   kernel_params(M, Expr, Args, Index, Params),
    load_types(M, Expr, Args, LoadTypes),
    length(Args, NArgs),
    numlist_(NArgs, Numbers),
@@ -80,36 +79,29 @@ compile_kernel(M, Expr, Dict) :-
    foldl([S, C0, C]>>mkconj(C0, S, C), Statements, true, Body0),
    mkconj(Body0, a0[MIndexExpr] = Value, Body),
    c_index_expr(M, Index, MIndexExpr, MValidExpr),
-   atom_string(RuntimeName, RuntimeStr),
-   N is 1 + NArgs,
-   AST = (
-   #(include(<>, 'SWI-Prolog.h')),
-   #(include(<>, 'stdint.h')),
-   #(include(<>, 'stddef.h')),
-   #(include(<>, 'stdbool.h')),
-   #(include(<>, 'stdlib.h')),
-   #(include(<>, 'math.h')),
-   void:Head {
-      if MValidExpr {
-         Body
-      }
-   },
-   Runtime,
-   install_t:install(void) {
-      'PL_register_foreign'(RuntimeStr, N, RuntimeName, 0)
-   }
-   ),
+   Code = code(Params, M.shape(), MValidExpr, Body),
+   % A kernel is named after its code, so a kernel already loaded is reused.
+   variant_sha1(Code, Hash),
+   atom_concat(kernel_, Hash, KernelName),
+   atom_concat(runtime_, Hash, RuntimeName),
+   kernel_ast(KernelName, RuntimeName, Code, AST),
    name_variables(AST),
+   N is 1 + NArgs,
+   load_kernel(RuntimeName/N, AST),
+   maplist(get_dict(data), Args, Buffers),
+   Buffer = M.data,
+   Kernel =.. [RuntimeName, Buffer | Buffers],
+   Dict = M.put([kernel=runtime_c:Kernel]).
+
+load_kernel(Runtime, _), current_predicate(Runtime) =>
+   true.
+load_kernel(_, AST) =>
    once(phrase(translation_unit(AST), Tokens)),
    once(phrase(tokens(Tokens), Str)),
    clang_format(Str, In),
    compile_object(In, Object),
    link_objects([Object], Library),
-   load_foreign_library(Library),
-   maplist(get_dict(data), Args, Buffers),
-   Buffer = M.data,
-   Kernel =.. [RuntimeName, Buffer | Buffers],
-   Dict = M.put([kernel=runtime_c:Kernel]).
+   load_foreign_library(Library).
 
 numlist_(0, Numbers) =>
    Numbers = [].
@@ -140,7 +132,10 @@ get_blob_data(Term, Type:Arg, Ast) :-
       'PL_get_blob'(Term, cast(&Arg, 'void**'), 'NULL', 'NULL')
    ).
 
-setup_kernel_call(M, Op, UniqueArgs, Index, Head, RuntimeName-Runtime) :-
+% kernel_params(+M, +Op, -Args, -Index, -Params)
+% The kernel computing Op into M reads the buffers of Args at Index.
+% Params are its typed parameters: a0 for M, a1... for Args, and Index.
+kernel_params(M, Op, UniqueArgs, Index, params(Type:a0, TypeArgs, TypeIndex)) :-
    ids(M.ndim(), i, int, Index, TypeIndex),
    phrase(array:op_args(Op), AllArgs),
    list_to_ord_set(AllArgs, UniqueArgs),
@@ -150,15 +145,21 @@ setup_kernel_call(M, Op, UniqueArgs, Index, Head, RuntimeName-Runtime) :-
    maplist([DType, P]>>atom_concat(DType, *, P), DTypes, Ps),
    type(M.dtype(), MDType, _, _),
    atom_concat(MDType, *, Type),
-   ids(NArgs, a, Ps, Args, TypeArgs),
+   ids(NArgs, a, Ps, _, TypeArgs).
+
+% kernel_ast(+KernelName, +RuntimeName, +Code, -AST)
+% AST defines the kernel, computing one index, and its runtime, a foreign
+% predicate looping over every index.
+kernel_ast(KernelName, RuntimeName,
+           code(params(Out, TypeArgs, TypeIndex), Shape, ValidExpr, Body),
+           AST) :-
    append(TypeArgs, TypeIndex, TypeArgsIndex),
-   mapsubterms_var(clpBNR:domain, M, MDomain),
-   variant_sha1(MDomain, KernelId),
-   atom_concat('kernel_', KernelId, KernelName),
-   Head =.. [KernelName, Type:a0 | TypeArgsIndex],
+   Head =.. [KernelName, Out | TypeArgsIndex],
+   maplist([_:Name, Name]>>true, TypeArgs, Args),
+   maplist([_:I, I]>>true, TypeIndex, Index),
    append(Args, Index, ArgsIndex),
    Call =.. [KernelName, a0 | ArgsIndex],
-   atom_concat('runtime_', KernelId, RuntimeName),
+   length(TypeArgs, NArgs),
    ids(NArgs, t, term_t, Terms, TypeTerms),
    RuntimeHead =.. [RuntimeName, term_t:t0 | TypeTerms],
    maplist(get_blob_data, Terms, TypeArgs, BlobAstList),
@@ -166,14 +167,30 @@ setup_kernel_call(M, Op, UniqueArgs, Index, Head, RuntimeName-Runtime) :-
    -> BlobAsts = true
    ;  comma_list(BlobAsts, BlobAstList)
    ),
-   get_blob_data(t0, Type:a0, BlobAst),
-   loops(M.shape(), TypeIndex, Call, LoopAst),
-   Runtime = (
+   get_blob_data(t0, Out, BlobAst),
+   loops(Shape, TypeIndex, Call, LoopAst),
+   atom_string(RuntimeName, RuntimeStr),
+   N is 1 + NArgs,
+   AST = (
+   #(include(<>, 'SWI-Prolog.h')),
+   #(include(<>, 'stdint.h')),
+   #(include(<>, 'stddef.h')),
+   #(include(<>, 'stdbool.h')),
+   #(include(<>, 'stdlib.h')),
+   #(include(<>, 'math.h')),
+   void:Head {
+      if ValidExpr {
+         Body
+      }
+   },
    'static foreign_t':RuntimeHead {
       BlobAst,
       BlobAsts,
       LoopAst,
       return('TRUE')
+   },
+   install_t:install(void) {
+      'PL_register_foreign'(RuntimeStr, N, RuntimeName, 0)
    }
    ).
 loops([], [], Call, Call).

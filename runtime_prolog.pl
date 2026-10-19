@@ -4,7 +4,6 @@
 :- use_module(array, []).
 :- use_module(view, [replace_nth0/4]).
 :- use_module(lu_decomposition).
-:- use_module(library(clpBNR), [domain/2]).
 :- use_module(fusion, [node_index/3, read_shape/2]).
 
 /* 
@@ -58,24 +57,6 @@ array:expression_op(prolog, integer(_)).
 array:expression_op(prolog, reduce(_, _, _)).
 array:compute_format(prolog, _, float64).
 
-setup_kernel_call(M, Args, Index, ModuleHead, Dict) :-
-   mapsubterms_var(domain, M, MDomain),
-   variant_sha1(MDomain, KernelId),
-   maplist(get_dict(id), Args, Ids),
-   append(Ids, Index, IdsIndex),
-   Head =.. [KernelId, M.id | IdsIndex],
-   ModuleHead = kernel:Head,
-
-   maplist(get_dict(data), Args, Datas),
-   append(Datas, Index, DatasIndex),
-   CallHead =.. [KernelId, M.data | DatasIndex],
-   maplist([Dim, I, between(0, Dim1, I)]>>(Dim1 is Dim-1), M.shape(), Index, L),
-   (  L = []
-   -> Betweens = true
-   ;  comma_list(Betweens, L)
-   ),
-   Dict = M.put([kernel=forall(Betweens, (kernel:CallHead))]).
-
 array:M.compile(prolog, true) := Dict :-
    Dict = M.put(kernel, true).
 array:M.compile(prolog, view(_)) := Dict :-
@@ -102,16 +83,17 @@ array:M.compile(prolog, Op) := Dict :-
 
 % compile_kernel(+M, +Expr, -Dict)
 % Dict is M with a kernel storing the value of Expr at each index of M.
+% The kernel is a clause of the kernel module, whose parameters are the
+% data of M, the data of each array Expr reads, and the index.
 compile_kernel(M, Expr, Dict) :-
    length(Index, M.ndim()),
    phrase(array:op_args(Expr), AllArgs),
    list_to_ord_set(AllArgs, Args),
-   setup_kernel_call(M, Args, Index, ModuleHead, Dict),
    phrase(value(Expr, ctx{index: Index}, Value), Goals),
-   conjunction(Goals, Body),
+   conjunction(Goals, Body0),
    MIndexExpr-MValidExpr = M.index_expr(Index),
-   Kernel = (ModuleHead :-
-      Body,
+   Body = (
+      Body0,
       (  MValidExpr
       -> MValue is Value,
          MIndex is MIndexExpr+1,
@@ -119,8 +101,24 @@ compile_kernel(M, Expr, Dict) :-
       ;  true
       )
    ),
-   retractall(ModuleHead),
-   asserta(Kernel).
+   maplist(get_dict(id), Args, Ids),
+   append([M.id | Ids], Index, Params),
+   % A kernel is named after its code, so a kernel already defined is reused.
+   variant_sha1(Params-Body, KernelId),
+   Head =.. [KernelId | Params],
+   define_kernel(Head, Body),
+   maplist(get_dict(data), Args, Datas),
+   append([M.data | Datas], Index, CallArgs),
+   Call =.. [KernelId | CallArgs],
+   maplist([Dim, I, between(0, Dim1, I)]>>(Dim1 is Dim-1), M.shape(), Index, L),
+   conjunction(L, Betweens),
+   Dict = M.put([kernel=forall(Betweens, kernel:Call)]).
+
+define_kernel(Head, _), functor(Head, Name, Arity),
+      current_predicate(kernel:Name/Arity) =>
+   true.
+define_kernel(Head, Body) =>
+   assertz((kernel:Head :- Body)).
 
 conjunction(Goals, Conjunction) :-
    foldl([G, C0, C]>>mkconj(C0, G, C), Goals, true, Conjunction).
