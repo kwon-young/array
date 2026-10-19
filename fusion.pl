@@ -12,10 +12,12 @@ expression instead of loading it, so it gets neither a kernel nor a buffer.
 A view is not a node of its own here: it is a way of reading the buffer of
 the node it views, its *producer*.
 
-For example, `A @ B` is `reduce(+, [2], P)` with `P = A1 * B1`, where `A1`
-and `B1` are views of `A` and `B`. `P` is inlined, since only the reduce
-reads it, so the schedule has a single kernel, computing
-`reduce(+, [2], fused(P, A1 * B1))`.
+For example, `A @ B + C` is `R1 + C1` where:
+  * `R = reduce(+, [2], P)` and `R1` is a view of `R`;
+  * `P = A1 * B1` where `A1` and `B1` are views of `A` and `B`.
+`P` and `R` are inlined, since each is read once, so the schedule has a
+single kernel, computing
+`fused(R, reindex(R1, reduce(+, [2], fused(P, A1 * B1)))) + C1`.
 
 Pipeline
 --------
@@ -25,13 +27,17 @@ materialized nodes.
 
 Inlined nodes
 -------------
-A kernel's op reads an inlined node as `fused(Node, Expr)`:
-  * Node is the inlined array itself, for its dtype, range and format;
-  * Expr is its op, whose inputs are read through the views the kernel
-    reads Node through (read_through/3).
+A kernel's op reads an inlined node as `fused(Node, Expr)`, where Node is
+the inlined array itself, for its dtype, range and format.
+Expr computes Node's op where the kernel reads it, through the view Via:
+  * an elementwise op is computed at the kernel's index: Expr is the op,
+    with its inputs read through Via (read_through/3);
+  * a reduction loops over some axes of its own index, so it is computed at
+    the index of Node that Via reads: Expr is `reindex(Via, Op)`
+    (node_index/3).
 
 So a kernel's op is still an op term whose leaves are the arrays it loads:
-`array:op_args//1` finds them through fused/2.
+`array:op_args//1` finds them through fused/2 and reindex/2.
 
 An inlined node has no buffer, but its value still has a format: the format
 the kernel holds it in (bind_inlined_formats/1).
@@ -43,7 +49,9 @@ Each device provides, as multifile predicates of the array module:
   * expression_op(Device, Op): Op can be computed inside an expression;
   * compute_format(Device, Formats, Format): the format a kernel computes
     its inlined floats in, given the float formats of its buffers;
-and compiles `fused(Node, Expr)` as the value of Expr in the format of Node.
+and compiles `fused(Node, Expr)` as the value of Expr in the format of Node,
+`reindex(Via, Op)` at node_index/3, and a reduction by looping over the
+dimensions read_shape/2 gives for its reduced axes.
 */
 
 :- use_module(library(apply)).
@@ -69,8 +77,8 @@ materialized(Node, _) :-
 % It is asked for.
 materialized(Node, Graph) :-
    output(Node, Graph).
-% Its op isn't elementwise, or its device can't compute it inside an
-% expression.
+% Its device can't compute its op inside another kernel: rand, constant,
+% contiguous and solve, or an op the device doesn't list.
 materialized(Node, _) :-
    \+ array:expression_op(Node.device, Node.op).
 % It is read several times: inlining would compute it once per read.
@@ -81,6 +89,11 @@ materialized(Node, Graph) :-
 materialized(Node, Graph) :-
    read(Node, Graph, _, Via),
    padded(Via).
+% It is a reduction that would be computed several times per element:
+% inlining would redo the whole reduction each time.
+materialized(Node, Graph) :-
+   Node.op = reduce(_, _, _),
+   repeated(Node, Graph).
 % Its reader computes with buffers, not expressions.
 materialized(Node, Graph) :-
    read(Node, Graph, Reader, _),
@@ -143,6 +156,24 @@ padded(Via) :-
    member(Dim-_-(Min-Max), View.zip()),
    \+ (Min == 0, Max == Dim).
 
+% repeated(+Node, +Graph)
+% Computing Node's readers reads an element of Node several times: one of
+% them reads it through a broadcast, or is itself inlined and repeated.
+repeated(Node, Graph) :-
+   read(Node, Graph, _, Via),
+   broadcast(Via).
+repeated(Node, Graph) :-
+   read(Node, Graph, Reader, _),
+   inlined(Reader, Graph),
+   repeated(Reader, Graph).
+
+% A broadcast view reads an element several times along a dimension: its
+% stride is 0.
+broadcast(Via) :-
+   member(View, Via.views),
+   member(Dim-0-_, View.zip()),
+   Dim > 1.
+
 buffer_op(solve(_, _)).
 
 % Inlining
@@ -156,12 +187,11 @@ fuse_kernel(_, Node, Kernel) =>
    Kernel = Node.
 
 % expr(+Graph, +Op0, -Op)
-% Op is Op0 with each read of an inlined node replaced by fused(Node, Expr):
-% Expr is the node's op, with its inputs read the way Op0 reads the node.
+% Op is Op0 with each read of an inlined node replaced by fused(Node, Expr),
+% where Expr computes the node's op the way Op0 reads the node.
 expr(Graph, Via, Op), is_dict(Via, array),
       producer(Via, Node), inlined(Node, Graph) =>
-   mapargs(read_through(Via), Node.op, Op1),
-   expr(Graph, Op1, Expr),
+   inline(Graph, Via, Node, Expr),
    Op = fused(Node, Expr).
 expr(_, Via, Op), is_dict(Via, array) =>
    Op = Via.
@@ -169,6 +199,18 @@ expr(Graph, Op0, Op), compound(Op0) =>
    mapargs(expr(Graph), Op0, Op).
 expr(_, Op0, Op) =>
    Op = Op0.
+
+% inline(+Graph, +Via, +Node, -Expr)
+% A reduction loops over some axes of its own index, so it is computed at
+% the index of Node that Via reads: reindex(Via, Op).
+inline(Graph, Via, Node, Expr), get_dict(op, Node, reduce(_, _, _)) =>
+   expr(Graph, Node.op, Op),
+   Expr = reindex(Via, Op).
+% An elementwise op is computed at the reader's index: its inputs are read
+% through Via.
+inline(Graph, Via, Node, Expr) =>
+   mapargs(read_through(Via), Node.op, Op),
+   expr(Graph, Op, Expr).
 
 % read_through(+Via, +Input0, -Input)
 % Via reads a node's buffer, which is contiguous since the node isn't
@@ -318,5 +360,52 @@ test('c comparison is inlined') :-
    C @= (A < 2) + A,
    kernels(C, [+]),
    C.tolist() == [2, 2, 3].
+
+test('matmul epilogue is one kernel', [forall(member(D, [prolog, c]))]) :-
+   A = array{}.fromlist([[1, 2], [3, 4]], [device(D)]),
+   B = array{}.fromlist([[5, 6], [7, 8]], [device(D)]),
+   C = array{}.fromlist([[1, 1], [1, 1]], [device(D)]),
+   E @= (A @ B) + C,
+   kernels(E, [+]),
+   E.tolist() == [[20, 23], [44, 51]].
+
+test('scaled sum is one kernel', [forall(member(D, [prolog, c]))]) :-
+   A = array{}.fromlist([1.0, 2.0, 3.0], [device(D)]),
+   C @= A.sum() * 2.0,
+   kernels(C, [*]),
+   C.tolist() == 12.0.
+
+test('two reductions in one kernel', [forall(member(D, [prolog, c]))]) :-
+   A = array{}.fromlist([[1, 5], [4, 2]], [device(D)]),
+   C @= A.sum([1]) + A.max([1]),
+   kernels(C, [+]),
+   C.tolist() == [11, 10].
+
+test('nested reductions are one kernel', [forall(member(D, [prolog, c]))]) :-
+   A = array{}.fromlist([[[1, 2], [3, 4]], [[5, 6], [7, 8]]], [device(D)]),
+   B @= A.sum([2]) * 2,
+   C = B.sum([1]),
+   kernels(C, [reduce]),
+   C.tolist() == [20, 52].
+
+test('broadcast reduction is materialized', [forall(member(D, [prolog, c]))]) :-
+   A = array{}.fromlist([[1, 2], [3, 5]], [device(D)]),
+   C @= A - A.max([1], true),
+   kernels(C, Ops),
+   msort(Ops, [+, reduce]),
+   C.tolist() == [[-1, 0], [-2, 0]].
+
+test('reduction read twice is materialized') :-
+   A = array{}.fromlist([1, 2, 3], [device(c)]),
+   S = A.sum(),
+   C @= S * S,
+   kernels(C, [reduce, *]),
+   C.tolist() == 36.
+
+test('inlined reduction fits the compute type') :-
+   A = array{}.fromlist([4000000000, 4000000000], [device(c)]),
+   C @= (A.sum() < 1),
+   kernels(C, [<]),
+   C.tolist() == 0.
 
 :- end_tests(fusion).

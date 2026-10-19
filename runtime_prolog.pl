@@ -55,6 +55,7 @@ array:expression_op(prolog, log(_)).
 array:expression_op(prolog, sqrt(_)).
 array:expression_op(prolog, float(_)).
 array:expression_op(prolog, integer(_)).
+array:expression_op(prolog, reduce(_, _, _)).
 array:compute_format(prolog, _, float64).
 
 setup_kernel_call(M, Args, Index, ModuleHead, Dict) :-

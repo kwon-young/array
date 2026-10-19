@@ -28,6 +28,7 @@ array:expression_op(c, log(_)).
 array:expression_op(c, sqrt(_)).
 array:expression_op(c, float(_)).
 array:expression_op(c, integer(_)).
+array:expression_op(c, reduce(_, _, _)).
 % Inlined floats are computed in the widest float format of the kernel.
 array:compute_format(c, Formats, Format) :-
    widest_format(Formats, Format).
