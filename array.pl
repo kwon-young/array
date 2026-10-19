@@ -310,8 +310,9 @@ push(reduce(Op, Axes), M, Dict) :-
    foldl(replace_nth0(1), Axes, M.shape(), Shape),
    sort(Axes, Axes_),
    (  Op == (<)
-   -> Range::boolean,
-      DType = boolean
+   -> % a maximum is one of the elements
+      DType = M.dtype,
+      { Range == M.range }
    ;  view:shape_size(M.shape(), Size1),
       view:shape_size(Shape, Size2),
       N #= Size1 // Size2,
@@ -1145,6 +1146,12 @@ test('realized format survives a narrowed range') :-
     R::real(0, 200),
     X1.dtype() == uint16,
     X1.tolist() == [200, 100].
+
+test('max keeps the dtype of its input') :-
+    A = array{}.fromlist([[1, 5], [4, 2]], [device(c)]),
+    C = A.max([1]),
+    C.tolist() == [5, 4],
+    C.dtype() == uint8.
 
 % a mask bounded on both sides is a conjunction of conditions
 test('padding on both sides') :-
