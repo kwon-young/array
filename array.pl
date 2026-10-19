@@ -1149,4 +1149,17 @@ test('realized format survives a narrowed range') :-
     X1.dtype() == uint16,
     X1.tolist() == [200, 100].
 
+% a mask bounded on both sides is a conjunction of conditions
+test('padding on both sides') :-
+    A = array{}.fromlist([1, 2], [device(c)]),
+    C @= A.pad([1-1]) + 1,
+    C.tolist() == [1, 2, 3, 1].
+
+test('padding in two dimensions then sum') :-
+    A = array{}.fromlist([[1, 2], [3, 4]], [device(c)]),
+    B @= A.pad([1-0, 0-2]) + 1,
+    B.tolist() == [[1, 1, 1, 1], [2, 3, 1, 1], [4, 5, 1, 1]],
+    C = A.pad([1-1, 1-1]).sum(),
+    C.tolist() == 10.
+
 :- end_tests(c_dtype).

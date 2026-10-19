@@ -63,7 +63,7 @@ array:M.compile(c, reduce(Op, Axes, Parent)) := Dict :-
 compile_elementwise(Op, M, Dict) :-
    setup_kernel_call(M, Op, Args, Index, Head, RuntimeName-Runtime),
    compile_expr(M, Op, Args, Index, Body),
-   MIndexExpr-MValidExpr = M.index_expr(Index),
+   c_index_expr(M, Index, MIndexExpr, MValidExpr),
    atom_string(RuntimeName, RuntimeStr),
    length(Args, NArgs),
    N is 1 + NArgs,
@@ -111,7 +111,7 @@ compile_reduce(Op, Axes, Parent, M, Dict) :-
    ;  AccExpr = (acc = Expr)
    ),
    loops(Dims, TypeAccIndex, (InnerBody, AccExpr), InnerLoopAst),
-   MIndexExpr-MValidExpr = M.index_expr(Index),
+   c_index_expr(M, Index, MIndexExpr, MValidExpr),
    atom_string(RuntimeName, RuntimeStr),
    length(Args, NArgs),
    N is 1 + NArgs,
@@ -339,8 +339,21 @@ op_expr(cast(A, Type), R, Index) =>
    op_expr(A, A1, Index),
    R = cast(A1, Type).
 
+% index_expr/1 gives the validity of an index as a Prolog goal: C spells its
+% conjunction &&.
+c_index_expr(M, Index, IndexExpr, ValidExpr) :-
+   IndexExpr-Valid = M.index_expr(Index),
+   c_condition(Valid, ValidExpr).
+
+c_condition((A, B), Condition) =>
+   c_condition(A, A1),
+   c_condition(B, B1),
+   Condition = (A1 && B1).
+c_condition(Goal, Condition) =>
+   Condition = Goal.
+
 index_input(Index, Arg-DType, ArgN, AST, V) :-
-   IndexExpr-ValidExpr = Arg.index_expr(Index),
+   c_index_expr(Arg, Index, IndexExpr, ValidExpr),
    (  array:skip_view(Arg.op, constant(Constant))
    -> IndexAST = (V = Constant)
    ;  IndexAST = (V = A[IndexExpr])
