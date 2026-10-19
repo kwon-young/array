@@ -56,13 +56,18 @@ dimensions read_shape/2 gives for its reduced axes.
 
 :- use_module(library(apply)).
 :- use_module(library(dcg/high_order)).
+:- use_module(library(pairs)).
+:- use_module(library(rbtrees)).
 :- use_module(array, []).
 
 % fuse(+Outputs, +Schedule0, -Schedule)
 % Schedule keeps the materialized nodes of Schedule0, and their views, in the
 % same order. Each kernel of Schedule computes the inlined nodes it reads.
 fuse(Outputs, Schedule0, Schedule) :-
-   phrase(sequence(reads, Schedule0), Reads),
+   phrase(sequence(reads, Schedule0), Pairs),
+   keysort(Pairs, Sorted),
+   group_pairs_by_key(Sorted, Grouped),
+   ord_list_to_rbtree(Grouped, Reads),
    Graph = graph(Outputs, Reads),
    include(has_buffer(Graph), Schedule0, Schedule1),
    maplist(fuse_kernel(Graph), Schedule1, Schedule).
@@ -110,8 +115,9 @@ has_buffer(Graph, Node) :-
 % The graph
 % =========
 
-% read(Producer, Reader, Via): the kernel computing Reader reads Producer
-% through the array Via, which is Producer itself or a view of it.
+% The kernel computing Reader reads Producer through the array Via, which is
+% Producer itself or a view of it.
+% The reads of a node are indexed by its id.
 reads(Reader), computed(Reader) ==>
    { phrase(array:op_args(Reader.op), Vias) },
    sequence(read_via(Reader), Vias).
@@ -120,12 +126,12 @@ reads(_) ==>
 
 read_via(Reader, Via) -->
    { producer(Via, Producer) },
-   [read(Producer, Reader, Via)].
+   [Producer.id-(Reader-Via)].
 
-% read(?Node, +Graph, ?Reader, ?Via)
+% read(+Node, +Graph, ?Reader, ?Via)
 read(Node, graph(_, Reads), Reader, Via) :-
-   member(read(Producer, Reader, Via), Reads),
-   same_node(Producer, Node).
+   rb_lookup(Node.id, NodeReads, Reads),
+   member(Reader-Via, NodeReads).
 
 read_once(Node, Graph) :-
    findall(x, read(Node, Graph, _, _), [_]).
