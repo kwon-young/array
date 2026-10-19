@@ -1,10 +1,11 @@
-:- module(runtime_prolog, [op_expr/3]).
+:- module(runtime_prolog, []).
 
 :- use_module(library(dcg/high_order)).
 :- use_module(array, []).
 :- use_module(view, [replace_nth0/4]).
 :- use_module(lu_decomposition).
 :- use_module(library(clpBNR), [domain/2]).
+:- use_module(fusion, [node_index/3, read_shape/2]).
 
 /* 
  * Runtime Backend Interface
@@ -45,10 +46,10 @@ prolog_format(Kind, Format) =>
 
 array:float_formats(prolog, [float64]).
 
-% Ops Prolog arithmetic computes from its inputs: it has no comparison
-% function, so a comparison can only be the outermost op of a kernel.
+% Ops a Prolog kernel computes from its inputs.
 array:expression_op(prolog, _+_).
 array:expression_op(prolog, _*_).
+array:expression_op(prolog, _<_).
 array:expression_op(prolog, sin(_)).
 array:expression_op(prolog, log(_)).
 array:expression_op(prolog, sqrt(_)).
@@ -74,24 +75,6 @@ setup_kernel_call(M, Args, Index, ModuleHead, Dict) :-
    ),
    Dict = M.put([kernel=forall(Betweens, (kernel:CallHead))]).
 
-compile_expr(Op, Args, Index, Value, AST) :-
-   % index inputs
-   maplist(array:index_input(Index), Args, Pairs),
-   pairs_keys_values(Pairs, ASTs, Values),
-   foldl(mkconj, ASTs, true, BaseAST),
-
-   % inline elementwise op using op_expr
-   pairs_keys_values(PairsForRbtree, Args, Values),
-   ord_list_to_rbtree(PairsForRbtree, ArgTree),
-   op_expr(Op, Expr, ArgTree),
-
-   % evaluate the expression, handling comparisons
-   (  compound(Expr), Expr =.. [<|_]
-   -> EvalAST = (Expr -> Value = 1; Value = 0)
-   ;  EvalAST = (Value is Expr)
-   ),
-   mkconj(BaseAST, EvalAST, AST).
-
 array:M.compile(prolog, true) := Dict :-
    Dict = M.put(kernel, true).
 array:M.compile(prolog, view(_)) := Dict :-
@@ -112,86 +95,25 @@ array:M.compile(prolog, solve(A, B)) := Dict :-
                                         B.data, OffsetB,
                                         N, M_, M.data, OffsetX)).
 array:M.compile(prolog, rand) := Dict :-
-   Dict = M.compile(prolog, elementwise(random_float)).
-array:M.compile(prolog, contiguous(Parent)) := Dict :-
-   Dict = M.compile(prolog, elementwise(contiguous(Parent))).
-array:M.compile(prolog, A<B) := Dict :-
-   Dict = M.compile(prolog, elementwise(A<B)).
-array:M.compile(prolog, A+B) := Dict :-
-   Dict = M.compile(prolog, elementwise(A+B)).
-array:M.compile(prolog, A*B) := Dict :-
-   Dict = M.compile(prolog, elementwise(A*B)).
-array:M.compile(prolog, sin(A)) := Dict :-
-   Dict = M.compile(prolog, elementwise(sin(A))).
-array:M.compile(prolog, log(A)) := Dict :-
-   Dict = M.compile(prolog, elementwise(log(A))).
-array:M.compile(prolog, sqrt(A)) := Dict :-
-   Dict = M.compile(prolog, elementwise(sqrt(A))).
-array:M.compile(prolog, float(A)) := Dict :-
-   Dict = M.compile(prolog, elementwise(float(A))).
-array:M.compile(prolog, integer(A)) := Dict :-
-   Dict = M.compile(prolog, elementwise(integer(A))).
-array:M.compile(prolog, elementwise(Op)) := Dict :-
+   compile_kernel(M, random_float, Dict).
+array:M.compile(prolog, Op) := Dict :-
+   compile_kernel(M, Op, Dict).
+
+% compile_kernel(+M, +Expr, -Dict)
+% Dict is M with a kernel storing the value of Expr at each index of M.
+compile_kernel(M, Expr, Dict) :-
    length(Index, M.ndim()),
-   phrase(array:op_args(Op), AllArgs),
+   phrase(array:op_args(Expr), AllArgs),
    list_to_ord_set(AllArgs, Args),
    setup_kernel_call(M, Args, Index, ModuleHead, Dict),
-
-   compile_expr(Op, Args, Index, MValue, Body),
-
-   % index output
+   phrase(value(Expr, ctx{index: Index}, Value), Goals),
+   conjunction(Goals, Body),
    MIndexExpr-MValidExpr = M.index_expr(Index),
-
-   % Head :- Body
    Kernel = (ModuleHead :-
       Body,
       (  MValidExpr
-      -> MIndex is MIndexExpr+1,
-         nb_setarg(MIndex, M.id, MValue)
-      ;  true
-      )
-   ),
-   retractall(ModuleHead),
-   asserta(Kernel).
-array:M.compile(prolog, reduce(Op, Axes, Parent)) := Dict :-
-   length(Index, M.ndim()),
-   phrase(array:op_args(Parent), AllArgs),
-   list_to_ord_set(AllArgs, Args),
-   setup_kernel_call(M, Args, Index, ModuleHead, Dict),
-
-   same_length(Axes, AccIndex),
-   foldl(replace_nth0, AccIndex, Axes, Index, FullIndex),
-
-   compile_expr(Parent, Args, FullIndex, ParentValue, ParentAST),
-
-   MIndexExpr-MValidExpr = M.index_expr(Index),
-   AccExpr =.. [Op, AccValue, ParentValue],
-   array:identity(Op, Identity),
-   (  Op = (<)
-   -> NewAccExpr = (
-      (  AccExpr
-      -> NewAccValue = ParentValue
-      ;  NewAccValue = AccValue
-      ))
-   ;  NewAccExpr = (NewAccValue is AccExpr)
-   ),
-   mkconj(ParentAST, (
-      arg(1, Acc, AccValue),
-      NewAccExpr,
-      nb_setarg(1, Acc, NewAccValue)),
-      AccAST),
-   [Arg0|_] = Args,
-   ParentShape = Arg0.shape(),
-   maplist({ParentShape}/[Axis, I, between(0, Dim1, I)]>>(
-           nth0(Axis, ParentShape, Dim), Dim1 is Dim-1),
-           Axes, AccIndex, BList),
-   comma_list(Betweens, BList),
-   Kernel = (ModuleHead :-
-      Acc = acc(Identity, _),
-      forall(Betweens, AccAST),
-      arg(1, Acc, MValue),
-      (  MValidExpr
-      -> MIndex is MIndexExpr+1,
+      -> MValue is Value,
+         MIndex is MIndexExpr+1,
          nb_setarg(MIndex, M.id, MValue)
       ;  true
       )
@@ -199,41 +121,81 @@ array:M.compile(prolog, reduce(Op, Axes, Parent)) := Dict :-
    retractall(ModuleHead),
    asserta(Kernel).
 
-op_expr(random_float, R, _) =>
-   R = random_float.
-op_expr(A, R, Index), is_dict(A, array) =>
-   rb_lookup(A, R, Index).
-op_expr(contiguous(A), R, Index) =>
-   op_expr(A, R, Index).
-op_expr(fused(_Node, Expr), R, Index) =>
-   op_expr(Expr, R, Index).
-op_expr(A+B, R, Index) =>
-   op_expr(A, A1, Index),
-   op_expr(B, B1, Index),
-   R = (A1+B1).
-op_expr(A*B, R, Index) =>
-   op_expr(A, A1, Index),
-   op_expr(B, B1, Index),
-   R = (A1*B1).
-op_expr(A<B, R, Index) =>
-   op_expr(A, A1, Index),
-   op_expr(B, B1, Index),
-   R = (A1<B1).
-op_expr(sin(A), R, Index) =>
-   op_expr(A, A1, Index),
-   R = sin(A1).
-op_expr(log(A), R, Index) =>
-   op_expr(A, A1, Index),
-   R = log(A1).
-op_expr(sqrt(A), R, Index) =>
-   op_expr(A, A1, Index),
-   R = sqrt(A1).
-op_expr(float(A), R, Index) =>
-   op_expr(A, A1, Index),
-   R = float(A1).
-op_expr(integer(A), R, Index) =>
-   op_expr(A, A1, Index),
-   R = integer(A1).
+conjunction(Goals, Conjunction) :-
+   foldl([G, C0, C]>>mkconj(C0, G, C), Goals, true, Conjunction).
+
+% value(+Expr, +Ctx, -Value)//
+% The goals computing Value, an arithmetic expression for the value of Expr
+% at the index of Ctx.
+value(A, Ctx, Value), is_dict(A, array) ==>
+   { Goal-Value = A.index_input(Ctx.index) },
+   [Goal].
+value(fused(_Node, Expr), Ctx, Value) ==>
+   value(Expr, Ctx, Value).
+% Expr is computed at the index of the node that Via reads.
+value(reindex(Via, Expr), Ctx, Value) ==>
+   { node_index(Via, Ctx.index, Index) },
+   value(Expr, Ctx.put(index, Index), Value).
+value(reduce(Op, Axes, Parent), Ctx, Value) ==>
+   reduction(Op, Axes, Parent, Ctx, Value).
+value(contiguous(A), Ctx, Value) ==>
+   value(A, Ctx, Value).
+% Prolog arithmetic has no comparison function.
+value(A<B, Ctx, Value) ==>
+   value(A, Ctx, A1),
+   value(B, Ctx, B1),
+   [(A1 < B1 -> Value = 1 ; Value = 0)].
+value(Atom, _, Value), atom(Atom) ==>
+   { Value = Atom }.
+value(Op, Ctx, Value), compound(Op) ==>
+   { compound_name_arguments(Op, Name, Args) },
+   values(Args, Ctx, Values),
+   { compound_name_arguments(Value, Name, Values) }.
+
+values([], _, Values) ==>
+   { Values = [] }.
+values([A | As], Ctx, Values) ==>
+   value(A, Ctx, V),
+   values(As, Ctx, Vs),
+   { Values = [V | Vs] }.
+
+% A reduction accumulates the values of Parent at each index that the reduced
+% axes add to Ctx's index.
+reduction(Op, Axes, Parent, Ctx, Value) -->
+   {  array:identity(Op, Identity),
+      read_shape(Parent, Shape),
+      same_length(Axes, Js),
+      foldl(replace_nth0, Js, Axes, Ctx.index, Index),
+      maplist([Axis, J, between(0, Max, J)]>>(nth0(Axis, Shape, Dim), Max is Dim - 1),
+              Axes, Js, Betweens0),
+      conjunction(Betweens0, Betweens),
+      phrase(value(Parent, Ctx.put(index, Index), Item), Body0),
+      accumulate(Op, Acc, Item, Update),
+      append(Body0, [Update], Body1),
+      conjunction(Body1, Body)
+   },
+   [  Acc = acc(_),
+      nb_setarg(1, Acc, Identity),
+      forall(Betweens, Body),
+      arg(1, Acc, Value)
+   ].
+
+accumulate(<, Acc, Item, Update) =>
+   Update = (
+      arg(1, Acc, A0),
+      V is Item,
+      (  A0 < V
+      -> nb_setarg(1, Acc, V)
+      ;  true
+      )
+   ).
+accumulate(Op, Acc, Item, Update) =>
+   Expr =.. [Op, A0, Item],
+   Update = (
+      arg(1, Acc, A0),
+      V is Expr,
+      nb_setarg(1, Acc, V)
+   ).
 
 array:allocate(prolog, M) :-
    compound_name_arity(M.data, data, M.datasize).

@@ -5,11 +5,10 @@
 :- use_module(c99).
 :- use_module(swipl_ld).
 :- use_module(gen_type).
-:- use_module(runtime_prolog, except([op_expr/3])).
 :- use_module(view, [replace_nth0/4]).
 :- use_module(dtype).
 :- use_module(precision, [transfer_precision/3]).
-:- use_module(fusion, [inlined_nodes//1]).
+:- use_module(fusion, [inlined_nodes//1, node_index/3, read_shape/2]).
 :- use_module(library(clpBNR), []).
 
 % Floats default to float64; integers and booleans take the smallest dtype
@@ -54,39 +53,33 @@ array:_M.compile(c, solve(_A, _B)) := _Dict :-
    throw(not_implemented).
 array:M.compile(c, rand) := Dict :-
    type(M.dtype(), Type, _, _),
-   Dict = M.compile(c, elementwise(cast(rand(), Type) / 'RAND_MAX')).
-array:M.compile(c, contiguous(Parent)) := Dict :-
-   Dict = M.compile(c, elementwise(contiguous(Parent))).
-array:M.compile(c, A<B) := Dict :-
-   Dict = M.compile(c, elementwise(A<B)).
-array:M.compile(c, A+B) := Dict :-
-   Dict = M.compile(c, elementwise(A+B)).
-array:M.compile(c, A*B) := Dict :-
-   Dict = M.compile(c, elementwise(A*B)).
-array:M.compile(c, sin(A)) := Dict :-
-   Dict = M.compile(c, elementwise(sin(A))).
-array:M.compile(c, log(A)) := Dict :-
-   Dict = M.compile(c, elementwise(log(A))).
-array:M.compile(c, sqrt(A)) := Dict :-
-   Dict = M.compile(c, elementwise(sqrt(A))).
+   compile_kernel(M, cast(rand(), Type) / 'RAND_MAX', Dict).
 array:M.compile(c, float(A)) := Dict :-
    type(M.dtype(), Type, _, _),
-   Dict = M.compile(c, elementwise(cast(A, Type))).
+   compile_kernel(M, cast(A, Type), Dict).
 array:M.compile(c, integer(A)) := Dict :-
    type(M.dtype(), Type, _, _),
    integer_cast(A, Type, Expr),
-   Dict = M.compile(c, elementwise(Expr)).
-array:M.compile(c, elementwise(Op)) := Dict :-
-   compile_elementwise(Op, M, Dict).
-array:M.compile(c, reduce(Op, Axes, Parent)) := Dict :-
-   compile_reduce(Op, Axes, Parent, M, Dict).
+   compile_kernel(M, Expr, Dict).
+array:M.compile(c, Op) := Dict :-
+   compile_kernel(M, Op, Dict).
 
-compile_elementwise(Op, M, Dict) :-
-   setup_kernel_call(M, Op, Args, Index, Head, RuntimeName-Runtime),
-   compile_expr(M, Op, Args, Index, Body),
+% compile_kernel(+M, +Expr, -Dict)
+% Dict is M with a kernel storing the value of Expr at each index of M.
+compile_kernel(M, Expr, Dict) :-
+   setup_kernel_call(M, Expr, Args, Index, Head, RuntimeName-Runtime),
+   load_types(M, Expr, Args, LoadTypes),
+   length(Args, NArgs),
+   numlist_(NArgs, Numbers),
+   maplist([Arg, N, Type, Arg-(Name-Type)]>>atom_concat(a, N, Name),
+           Args, Numbers, LoadTypes, Pairs),
+   list_to_assoc(Pairs, Loads),
+   Ctx = ctx{index: Index, node: M, loads: Loads},
+   phrase(value(Expr, Ctx, Value), Statements),
+   foldl([S, C0, C]>>mkconj(C0, S, C), Statements, true, Body0),
+   mkconj(Body0, a0[MIndexExpr] = Value, Body),
    c_index_expr(M, Index, MIndexExpr, MValidExpr),
    atom_string(RuntimeName, RuntimeStr),
-   length(Args, NArgs),
    N is 1 + NArgs,
    AST = (
    #(include(<>, 'SWI-Prolog.h')),
@@ -97,8 +90,7 @@ compile_elementwise(Op, M, Dict) :-
    #(include(<>, 'math.h')),
    void:Head {
       if MValidExpr {
-         Body,
-         a0[MIndexExpr] = v0
+         Body
       }
    },
    Runtime,
@@ -106,6 +98,7 @@ compile_elementwise(Op, M, Dict) :-
       'PL_register_foreign'(RuntimeStr, N, RuntimeName, 0)
    }
    ),
+   name_variables(AST),
    once(phrase(translation_unit(AST), Tokens)),
    once(phrase(tokens(Tokens), Str)),
    clang_format(Str, In),
@@ -117,59 +110,15 @@ compile_elementwise(Op, M, Dict) :-
    Kernel =.. [RuntimeName, Buffer | Buffers],
    Dict = M.put([kernel=runtime_c:Kernel]).
 
-compile_reduce(Op, Axes, Parent, M, Dict) :-
-   setup_kernel_call(M, Parent, Args, Index, Head, RuntimeName-Runtime),
-   length(Axes, NAxes),
-   ids(NAxes, j, int, AccIndex, TypeAccIndex),
-   foldl(replace_nth0, AccIndex, Axes, Index, FullIndex),
-   compile_expr(M, Parent, Args, FullIndex, InnerBody),
-   [Arg0|_] = Args,
-   ParentShape = Arg0.shape(),
-   maplist({ParentShape}/[Axis, Dim]>>nth0(Axis, ParentShape, Dim), Axes, Dims),
-   Expr =.. [Op, acc, v0],
-   (  Op == (<)
-   -> AccExpr = if(Expr) { acc = v0 }
-   ;  AccExpr = (acc = Expr)
-   ),
-   loops(Dims, TypeAccIndex, (InnerBody, AccExpr), InnerLoopAst),
-   c_index_expr(M, Index, MIndexExpr, MValidExpr),
-   atom_string(RuntimeName, RuntimeStr),
-   length(Args, NArgs),
-   N is 1 + NArgs,
-   array:identity(Op, Identity),
-   (  Identity == -inf
-   -> c_identity(M.dtype(), Identity, CIdentity)
-   ;  CIdentity = Identity
-   ),
-   type(M.dtype(), MDType, _, _),
-   AST = (
-   #(include(<>, 'SWI-Prolog.h')),
-   #(include(<>, 'stdint.h')),
-   #(include(<>, 'stddef.h')),
-   #(include(<>, 'stdbool.h')),
-   #(include(<>, 'math.h')),
-   void:Head {
-      if MValidExpr {
-         MDType:acc = CIdentity,
-         InnerLoopAst,
-         a0[MIndexExpr] = acc
-      }
-   },
-   Runtime,
-   install_t:install(void) {
-      'PL_register_foreign'(RuntimeStr, N, RuntimeName, 0)
-   }
-   ),
-   once(phrase(translation_unit(AST), Tokens)),
-   once(phrase(tokens(Tokens), Str)),
-   clang_format(Str, In),
-   compile_object(In, Object),
-   link_objects([Object], Library),
-   load_foreign_library(Library),
-   maplist(get_dict(data), Args, Buffers),
-   Buffer = M.data,
-   Kernel =.. [RuntimeName, Buffer | Buffers],
-   Dict = M.put([kernel=runtime_c:Kernel]).
+numlist_(0, Numbers) =>
+   Numbers = [].
+numlist_(N, Numbers) =>
+   numlist(1, N, Numbers).
+
+% The C variables of a kernel are Prolog variables until it is printed.
+name_variables(AST) :-
+   term_variables(AST, Vars),
+   foldl([Var, N0, N]>>(N is N0 + 1, atom_concat(t, N, Var)), Vars, 0, _).
 
 ids(N, Prefix, Type, Args, TypeArgs) :-
    (  N == 0
@@ -236,24 +185,6 @@ loops_([Dim | Dims], [Type:I | Index], Head, Ast) :-
    Ast = for(Type:I = 0, I < Dim, I++) {
       InnerAst
    }.
-compile_expr(M, Op, Args, Index, AST) :-
-   length(Args, NArgs),
-   (  NArgs == 0
-   -> Numbers = []
-   ;  numlist(1, NArgs, Numbers)
-   ),
-   load_types(M, Op, Args, LoadTypes),
-   pairs_keys_values(ArgTypes, Args, LoadTypes),
-   maplist(index_input(Index), ArgTypes, Numbers, ASTs, Values),
-   foldl(mkconj, ASTs, true, BaseAST),
-
-   pairs_keys_values(PairsForRbtree, Args, Values),
-   ord_list_to_rbtree(PairsForRbtree, ArgTree),
-   op_expr(Op, Expr, ArgTree),
-   type(M.dtype(), DType, _, _),
-   EvalAST = (DType:v0 = Expr),
-   mkconj(BaseAST, EvalAST, AST).
-
 % Round like Prolog integer/1 instead of truncating like a C cast.
 integer_cast(A, Type, Expr), operand_dtype(A, float) =>
    Expr = cast(round(A), Type).
@@ -326,58 +257,88 @@ unbounded(_, 1.0Inf).
 default_dtype(boolean, bool).
 default_dtype(integer, int64).
 
-op_expr(A, R, Index), is_dict(A, array) =>
-   rb_lookup(A, R, Index).
-op_expr(contiguous(A), R, Index) =>
-   op_expr(A, R, Index).
+% value(+Expr, +Ctx, -Value)//
+% The statements computing Value, the value of Expr at the index of Ctx.
+% Ctx also holds the node being computed, and the name and load type of each
+% buffer the kernel reads.
+value(A, Ctx, Value), is_dict(A, array) ==>
+   load(A, Ctx, Value).
 % An inlined node is rounded to its format, as its buffer would be.
-op_expr(fused(Node, Expr), R, Index) =>
-   op_expr(Expr, R1, Index),
-   type(Node.dtype(), Type, _, _),
-   R = cast(R1, Type).
+value(fused(Node, Expr), Ctx, Value) ==>
+   value(Expr, Ctx.put(node, Node), Value0),
+   { type(Node.dtype(), Type, _, _) },
+   { Value = cast(Value0, Type) }.
+% Expr is computed at the index of the node that Via reads.
+value(reindex(Via, Expr), Ctx, Value) ==>
+   { node_index(Via, Ctx.index, Index) },
+   value(Expr, Ctx.put(index, Index), Value).
+value(reduce(Op, Axes, Parent), Ctx, Value) ==>
+   reduction(Op, Axes, Parent, Ctx, Value).
+value(contiguous(A), Ctx, Value) ==>
+   value(A, Ctx, Value).
 % The cast is the one of fused/2.
-op_expr(float(A), R, Index) =>
-   op_expr(A, R, Index).
-op_expr(integer(A), R, Index), operand_dtype(A, float) =>
-   op_expr(A, R1, Index),
-   R = round(R1).
-op_expr(integer(A), R, Index) =>
-   op_expr(A, R, Index).
-op_expr('RAND_MAX', R, _Index) =>
-   R = 'RAND_MAX'.
-op_expr(rand(), R, _Index) =>
-   R = rand().
-op_expr(A+B, R, Index) =>
-   op_expr(A, A1, Index),
-   op_expr(B, B1, Index),
-   R = (A1+B1).
-op_expr(A*B, R, Index) =>
-   op_expr(A, A1, Index),
-   op_expr(B, B1, Index),
-   R = (A1*B1).
-op_expr(A/B, R, Index) =>
-   op_expr(A, A1, Index),
-   op_expr(B, B1, Index),
-   R = (A1/B1).
-op_expr(A<B, R, Index) =>
-   op_expr(A, A1, Index),
-   op_expr(B, B1, Index),
-   R = (A1<B1).
-op_expr(sin(A), R, Index) =>
-   op_expr(A, A1, Index),
-   R = sin(A1).
-op_expr(log(A), R, Index) =>
-   op_expr(A, A1, Index),
-   R = log(A1).
-op_expr(sqrt(A), R, Index) =>
-   op_expr(A, A1, Index),
-   R = sqrt(A1).
-op_expr(round(A), R, Index) =>
-   op_expr(A, A1, Index),
-   R = round(A1).
-op_expr(cast(A, Type), R, Index) =>
-   op_expr(A, A1, Index),
-   R = cast(A1, Type).
+value(float(A), Ctx, Value) ==>
+   value(A, Ctx, Value).
+value(integer(A), Ctx, Value), operand_dtype(A, float) ==>
+   value(A, Ctx, Value0),
+   { Value = round(Value0) }.
+value(integer(A), Ctx, Value) ==>
+   value(A, Ctx, Value).
+value(cast(A, Type), Ctx, Value) ==>
+   value(A, Ctx, Value0),
+   { Value = cast(Value0, Type) }.
+value(Atom, _, Value), atom(Atom) ==>
+   { Value = Atom }.
+value(Op, Ctx, Value), compound(Op) ==>
+   { compound_name_arguments(Op, Name, Args) },
+   values(Args, Ctx, Values),
+   { compound_name_arguments(Value, Name, Values) }.
+
+values([], _, Values) ==>
+   { Values = [] }.
+values([A | As], Ctx, Values) ==>
+   value(A, Ctx, V),
+   values(As, Ctx, Vs),
+   { Values = [V | Vs] }.
+
+load(A, Ctx, Value) -->
+   {  get_assoc(A, Ctx.loads, Name-Type),
+      c_index_expr(A, Ctx.index, IndexExpr, ValidExpr),
+      (  array:skip_view(A.op, constant(Constant))
+      -> Load = (Value = Constant)
+      ;  Load = (Value = Name[IndexExpr])
+      )
+   },
+   [  Type:Value = 0,
+      if ValidExpr {
+         Load
+      }
+   ].
+
+% A reduction of Ctx's node accumulates, in the node's type, the values of
+% Parent at each index that the reduced axes add to the node's index.
+reduction(Op, Axes, Parent, Ctx, Acc) -->
+   {  type(Ctx.node.dtype(), Type, _, _),
+      array:identity(Op, Identity0),
+      c_identity(Ctx.node.dtype(), Identity0, Identity),
+      read_shape(Parent, Shape),
+      maplist([Axis, Dim]>>nth0(Axis, Shape, Dim), Axes, Dims),
+      same_length(Axes, Js),
+      foldl(replace_nth0, Js, Axes, Ctx.index, Index),
+      phrase(value(Parent, Ctx.put(index, Index), V), Body0),
+      accumulate(Op, Acc, Item, Update),
+      append(Body0, [Type:Item = V, Update], Body1),
+      foldl([S, C0, C]>>mkconj(C0, S, C), Body1, true, Body),
+      maplist([J, int:J]>>true, Js, TypedJs),
+      loops(Dims, TypedJs, Body, Loop)
+   },
+   [Type:Acc = Identity, Loop].
+
+accumulate(<, Acc, Item, Update) =>
+   Update = if(Acc < Item) { Acc = Item }.
+accumulate(Op, Acc, Item, Update) =>
+   Expr =.. [Op, Acc, Item],
+   Update = (Acc = Expr).
 
 operand_dtype(fused(Node, _), DType) =>
    DType = Node.dtype.
@@ -396,21 +357,6 @@ c_condition((A, B), Condition) =>
    Condition = (A1 && B1).
 c_condition(Goal, Condition) =>
    Condition = Goal.
-
-index_input(Index, Arg-DType, ArgN, AST, V) :-
-   c_index_expr(Arg, Index, IndexExpr, ValidExpr),
-   (  array:skip_view(Arg.op, constant(Constant))
-   -> IndexAST = (V = Constant)
-   ;  IndexAST = (V = A[IndexExpr])
-   ),
-   atom_concat(a, ArgN, A),
-   atom_concat(v, ArgN, V),
-   AST = (
-   DType:V = 0,
-   if ValidExpr {
-      IndexAST
-   }
-   ).
 
 % Allocates the physical memory or underlying data storage for Array on the 'c' device.
 array:allocate(c, M) :-
@@ -447,3 +393,5 @@ c_identity(float64, -inf, '-INFINITY').
 c_identity(float, -inf, '-INFINITY').
 c_identity(bool, -inf, 0).
 c_identity(boolean, -inf, 0).
+c_identity(_, Identity, Identity) :-
+   number(Identity).

@@ -415,6 +415,8 @@ op_args(Atom), atomic(Atom) ==>
    [].
 op_args(fused(_Node, Expr)) ==>
    op_args(Expr).
+op_args(reindex(_Via, Expr)) ==>
+   op_args(Expr).
 op_args(Op) ==>
    { compound_name_arguments(Op, _, Args) },
    sequence(op_args, Args).

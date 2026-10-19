@@ -1,4 +1,4 @@
-:- module(fusion, [fuse/3, inlined_nodes//1]).
+:- module(fusion, [fuse/3, inlined_nodes//1, node_index/3, read_shape/2]).
 
 /** <module> Operator fusion
 
@@ -203,6 +203,27 @@ bind_inlined_format(Device, Formats, Node), get_dict(dtype, Node, float) =>
 bind_inlined_format(_, _, Node) =>
    array:bind_default_format(Node).
 
+% node_index(+Via, +ViaIndex, -Index)
+% Index is the index of the node Via reads, when Via is read at ViaIndex.
+% Via reads the node's buffer, which is contiguous since the node isn't
+% realized.
+node_index(Via, ViaIndex, Index) :-
+   producer(Via, Node),
+   IndexExpr-_ = Via.index_expr(ViaIndex),
+   view{}.from_shape(Node.shape()) = View,
+   Index = View.reverse_index_expr(IndexExpr).
+
+% read_shape(+Operand, -Shape)
+% Shape is the shape Operand is read with: the shape of the index it is
+% computed at.
+read_shape(A, Shape), is_dict(A, array) =>
+   Shape = A.shape().
+read_shape(reindex(Via, _), Shape) =>
+   Shape = Via.shape().
+read_shape(Op, Shape), compound(Op) =>
+   arg(1, Op, A),
+   read_shape(A, Shape).
+
 % inlined_nodes(+Op)//
 % The nodes Op computes inline.
 inlined_nodes(fused(Node, Expr)) ==>
@@ -286,10 +307,10 @@ test('compute type holds inlined ranges') :-
    kernels(C, [<]),
    C.tolist() == [0, 1].
 
-test('prolog comparison is not inlined') :-
+test('prolog comparison is inlined') :-
    A = array{}.fromlist([1, 2, 3]),
    C @= (A < 2) + A,
-   kernels(C, [<, +]),
+   kernels(C, [+]),
    C.tolist() == [2, 2, 3].
 
 test('c comparison is inlined') :-
