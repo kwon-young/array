@@ -628,30 +628,34 @@ create_schedule(Arrays, Tolerance, NewSchedule) :-
    choose_formats(Schedule, Arrays, Tolerance),
    allocation_scheme(Arrays, Schedule, NewSchedule).
 
+% graph_schedule(+Arrays, -Schedule)
+% Schedule holds Arrays and the arrays they depend on, each once and after
+% the arrays its op reads. A realized array depends on nothing.
+% An array is visited once, by its id: arrays share their inputs, so a walk
+% of the ops as a tree would be exponential in the depth of the sharing.
 graph_schedule(Arrays, Schedule) :-
-   maplist(array_graph, Arrays, Graphs),
-   foldl(ugraph_union, Graphs, [], Graph),
-   top_sort(Graph, RSchedule),
-   reverse(RSchedule, Schedule).
+   rb_new(Visited),
+   phrase(schedule_arrays(Arrays, Visited, _), Schedule).
 
-array_graph(Array, Graph) :-
-   phrase(array_graph(Array), Edges),
-   vertices_edges_to_ugraph([Array], Edges, Graph).
+schedule_arrays([], Visited0, Visited) ==>
+   { Visited = Visited0 }.
+schedule_arrays([Array | Arrays], Visited0, Visited) ==>
+   schedule_array(Array, Visited0, Visited1),
+   schedule_arrays(Arrays, Visited1, Visited).
 
-array_graph(Array), is_dict(Array, array) ==>
-   (  {var(Array.data)}
-   -> array_graph(Array, Array.op)
-   ;  []
-   ).
-array_graph(Parent, Array), is_dict(Array, array) ==>
-   array_graph(Array),
-   [Parent-Array].
-array_graph(Parent, Op) ==>
-   (  {compound(Op)}
-   -> {compound_name_arguments(Op, _, Args)},
-      sequence(array_graph(Parent), Args)
-   ;  []
-   ).
+schedule_array(Array, Visited0, Visited),
+      get_dict(id, Array, Id), rb_lookup(Id, _, Visited0) ==>
+   { Visited = Visited0 }.
+schedule_array(Array, Visited0, Visited),
+      get_dict(data, Array, Data), nonvar(Data) ==>
+   { rb_insert_new(Visited0, Array.id, true, Visited) },
+   [Array].
+schedule_array(Array, Visited0, Visited) ==>
+   {  rb_insert_new(Visited0, Array.id, true, Visited1),
+      phrase(op_args(Array.op), Inputs)
+   },
+   schedule_arrays(Inputs, Visited1, Visited),
+   [Array].
 
 % Allocation
 % ==========
