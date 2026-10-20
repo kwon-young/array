@@ -14,6 +14,16 @@ Array.pl is a powerful library for SWI-Prolog that provides N-dimensional arrays
 ### Prerequisites
 
 -   [SWI-Prolog](https://www.swi-prolog.org/)
+-   CMake and a C compiler
+
+### Building
+
+The foreign libraries are built in `build/` before starting Prolog:
+
+```bash
+cmake -B build -DCMAKE_PREFIX_PATH=<swipl install prefix>
+cmake --build build
+```
 
 ### Usage
 

@@ -6,7 +6,21 @@
    buffer_type_size/2
 ]).
 
-:- use_foreign_library('buffer.so').
+% The foreign libraries are built in build/, by a step before starting
+% Prolog: see CMakeLists.txt.
+:- multifile user:file_search_path/2.
+:- dynamic user:file_search_path/2.
+
+foreign_directory(Dir), user:file_search_path(foreign, Dir) =>
+   true.
+foreign_directory(Dir) =>
+   asserta(user:file_search_path(foreign, Dir)).
+
+:- prolog_load_context(directory, Dir),
+   directory_file_path(Dir, build, Build),
+   foreign_directory(Build).
+
+:- use_foreign_library(foreign(buffer)).
 
 buffer_type_size(Type, TypeSize) :-
    c_buffer_type_size(Type, TypeSize).
