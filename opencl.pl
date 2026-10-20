@@ -54,10 +54,17 @@ Code is the name of the OpenCL error code.
 % Device is the OpenCL device named Name.
 % A device is named after its platform: pocl, nvidia, intel, amd...
 % Further devices of a platform are named Name_1, Name_2...
-opencl_device(Name, Device) :-
-   findall(Base-Device0, platform_device(Base, Device0), Pairs),
-   name_devices(Pairs, [], Named),
+opencl_device(Name, Device), atom(Name) =>
+   named_devices(Named),
+   memberchk(Name-Device0, Named),
+   Device = Device0.
+opencl_device(Name, Device) =>
+   named_devices(Named),
    member(Name-Device, Named).
+
+named_devices(Named) :-
+   findall(Base-Device, platform_device(Base, Device), Pairs),
+   name_devices(Pairs, [], Named).
 
 platform_device(Base, Device) :-
    cl_platforms(Platforms),
