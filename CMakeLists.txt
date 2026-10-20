@@ -8,6 +8,7 @@ project(array C)
 #   cmake --build build
 
 find_package(SWIPL REQUIRED)
+find_package(OpenCL REQUIRED)
 
 # A foreign library is loaded into swipl, which provides libswipl's symbols.
 function(add_foreign_library name)
@@ -24,3 +25,7 @@ add_custom_command(
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   DEPENDS gen_type.pl c99.pl)
 add_foreign_library(buffer buffer.c ${CMAKE_CURRENT_SOURCE_DIR}/buffer_types.h)
+
+add_foreign_library(opencl opencl.c)
+target_compile_definitions(opencl PRIVATE CL_TARGET_OPENCL_VERSION=300)
+target_link_libraries(opencl PRIVATE OpenCL::OpenCL)
