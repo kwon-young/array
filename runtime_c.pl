@@ -8,6 +8,8 @@
 :- use_module(dtype).
 :- use_module(precision, [transfer_precision/3]).
 :- use_module(kernel_c).
+:- use_module(ir_lower, [lower_kernel/5]).
+:- use_module(ir_c, [ir_c/3]).
 
 % Floats default to float64; integers and booleans take the smallest dtype
 % holding their range.
@@ -50,24 +52,20 @@ array:M.compile(c, constant(_)) := Dict :-
    Dict = M.put(kernel, true).
 array:_M.compile(c, solve(_A, _B)) := _Dict :-
    throw(not_implemented).
-array:M.compile(c, rand) := Dict :-
-   compile_kernel(M, cast(rand(), M.dtype()) / 'RAND_MAX', Dict).
-array:M.compile(c, float(A)) := Dict :-
-   compile_kernel(M, cast(A, M.dtype()), Dict).
-array:M.compile(c, integer(A)) := Dict :-
-   integer_cast(A, M.dtype(), Expr),
-   compile_kernel(M, Expr, Dict).
 array:M.compile(c, Op) := Dict :-
    compile_kernel(M, Op, Dict).
 
-% compile_kernel(+M, +Expr, -Dict)
-% Dict is M with a kernel storing the value of Expr at each index of M.
-compile_kernel(M, Expr, Dict) :-
-   kernel_params(M, Expr, Args, Index, Params),
-   kernel_body(c, M, Expr, Args, Index, Body),
-   length(Args, NArgs),
+% compile_kernel(+M, +Op, -Dict)
+% Dict is M with a kernel computing Op into M: the kernel IR of Op, printed
+% as a C function computing one element, called by a runtime predicate
+% looping over M's index.
+compile_kernel(M, Op, Dict) :-
+   lower_kernel(c, M, Op, IR, Arrays),
+   ir_c(c, IR, c_kernel(Buffers, Shape, TypeIndex, Body)),
+   maplist(buffer_param, Buffers, [Out | TypeArgs]),
+   length(TypeArgs, NArgs),
    opt_level(Level),
-   Code = code(Level, Params, M.shape(), Body),
+   Code = code(Level, params(Out, TypeArgs, TypeIndex), Shape, Body),
    % A kernel is named after its code, so a kernel already loaded is reused.
    variant_sha1(Code, Hash),
    atom_concat(kernel_, Hash, KernelName),
@@ -76,10 +74,20 @@ compile_kernel(M, Expr, Dict) :-
    name_variables(AST),
    N is 1 + NArgs,
    load_kernel(RuntimeName/N, Level, AST),
-   maplist(get_dict(data), Args, Buffers),
-   Buffer = M.data,
-   Kernel =.. [RuntimeName, Buffer | Buffers],
+   maplist(get_dict(data), Arrays, Datas),
+   Kernel =.. [RuntimeName | Datas],
    Dict = M.put([kernel=runtime_c:Kernel]).
+
+% An output never overlaps an input: an input lives in the buffer pool until
+% its reader has run.
+buffer_param(Format-a0, Param) =>
+   type_name(c, Format, Type),
+   atom_concat(Type, ' *restrict', PointerType),
+   Param = PointerType:a0.
+buffer_param(Format-Name, Param) =>
+   type_name(c, Format, Type),
+   atomic_list_concat([const, ' ', Type, ' *restrict'], PointerType),
+   Param = PointerType:Name.
 
 load_kernel(Runtime, _, _), current_predicate(Runtime) =>
    true.
@@ -114,24 +122,6 @@ get_blob_data(Term, Type:Arg, Ast) :-
       Type:Arg,
       'PL_get_blob'(Term, cast(&Arg, 'void**'), 'NULL', 'NULL')
    ).
-
-% kernel_params(+M, +Op, -Args, -Index, -Params)
-% The kernel computing Op into M reads the buffers of Args at Index.
-% Params are its typed parameters: a0 for M, a1... for Args, and Index.
-kernel_params(M, Op, UniqueArgs, Index, params(Type:a0, TypeArgs, TypeIndex)) :-
-   ids(M.ndim(), i, int, Index, TypeIndex),
-   phrase(array:op_args(Op), AllArgs),
-   list_to_ord_set(AllArgs, UniqueArgs),
-   length(UniqueArgs, NArgs),
-   maplist(array:dtype, UniqueArgs, PrologDTypes),
-   maplist(type, PrologDTypes, DTypes, _, _),
-   % an output never overlaps an input: an input lives in the buffer pool
-   % until its reader has run
-   maplist([DType, P]>>atomic_list_concat([const, ' ', DType, ' *restrict'], P),
-           DTypes, Ps),
-   type(M.dtype(), MDType, _, _),
-   atom_concat(MDType, ' *restrict', Type),
-   ids(NArgs, a, Ps, _, TypeArgs).
 
 % kernel_ast(+KernelName, +RuntimeName, +Code, -AST)
 % AST defines the kernel, computing one index, and its runtime, a foreign

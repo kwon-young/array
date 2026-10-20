@@ -1,5 +1,9 @@
 :- module(kernel_c, [
    kernel_body/6,
+   lowest/3,
+   reduction_hint/4,
+   loops/5,
+   c_condition/2,
    opt_level/1,
    statements/2,
    integer_cast/3,

@@ -78,6 +78,11 @@ statement(for(Init, Cond, End) {Body}) -->
    compound_statement(Body).
 statement(while(Cond) {Body}) -->
    [while, '('], exp(Cond), [')'], compound_statement(Body).
+statement(if_else(Cond, Then, Else)) -->
+   [if, '('], exp(Cond), [')'],
+   compound_statement(Then),
+   [else],
+   compound_statement(Else).
 statement(if A else B) -->
    statement(if A),
    [else], statement(B).
