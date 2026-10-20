@@ -158,6 +158,9 @@ several stores in one `forall` when they share a domain, or a conjunction of
 
 - Every variable is assigned once: by its binder (`between`), a `load`, an
   `is`, a `cast`, a conditional or an `aggregate_all`.
+- The values a conditional assigns are those both its branches assign; a
+  value one branch assigns alone is local to that branch, as in
+  `( Valid -> V is …, store(…) ; true )`.
 - An index variable is bound by `between(0, Max, I)`, which also gives its
   bounds: `0 =< I =< Max`. Optimizations read bounds from the binders.
 - The only variables shared with the outside are the head's buffers.
@@ -172,12 +175,15 @@ precision model needs it to round.
   the signature printers need. The e-graph shares the repeated pair as one
   class. A verifier checks that a buffer variable has a single format.
 - `load` gives the format of the buffer.
-- `cast(Format, _, Out)` gives `Format`.
+- `cast(Format, In, Out)` gives `Format`. `In` may be a number: a constant
+  in a format.
 - `is` gives the format of its operands. The lowering inserts casts so that
   the operands of an operation share a format: this is today's `load_types`,
   made explicit.
 - A conditional producing a comparison gives `bool`.
 - An index variable is an integer of the dialect's index type.
+- The Prolog device's formats are `integer`, `boolean` and `float64`: exact
+  integers, and Prolog's floats.
 
 ## Annotations
 

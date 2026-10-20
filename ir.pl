@@ -83,6 +83,9 @@ format(int64).
 format(uint64).
 format(Format) :-
    float_format(Format).
+% the Prolog device's exact formats
+format(integer).
+format(boolean).
 
 float_format(float16).
 float_format(float32).
@@ -167,7 +170,7 @@ goal(Value is Expr, Env0, Env) ==>
    assign(Value, Format, Env0, Env).
 goal(cast(Format, In, Out), Env0, Env) ==>
    { atom(Format), format(Format) -> true ; ir_error(not_a_format, Format) },
-   { value_format(In, Env0, _) },
+   { number(In) -> true ; value_format(In, Env0, _) },
    assign(Out, Format, Env0, Env).
 goal(Value = Number, Env0, Env), number(Number) ==>
    assign(Value, const, Env0, Env).
@@ -342,20 +345,11 @@ branch_values(env(_, _, Values0), env(_, _, Values), New) :-
    length(New, K),
    append(New, _, Values).
 
-% Both branches of a conditional assign the same values. A value assigned
-% only numbers is a comparison's result, a bool.
+% The values a conditional assigns are those both branches assign: a value
+% assigned by one branch only is local to it. A value assigned only numbers
+% is a comparison's result, a bool.
 merge_branches(Then, Else, Merged) :-
-   pairs_keys(Then, ThenVars),
-   pairs_keys(Else, ElseVars),
-   (  same_vars(ThenVars, ElseVars)
-   -> maplist(merge_value(Else), Then, Merged)
-   ;  ir_error(branches_assign_differently, ThenVars-ElseVars)
-   ).
-
-same_vars(As, Bs) :-
-   length(As, N),
-   length(Bs, N),
-   forall(member(A, As), (member(B, Bs), B == A)).
+   convlist(merge_value(Else), Then, Merged).
 
 merge_value(Else, Var-ThenFormat, Var-Format) :-
    member(V-ElseFormat, Else),
