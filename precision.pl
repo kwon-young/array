@@ -70,7 +70,9 @@ inherited(reduce(<, _, A), _, I) => I = A.precision.
 rounding(_, M, _, R), \+ get_dict(dtype, M, float) => R = 0.
 rounding(rand, _, _, R) => R = 0.
 rounding(reduce(<, _, _), _, _, R) => R = 0.
-% naive summation: the k-th partial sum is rounded once
+% A sum of N terms, in any order (any binary tree of additions), has an
+% error of at most (N-1)*U*sum(|x_i|) =< (N-1)*U*N*|A|: kernels may reorder
+% a sum, for example into SIMD lanes.
 rounding(reduce(+, _, A), M, U, R) =>
    reduce_size(A, M, N),
    R = U*N*(N - 1)*abs(A.range).
@@ -396,5 +398,17 @@ test('lowered results stay within the guaranteed error') :-
            (  nth1(I, Exact, E),
               assertion(abs(V - E) =< S)
            )).
+
+% the c kernel reorders the sum into SIMD lanes
+test('a reordered sum stays within the guaranteed error') :-
+    set_random(seed(7)),
+    length(Xs, 100000),
+    maplist([X]>>(X is random_float), Xs),
+    foldl([X, S0, S1]>>(S1 is S0 + rational(X)), Xs, 0, Exact),
+    A = array{}.fromlist(Xs, [device(c)]),
+    C = A.sum().realize(),
+    sup_precision(C, Bound),
+    Value = C.tolist(),
+    abs(rational(Value) - Exact) =< Bound.
 
 :- end_tests(precision).

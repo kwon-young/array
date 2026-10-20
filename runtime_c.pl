@@ -90,7 +90,9 @@ load_kernel(_, Level, AST) =>
    debug(array(kernel), "~s", [In]),
    atom_concat('-O', Level, Optimize),
    % never -ffast-math: the precision bounds need IEEE rounding
-   compile_object(In, [Optimize, '-march=native'], Object),
+   % -fopenmp-simd only enables the simd pragmas: no threads
+   compile_object(In, [Optimize, '-march=native', '-fno-math-errno',
+                       '-fopenmp-simd'], Object),
    link_objects([Object], Library),
    load_foreign_library(Library).
 
@@ -123,9 +125,12 @@ kernel_params(M, Op, UniqueArgs, Index, params(Type:a0, TypeArgs, TypeIndex)) :-
    length(UniqueArgs, NArgs),
    maplist(array:dtype, UniqueArgs, PrologDTypes),
    maplist(type, PrologDTypes, DTypes, _, _),
-   maplist([DType, P]>>atom_concat(DType, *, P), DTypes, Ps),
+   % an output never overlaps an input: an input lives in the buffer pool
+   % until its reader has run
+   maplist([DType, P]>>atomic_list_concat([const, ' ', DType, ' *restrict'], P),
+           DTypes, Ps),
    type(M.dtype(), MDType, _, _),
-   atom_concat(MDType, *, Type),
+   atom_concat(MDType, ' *restrict', Type),
    ids(NArgs, a, Ps, _, TypeArgs).
 
 % kernel_ast(+KernelName, +RuntimeName, +Code, -AST)
@@ -159,7 +164,7 @@ kernel_ast(KernelName, RuntimeName,
    #(include(<>, 'stdbool.h')),
    #(include(<>, 'stdlib.h')),
    #(include(<>, 'math.h')),
-   void:Head {
+   'static inline void':Head {
       Body
    },
    'static foreign_t':RuntimeHead {

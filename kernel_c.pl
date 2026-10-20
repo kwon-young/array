@@ -80,6 +80,16 @@ loops([], [], Call, Call).
 loops([Dim | Dims], TypeIndex, Call, Ast) :-
    loops_([Dim | Dims], TypeIndex, Call, Ast).
 
+% loops(+Dims, +TypeIndex, +Body, +Hint, -Ast)
+% Ast loops over Dims, with the statement Hint before the innermost loop.
+loops([Dim], [Type:I], Body, Hint, Ast) =>
+   mkconj(Hint, for(Type:I = 0, I < Dim, I++) { Body }, Ast).
+loops([Dim | Dims], [Type:I | Index], Body, Hint, Ast) =>
+   loops(Dims, Index, Body, Hint, InnerAst),
+   Ast = for(Type:I = 0, I < Dim, I++) {
+      InnerAst
+   }.
+
 loops_([], [], Head, Head).
 loops_([Dim | Dims], [Type:I | Index], Head, Ast) :-
    loops_(Dims, Index, Head, InnerAst),
@@ -109,6 +119,16 @@ opencl_type(uint64, ulong).
 opencl_type(float16, half).
 opencl_type(float32, float).
 opencl_type(float64, double).
+
+% reduction_hint(+Dialect, +Op, +Acc, -Hint)
+% Hint lets the compiler reorder a reduction into Acc, for example into SIMD
+% lanes. A sum may be reordered: its error bound holds for any summation
+% order (see precision.pl). A maximum may not: with NaNs, the order changes
+% the result.
+reduction_hint(c, +, Acc, Hint) =>
+   Hint = pragma([omp, simd, reduction(+, Acc)]).
+reduction_hint(_, _, _, Hint) =>
+   Hint = true.
 
 % lowest(?Dialect, ?Format, ?Constant): the identity of a maximum.
 lowest(c, int8, 'INT8_MIN').
@@ -284,7 +304,8 @@ reduction(Op, Axes, Parent, Ctx, Acc) -->
       append(Body0, [Type:Item = V, Update], Body1),
       statements(Body1, Body),
       maplist([J, int:J]>>true, Js, TypedJs),
-      loops(Dims, TypedJs, Body, Loop)
+      reduction_hint(Ctx.dialect, Op, Acc, Hint),
+      loops(Dims, TypedJs, Body, Hint, Loop)
    },
    [Type:Acc = Identity, Loop].
 

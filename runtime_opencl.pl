@@ -114,10 +114,18 @@ compile_kernel(Name, M, Expr, Dict) :-
    maplist([A, mem(Data)]>>get_dict(data, A, Data), [M | Args], KernelArgs),
    Dict = M.put(kernel, runtime_opencl:launch(Name, Kernel, KernelArgs, M.size())).
 
+% a0 is the output: it never overlaps an input, which lives in the buffer pool
+% until its reader has run.
 param(A, N, Type:Param) :-
    type_name(opencl, A.dtype(), Element),
-   atomic_list_concat(['__global ', Element, '*'], Type),
+   param_qualifiers(N, Qualifiers),
+   atomic_list_concat(['__global ', Qualifiers, Element, ' *restrict'], Type),
    atom_concat(a, N, Param).
+
+param_qualifiers(0, Qualifiers) =>
+   Qualifiers = ''.
+param_qualifiers(_, Qualifiers) =>
+   Qualifiers = 'const '.
 
 kernel_source(Name, KernelName, kernel(_Level, Params, Declarations, Body), Source) :-
    Head =.. [KernelName | Params],
