@@ -26,9 +26,9 @@ push (build the graph)
   → lower the IR to the dialect, print, compile
 ```
 
-Today, each backend generates its code straight from the fused op
-(`kernel_c:value//3`, `runtime_prolog:value//3`). The IR splits this into a
-single lowering to the IR, and one printer per dialect.
+The lowering is `ir_lower.pl`, and each dialect has a printer: `ir_prolog.pl`
+for the Prolog device, `ir_c.pl` for C and OpenCL C. The optimization step is
+not implemented yet: printers receive the lowered clause as it is.
 
 ## The kernel clause
 
@@ -48,8 +48,8 @@ kernel(Out-Format0, In1-Format1, ..., InN-FormatN) :-
   their bounds from their binders like any index variable, and schedule
   decisions such as `parallel/1` apply to it. Calling a function per element,
   as C does, is how a dialect prints the domain, not part of the IR.
-- Its name is `kernel` until it is registered, then the hash of the clause,
-  as kernels are named today.
+- Its name is `kernel`: a device registers the printed kernel under its
+  hash.
 
 ## Vocabulary
 
@@ -182,8 +182,8 @@ precision model needs it to round.
 - `cast(Format, In, Out)` gives `Format`. `In` may be a number: a constant
   in a format.
 - `is` gives the format of its operands. The lowering inserts casts so that
-  the operands of an operation share a format: this is today's `load_types`,
-  made explicit.
+  the operands of an operation share a format: the load formats of
+  `ir_lower:load_formats/6`.
 - A conditional producing a comparison gives `bool`.
 - An index variable is an integer of the dialect's index type.
 - The Prolog device's formats are `integer`, `boolean` and `float64`: exact
@@ -273,8 +273,8 @@ kernel(O-bool, A-uint32) :-
 ```
 
 The product is inlined: `cast(uint64, P0, P)` is its rounding to its own
-format, today's `fused/2`. The load's cast to `uint64` is today's compute
-type.
+format, the rounding of its `fused/2`. The load's cast to `uint64` is the
+compute format.
 
 ### A maximum of floats rounded to integers: `(A * 2.0).as(integer).max([1])`
 
@@ -319,7 +319,7 @@ kernel(O-float64) :-
 
 ## From the fused graph to the IR
 
-One lowering replaces both `value//3`:
+`ir_lower:lower_kernel/5` lowers a fused schedule node:
 
 - a kernel's output domain is `forall` over `between(0, Dim-1, I)` for each
   dimension of the output;

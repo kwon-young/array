@@ -75,20 +75,20 @@ ir_run(Kernel, Datas) :-
 % Formats
 % =======
 
-format(bool).
-format(int8).
-format(uint8).
-format(int16).
-format(uint16).
-format(int32).
-format(uint32).
-format(int64).
-format(uint64).
-format(Format) :-
+known_format(bool).
+known_format(int8).
+known_format(uint8).
+known_format(int16).
+known_format(uint16).
+known_format(int32).
+known_format(uint32).
+known_format(int64).
+known_format(uint64).
+known_format(Format) :-
    float_format(Format).
 % the Prolog device's exact formats
-format(integer).
-format(boolean).
+known_format(integer).
+known_format(boolean).
 
 float_format(float16).
 float_format(float32).
@@ -120,7 +120,7 @@ kernel_buffers((Head :- Body), Buffers, Body0), compound(Head) =>
 kernel_buffers(Kernel, _, _) =>
    ir_error(not_a_kernel, Kernel).
 
-buffer(Buffer-Format), var(Buffer), atom(Format), format(Format) =>
+buffer(Buffer-Format), var(Buffer), atom(Format), known_format(Format) =>
    true.
 buffer(Buffer) =>
    ir_error(not_a_buffer, Buffer).
@@ -172,7 +172,7 @@ goal(Value is Expr, Env0, Env) ==>
    { expr_format(Expr, Env0, Format) },
    assign(Value, Format, Env0, Env).
 goal(cast(Format, In, Out), Env0, Env) ==>
-   { atom(Format), format(Format) -> true ; ir_error(not_a_format, Format) },
+   { atom(Format), known_format(Format) -> true ; ir_error(not_a_format, Format) },
    { value(In, Env0) },
    assign(Out, Format, Env0, Env).
 goal(Value = Number, Env0, Env), number(Number) ==>

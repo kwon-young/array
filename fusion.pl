@@ -49,9 +49,10 @@ Each device provides, as multifile predicates of the array module:
   * expression_op(Device, Op): Op can be computed inside an expression;
   * compute_format(Device, Formats, Format): the format a kernel computes
     its inlined floats in, given the float formats of its buffers;
-and compiles `fused(Node, Expr)` as the value of Expr in the format of Node,
-`reindex(Via, Op)` at node_index/3, and a reduction by looping over the
-dimensions read_shape/2 gives for its reduced axes.
+The lowering to the kernel IR (ir_lower.pl) computes `fused(Node, Expr)` as
+the value of Expr in the format of Node, `reindex(Via, Op)` at node_index/3,
+and a reduction by looping over the dimensions read_shape/2 gives for its
+reduced axes; each device then prints the IR in its dialect.
 */
 
 :- use_module(library(apply)).

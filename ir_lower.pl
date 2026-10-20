@@ -3,7 +3,7 @@
 /** <module> Lowering fused kernels to the kernel IR
 
 lower_kernel/5 turns a fused schedule node into a kernel clause of the IR
-(docs/kernel_ir.md), computing what the backends compute today:
+(docs/kernel_ir.md), whose semantics every device shares:
 
   * each load is converted to the kernel's compute format, as C converts it
     when it loads an input into a variable of that type;
@@ -88,7 +88,7 @@ guard(Valid, Goal0, Goal) =>
 
 % load_formats(+Device, +M, +Expr, +Args, -Compute, -Formats)
 % Formats are the formats Args are loaded in, and Compute the format
-% operations compute in: today's load types of kernel_c.
+% operations compute in.
 % A cast must see its input unchanged, so it keeps the input's own format.
 load_formats(_, _, cast(A, _), Args, Compute, Formats), is_dict(A, array) =>
    maplist(array:dtype, Args, Formats),
