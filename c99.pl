@@ -130,6 +130,10 @@ exp(A // B) -->
    exp(A), [/], exp(B).
 exp(A && B) -->
    exp(A), [&&], exp(B).
+exp(or(A, B)) -->
+   exp(A), ['||'], exp(B).
+exp(A =\= B) -->
+   exp(A), ['!='], exp(B).
 exp(Exp[Size]) -->
    exp(Exp), ['['], exp(Size), [']'].
 exp(*Exp) -->

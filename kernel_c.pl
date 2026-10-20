@@ -309,8 +309,10 @@ reduction(Op, Axes, Parent, Ctx, Acc) -->
    },
    [Type:Acc = Identity, Loop].
 
+% A maximum propagates NaN, as aggregate_all/3 and numpy do: once Acc is NaN,
+% Acc < Item is always false.
 accumulate(<, Acc, Item, Update) =>
-   Update = if(Acc < Item) { Acc = Item }.
+   Update = if(or(Acc < Item, Item =\= Item)) { Acc = Item }.
 accumulate(Op, Acc, Item, Update) =>
    Expr =.. [Op, Acc, Item],
    Update = (Acc = Expr).

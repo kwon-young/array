@@ -1030,11 +1030,38 @@ test('a realized input keeps its values', [forall(member(D, [prolog, c]))]) :-
 
 :- begin_tests(array_max).
 
+% A float64 array on Device holding Values, which may hold NaN: ranges can't,
+% so it starts as a C buffer, with an unbounded range.
+float_array(Device, Values, A) :-
+    length(Values, N),
+    Data =.. [data | Values],
+    buffer:buffer_from_data(Buffer, float64, N, Data),
+    A0 = array{}.empty([N], [device(c), dtype(float), data(Buffer),
+                             format(float64)]),
+    A = A0.to(Device).
+
+nan(X) :-
+    float(X),
+    float_class(X, nan).
+
 test('a maximum over an empty axis fails loudly',
      [throws(error(domain_error(non_empty_axes, [1]), _))]) :-
     A = array{}.fromlist([[1.0, 2.0]]),
     B = A.shrink([0-1, 0-0]),
     _ = B.max([1]).
+
+test('a maximum propagates NaN', [forall(member(D, [prolog, c]))]) :-
+    current_prolog_flag(float_undefined, Undefined),
+    setup_call_cleanup(set_prolog_flag(float_undefined, nan),
+                       (  NaN is nan,
+                          float_array(D, [1.0, NaN, 3.0], A),
+                          float_array(D, [NaN, 1.0], B),
+                          float_array(D, [1.0, 3.0], C),
+                          nan(A.max().tolist()),
+                          nan(B.max().tolist()),
+                          C.max().tolist() == 3.0
+                       ),
+                       set_prolog_flag(float_undefined, Undefined)).
 
 :- end_tests(array_max).
 

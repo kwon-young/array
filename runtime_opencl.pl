@@ -378,6 +378,33 @@ test('same values as prolog', [forall((case(Name, _), opencl_device(Device, _)))
    computed(Name, opencl(Device), Values),
    close_to(Expected, Values).
 
+% A float64 array on Device holding Values, which may hold NaN: ranges can't,
+% so it starts as a C buffer, with an unbounded range.
+float_array(Device, Values, A) :-
+   length(Values, N),
+   Data =.. [data | Values],
+   buffer_from_data(Buffer, float64, N, Data),
+   A0 = array{}.empty([N], [device(c), dtype(float), data(Buffer),
+                            format(float64)]),
+   A = A0.to(Device).
+
+nan(X) :-
+   float(X),
+   float_class(X, nan).
+
+test('a maximum propagates NaN', [forall(opencl_device(Name, _))]) :-
+   current_prolog_flag(float_undefined, Undefined),
+   setup_call_cleanup(set_prolog_flag(float_undefined, nan),
+                      (  NaN is nan,
+                         float_array(opencl(Name), [1.0, NaN, 3.0], A),
+                         float_array(opencl(Name), [NaN, 1.0], B),
+                         float_array(opencl(Name), [1.0, 3.0], C),
+                         nan(A.max().tolist()),
+                         nan(B.max().tolist()),
+                         C.max().tolist() == 3.0
+                      ),
+                      set_prolog_flag(float_undefined, Undefined)).
+
 test('rand fails loudly', [forall(opencl_device(Name, _))]) :-
    catch(_ = array{}.rand([2], [device(opencl(Name))]).tolist(), error(E, _), true),
    E == unsupported_op(opencl(Name), rand).

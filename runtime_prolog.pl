@@ -179,11 +179,15 @@ reduction(Op, Axes, Parent, Ctx, Value) -->
       arg(1, Acc, Value)
    ].
 
+% A maximum propagates NaN, as aggregate_all/3 and numpy do: once A0 is NaN,
+% A0 < V is always false.
 accumulate(<, Acc, Item, Update) =>
    Update = (
       arg(1, Acc, A0),
       V is Item,
-      (  A0 < V
+      (  (  A0 < V
+         ;  V =\= V
+         )
       -> nb_setarg(1, Acc, V)
       ;  true
       )
