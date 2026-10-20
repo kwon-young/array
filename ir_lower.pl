@@ -19,6 +19,7 @@ lower_kernel/5 turns a fused schedule node into a kernel clause of the IR
 :- use_module(library(dcg/high_order)).
 :- use_module(array, []).
 :- use_module(fusion, [inlined_nodes//1, node_index/3, read_shape/2]).
+:- use_module(kernel_c, [compute_dtype/2]).
 :- use_module(view, [replace_nth0/4]).
 
 % lower_kernel(+Device, +M, +Op, -Kernel, -Arrays)
@@ -112,7 +113,7 @@ compute_format(prolog, Arrays, Format) =>
    foldl(array:broadcast_dtype, Kinds, boolean, Kind),
    prolog_format(Kind, Format).
 compute_format(_, Arrays, Format) =>
-   kernel_c:compute_dtype(Arrays, Format).
+   compute_dtype(Arrays, Format).
 
 prolog_format(float, Format) => Format = float64.
 prolog_format(Kind, Format) => Format = Kind.

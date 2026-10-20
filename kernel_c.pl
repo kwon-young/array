@@ -1,13 +1,12 @@
 :- module(kernel_c, [
-   kernel_body/6,
    lowest/3,
    reduction_hint/4,
    loops/5,
    c_condition/2,
    opt_level/1,
    statements/2,
-   integer_cast/3,
    type_name/3,
+   compute_dtype/2,
    c_default_format/4,
    loops/4,
    name_variables/1,
@@ -16,22 +15,20 @@
 
 /** <module> C-family kernels
 
-The body of a kernel in C or OpenCL C, the dialects: the statements storing
-the value of an expression at one index of the array it computes.
+What the C and OpenCL C dialects share: the optimization level of their
+compilers, the names of formats in each dialect, the identity of a maximum,
+the reduction hints, the formats kernels compute in, and the pieces of C
+syntax their printers build (loops, conditions, statements).
 
 Types are formats, such as int32 or float64, until type_name/3 names them in
 a dialect.
 */
 
-:- use_module(library(assoc)).
-:- use_module(library(dcg/high_order)).
 :- use_module(c99).
 :- use_module(array, []).
 :- use_module(buffer, [buffer_type_size/2]).
 :- use_module(dtype, [dtype_info/5]).
 :- use_module(gen_type, [type/4]).
-:- use_module(view, [replace_nth0/4]).
-:- use_module(fusion, [inlined_nodes//1, node_index/3, read_shape/2]).
 
 % The optimization level of the kernel compilers, from 0 to 3: the
 % environment variable ARRAY_OPT, or 2. Set the array_opt flag to change it.
@@ -48,24 +45,6 @@ env_opt_level(Level) =>
 opt_level(Level) :-
    current_prolog_flag(array_opt, Level),
    must_be(between(0, 3), Level).
-
-% kernel_body(+Dialect, +M, +Expr, +Args, +Index, -Body)
-% Body stores in a0 the value of Expr at Index of M, loading Args from a1,
-% a2...
-kernel_body(Dialect, M, Expr, Args, Index, Body) :-
-   load_types(M, Expr, Args, Formats),
-   maplist(type_name(Dialect), Formats, Types),
-   length(Args, NArgs),
-   numlist_(NArgs, Numbers),
-   maplist([Arg, N, Type, Arg-(Name-Type)]>>atom_concat(a, N, Name),
-           Args, Numbers, Types, Pairs),
-   list_to_assoc(Pairs, Loads),
-   Ctx = ctx{dialect: Dialect, index: Index, node: M, loads: Loads},
-   phrase(value(Expr, Ctx, Value), Statements),
-   c_index_expr(M, Index, MIndexExpr, MValidExpr),
-   append(Statements, [a0[MIndexExpr] = Value], Statements1),
-   statements(Statements1, Store),
-   Body = if MValidExpr { Store }.
 
 statements(List, Statements) :-
    foldl([S, C0, C]>>mkconj(C0, S, C), List, true, Statements).
@@ -152,44 +131,15 @@ lowest(_, float16, '-INFINITY').
 lowest(_, float32, '-INFINITY').
 lowest(_, float64, '-INFINITY').
 
-identity(Dialect, Format, -inf, Identity) =>
-   lowest(Dialect, Format, Identity).
-identity(_, _, Identity0, Identity) =>
-   Identity = Identity0.
-
 % Formats
 % =======
 
-% Round like Prolog integer/1 instead of truncating like a C cast.
-integer_cast(A, Format, Expr), operand_dtype(A, float) =>
-   Expr = cast(round(A), Format).
-integer_cast(A, Format, Expr) =>
-   Expr = cast(A, Format).
-
+% compute_dtype(+Arrays, -DType)
 % C evaluates an operation in the type of its operands, so loading each input
 % in its own type makes e.g. uint32 * uint32 wrap before being stored as
-% uint64, or compares uint32 < int8 as unsigned.
-% Instead, load every input in the smallest format that holds all inputs
-% and, for arithmetic, the result too.
-% A cast must see its input unchanged, so it keeps the input's own format.
-% An inlined node is held in its own format, so the compute format must hold
-% its range too.
-load_types(_M, cast(A, _), Args, Formats), is_dict(A, array) =>
-   maplist(array:dtype, Args, Formats).
-load_types(_M, A<B, Args, Formats) =>
-   phrase(inlined_nodes(A<B), Inlined),
-   append(Inlined, Args, Arrays),
-   same_compute_format(Arrays, Args, Formats).
-load_types(M, Op, Args, Formats) =>
-   phrase(inlined_nodes(Op), Inlined),
-   append([M | Inlined], Args, Arrays),
-   same_compute_format(Arrays, Args, Formats).
-
-same_compute_format(Arrays, Args, Formats) :-
-   compute_dtype(Arrays, Format),
-   same_length(Args, Formats),
-   maplist(=(Format), Formats).
-
+% uint64, or compares uint32 < int8 as unsigned. Instead, kernels load every
+% input in DType, the smallest format that holds all of Arrays: the inputs,
+% the inlined nodes and, for arithmetic, the result.
 compute_dtype(Arrays, DType) :-
    maplist(get_dict(dtype), Arrays, Kinds),
    foldl(array:broadcast_dtype, Kinds, boolean, Kind),
@@ -229,108 +179,6 @@ unbounded(_, 1.0Inf).
 
 default_dtype(boolean, bool).
 default_dtype(integer, int64).
-
-% Values
-% ======
-
-% value(+Expr, +Ctx, -Value)//
-% The statements computing Value, the value of Expr at the index of Ctx.
-% Ctx also holds the dialect, the node being computed, and the name and load
-% type of each buffer the kernel reads.
-value(A, Ctx, Value), is_dict(A, array) ==>
-   load(A, Ctx, Value).
-% An inlined node is rounded to its format, as its buffer would be.
-value(fused(Node, Expr), Ctx, Value) ==>
-   value(Expr, Ctx.put(node, Node), Value0),
-   { type_name(Ctx.dialect, Node.dtype(), Type) },
-   { Value = cast(Value0, Type) }.
-% Expr is computed at the index of the node that Via reads.
-value(reindex(Via, Expr), Ctx, Value) ==>
-   { node_index(Via, Ctx.index, Index) },
-   value(Expr, Ctx.put(index, Index), Value).
-value(reduce(Op, Axes, Parent), Ctx, Value) ==>
-   reduction(Op, Axes, Parent, Ctx, Value).
-value(contiguous(A), Ctx, Value) ==>
-   value(A, Ctx, Value).
-% The cast is the one of fused/2.
-value(float(A), Ctx, Value) ==>
-   value(A, Ctx, Value).
-value(integer(A), Ctx, Value), operand_dtype(A, float) ==>
-   value(A, Ctx, Value0),
-   { Value = round(Value0) }.
-value(integer(A), Ctx, Value) ==>
-   value(A, Ctx, Value).
-value(cast(A, Format), Ctx, Value) ==>
-   value(A, Ctx, Value0),
-   { type_name(Ctx.dialect, Format, Type) },
-   { Value = cast(Value0, Type) }.
-value(Atom, _, Value), atom(Atom) ==>
-   { Value = Atom }.
-value(Op, Ctx, Value), compound(Op) ==>
-   { compound_name_arguments(Op, Name, Args) },
-   values(Args, Ctx, Values),
-   { compound_name_arguments(Value, Name, Values) }.
-
-values([], _, Values) ==>
-   { Values = [] }.
-values([A | As], Ctx, Values) ==>
-   value(A, Ctx, V),
-   values(As, Ctx, Vs),
-   { Values = [V | Vs] }.
-
-load(A, Ctx, Value) -->
-   {  get_assoc(A, Ctx.loads, Name-Type),
-      c_index_expr(A, Ctx.index, IndexExpr, ValidExpr),
-      (  array:skip_view(A.op, constant(Constant))
-      -> Load = (Value = Constant)
-      ;  Load = (Value = Name[IndexExpr])
-      )
-   },
-   [  Type:Value = 0,
-      if ValidExpr {
-         Load
-      }
-   ].
-
-% A reduction of Ctx's node accumulates, in the node's type, the values of
-% Parent at each index that the reduced axes add to the node's index.
-reduction(Op, Axes, Parent, Ctx, Acc) -->
-   {  Format = Ctx.node.dtype(),
-      type_name(Ctx.dialect, Format, Type),
-      array:identity(Op, Identity0),
-      identity(Ctx.dialect, Format, Identity0, Identity),
-      read_shape(Parent, Shape),
-      maplist([Axis, Dim]>>nth0(Axis, Shape, Dim), Axes, Dims),
-      same_length(Axes, Js),
-      foldl(replace_nth0, Js, Axes, Ctx.index, Index),
-      phrase(value(Parent, Ctx.put(index, Index), V), Body0),
-      accumulate(Op, Acc, Item, Update),
-      append(Body0, [Type:Item = V, Update], Body1),
-      statements(Body1, Body),
-      maplist([J, int:J]>>true, Js, TypedJs),
-      reduction_hint(Ctx.dialect, Op, Acc, Hint),
-      loops(Dims, TypedJs, Body, Hint, Loop)
-   },
-   [Type:Acc = Identity, Loop].
-
-% A maximum propagates NaN, as aggregate_all/3 and numpy do: once Acc is NaN,
-% Acc < Item is always false.
-accumulate(<, Acc, Item, Update) =>
-   Update = if(or(Acc < Item, Item =\= Item)) { Acc = Item }.
-accumulate(Op, Acc, Item, Update) =>
-   Expr =.. [Op, Acc, Item],
-   Update = (Acc = Expr).
-
-operand_dtype(fused(Node, _), DType) =>
-   DType = Node.dtype.
-operand_dtype(A, DType) =>
-   DType = A.dtype.
-
-% index_expr/1 gives the validity of an index as a Prolog goal: C spells its
-% conjunction &&.
-c_index_expr(M, Index, IndexExpr, ValidExpr) :-
-   IndexExpr-Valid = M.index_expr(Index),
-   c_condition(Valid, ValidExpr).
 
 c_condition((A, B), Condition) =>
    c_condition(A, A1),

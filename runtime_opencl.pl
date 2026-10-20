@@ -15,6 +15,8 @@ Prolog data goes through the C device.
 :- use_module(buffer).
 :- use_module(c99).
 :- use_module(kernel_c).
+:- use_module(ir_lower, [lower_kernel/5]).
+:- use_module(ir_c, [ir_c/3]).
 :- use_module(opencl).
 :- use_module(swipl_ld, [clang_format/2]).
 
@@ -83,46 +85,44 @@ array:_M.compile(opencl(Name), rand) := _Dict :-
    throw(error(unsupported_op(opencl(Name), rand), _)).
 array:_M.compile(opencl(Name), solve(_, _)) := _Dict :-
    throw(error(unsupported_op(opencl(Name), solve), _)).
-array:M.compile(opencl(Name), float(A)) := Dict :-
-   compile_kernel(Name, M, cast(A, M.dtype()), Dict).
-array:M.compile(opencl(Name), integer(A)) := Dict :-
-   integer_cast(A, M.dtype(), Expr),
-   compile_kernel(Name, M, Expr, Dict).
 array:M.compile(opencl(Name), Op) := Dict :-
    compile_kernel(Name, M, Op, Dict).
 
-% compile_kernel(+Name, +M, +Expr, -Dict)
-% Dict is M with a kernel storing the value of Expr at each index of M.
-% The kernel runs one work item per element of M, which computes its index.
-compile_kernel(Name, M, Expr, Dict) :-
-   phrase(array:op_args(Expr), AllArgs),
-   list_to_ord_set(AllArgs, Args),
-   numlist_(M.ndim(), Numbers),
-   maplist(atom_concat(i), Numbers, Index),
-   Exprs = view{}.from_shape(M.shape()).reverse_index_expr(g),
-   maplist([I, E, long:I = E]>>true, Index, Exprs, Declarations),
-   kernel_body(opencl, M, Expr, Args, Index, Body),
-   length(Args, NArgs),
-   numlist(0, NArgs, ParamNumbers),
-   maplist(param, [M | Args], ParamNumbers, Params),
+% compile_kernel(+Name, +M, +Op, -Dict)
+% Dict is M with a kernel computing Op into M: the kernel IR of Op, printed
+% in OpenCL C. The kernel runs one work item per element of M, which
+% unravels its global id into the element's index.
+compile_kernel(Name, M, Op, Dict) :-
+   lower_kernel(opencl(Name), M, Op, IR, Arrays),
+   ir_c(opencl, IR, c_kernel(Buffers, Shape, TypeIndex, Body)),
+   maplist(index_name, TypeIndex, Index),
+   Exprs = view{}.from_shape(Shape).reverse_index_expr(g),
+   maplist(index_declaration, Index, Exprs, Declarations),
+   maplist(param, Buffers, Params),
    opt_level(Level),
    Code = kernel(Level, Params, Declarations, Body),
    % A kernel is named after its code, so a kernel already built is reused.
    variant_sha1(Code, Hash),
    atom_concat(kernel_, Hash, KernelName),
    load_kernel(Name, KernelName, Level, Code, Kernel),
-   maplist([A, mem(Data)]>>get_dict(data, A, Data), [M | Args], KernelArgs),
+   maplist(kernel_arg, Arrays, KernelArgs),
    Dict = M.put(kernel, runtime_opencl:launch(Name, Kernel, KernelArgs, M.size())).
+
+index_name(_:I, I).
+
+index_declaration(I, Expr, long:I = Expr).
+
+kernel_arg(A, mem(Data)) :-
+   get_dict(data, A, Data).
 
 % a0 is the output: it never overlaps an input, which lives in the buffer pool
 % until its reader has run.
-param(A, N, Type:Param) :-
-   type_name(opencl, A.dtype(), Element),
-   param_qualifiers(N, Qualifiers),
-   atomic_list_concat(['__global ', Qualifiers, Element, ' *restrict'], Type),
-   atom_concat(a, N, Param).
+param(Format-Name, Type:Name) :-
+   type_name(opencl, Format, Element),
+   param_qualifiers(Name, Qualifiers),
+   atomic_list_concat(['__global ', Qualifiers, Element, ' *restrict'], Type).
 
-param_qualifiers(0, Qualifiers) =>
+param_qualifiers(a0, Qualifiers) =>
    Qualifiers = ''.
 param_qualifiers(_, Qualifiers) =>
    Qualifiers = 'const '.
