@@ -66,7 +66,8 @@ compile_kernel(M, Expr, Dict) :-
    kernel_params(M, Expr, Args, Index, Params),
    kernel_body(c, M, Expr, Args, Index, Body),
    length(Args, NArgs),
-   Code = code(Params, M.shape(), Body),
+   opt_level(Level),
+   Code = code(Level, Params, M.shape(), Body),
    % A kernel is named after its code, so a kernel already loaded is reused.
    variant_sha1(Code, Hash),
    atom_concat(kernel_, Hash, KernelName),
@@ -74,19 +75,22 @@ compile_kernel(M, Expr, Dict) :-
    kernel_ast(KernelName, RuntimeName, Code, AST),
    name_variables(AST),
    N is 1 + NArgs,
-   load_kernel(RuntimeName/N, AST),
+   load_kernel(RuntimeName/N, Level, AST),
    maplist(get_dict(data), Args, Buffers),
    Buffer = M.data,
    Kernel =.. [RuntimeName, Buffer | Buffers],
    Dict = M.put([kernel=runtime_c:Kernel]).
 
-load_kernel(Runtime, _), current_predicate(Runtime) =>
+load_kernel(Runtime, _, _), current_predicate(Runtime) =>
    true.
-load_kernel(_, AST) =>
+load_kernel(_, Level, AST) =>
    once(phrase(translation_unit(AST), Tokens)),
    once(phrase(tokens(Tokens), Str)),
    clang_format(Str, In),
-   compile_object(In, Object),
+   debug(array(kernel), "~s", [In]),
+   atom_concat('-O', Level, Optimize),
+   % never -ffast-math: the precision bounds need IEEE rounding
+   compile_object(In, [Optimize, '-march=native'], Object),
    link_objects([Object], Library),
    load_foreign_library(Library).
 
@@ -128,7 +132,7 @@ kernel_params(M, Op, UniqueArgs, Index, params(Type:a0, TypeArgs, TypeIndex)) :-
 % AST defines the kernel, computing one index, and its runtime, a foreign
 % predicate looping over every index.
 kernel_ast(KernelName, RuntimeName,
-           code(params(Out, TypeArgs, TypeIndex), Shape, Body),
+           code(_Level, params(Out, TypeArgs, TypeIndex), Shape, Body),
            AST) :-
    append(TypeArgs, TypeIndex, TypeArgsIndex),
    Head =.. [KernelName, Out | TypeArgsIndex],

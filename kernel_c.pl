@@ -1,5 +1,6 @@
 :- module(kernel_c, [
    kernel_body/6,
+   opt_level/1,
    statements/2,
    integer_cast/3,
    type_name/3,
@@ -27,6 +28,22 @@ a dialect.
 :- use_module(gen_type, [type/4]).
 :- use_module(view, [replace_nth0/4]).
 :- use_module(fusion, [inlined_nodes//1, node_index/3, read_shape/2]).
+
+% The optimization level of the kernel compilers, from 0 to 3: the
+% environment variable ARRAY_OPT, or 2. Set the array_opt flag to change it.
+env_opt_level(Level), getenv('ARRAY_OPT', Value), atom_number(Value, Level0) =>
+   Level = Level0.
+env_opt_level(_), getenv('ARRAY_OPT', Value) =>
+   type_error(integer, Value).
+env_opt_level(Level) =>
+   Level = 2.
+
+:- env_opt_level(Level),
+   create_prolog_flag(array_opt, Level, [type(integer), keep(true)]).
+
+opt_level(Level) :-
+   current_prolog_flag(array_opt, Level),
+   must_be(between(0, 3), Level).
 
 % kernel_body(+Dialect, +M, +Expr, +Args, +Index, -Body)
 % Body stores in a0 the value of Expr at Index of M, loading Args from a1,
@@ -294,3 +311,48 @@ c_condition((A, B), Condition) =>
    Condition = (A1 && B1).
 c_condition(Goal, Condition) =>
    Condition = Goal.
+
+:- begin_tests(kernel_opt).
+
+:- use_module(array).
+
+with_opt_level(Level, Goal) :-
+   current_prolog_flag(array_opt, Old),
+   setup_call_cleanup(set_prolog_flag(array_opt, Level),
+                      Goal,
+                      set_prolog_flag(array_opt, Old)).
+
+% The kernel computing A + A.
+double_kernel(Device, Kernel) :-
+   A = array{}.fromlist([1.5, 2.5], [device(Device)]),
+   B @= A + A,
+   array:create_schedule([B], Schedule),
+   last(Schedule, Node),
+   array:compile(Node, Compiled),
+   Kernel = Compiled.kernel.
+
+kernel_device(c).
+kernel_device(opencl(Name)) :-
+   opencl:opencl_device(Name, _).
+
+test('the level builds its own kernel', [forall(kernel_device(Device))]) :-
+   with_opt_level(0, double_kernel(Device, Kernel0)),
+   with_opt_level(2, double_kernel(Device, Kernel2)),
+   Kernel0 \== Kernel2.
+
+matmul_add(Device, List) :-
+   A = array{}.fromlist([[1, 2], [3, 4]], [device(Device)]),
+   C @= (A @ A) + A,
+   List = C.tolist().
+
+test('every level computes the same values', [forall(kernel_device(Device))]) :-
+   forall(between(0, 3, Level),
+          (  with_opt_level(Level, matmul_add(Device, List)),
+             List == [[8, 12], [18, 26]]
+          )).
+
+test('a level outside 0..3 fails loudly',
+     [throws(error(type_error(between(0, 3), 7), _))]) :-
+   with_opt_level(7, double_kernel(c, _)).
+
+:- end_tests(kernel_opt).

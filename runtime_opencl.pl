@@ -105,12 +105,13 @@ compile_kernel(Name, M, Expr, Dict) :-
    length(Args, NArgs),
    numlist(0, NArgs, ParamNumbers),
    maplist(param, [M | Args], ParamNumbers, Params),
-   Code = kernel(Params, Declarations, Body),
+   opt_level(Level),
+   Code = kernel(Level, Params, Declarations, Body),
    % A kernel is named after its code, so a kernel already built is reused.
    variant_sha1(Code, Hash),
    atom_concat(kernel_, Hash, KernelName),
    kernel_source(Name, KernelName, Code, Source),
-   load_kernel(Name, KernelName, Source, Kernel),
+   load_kernel(Name, KernelName, Level, Source, Kernel),
    maplist([A, mem(Data)]>>get_dict(data, A, Data), [M | Args], KernelArgs),
    Dict = M.put(kernel, runtime_opencl:launch(Name, Kernel, KernelArgs, M.size())).
 
@@ -119,7 +120,7 @@ param(A, N, Type:Param) :-
    atomic_list_concat(['__global ', Element, '*'], Type),
    atom_concat(a, N, Param).
 
-kernel_source(Name, KernelName, kernel(Params, Declarations, Body), Source) :-
+kernel_source(Name, KernelName, kernel(_Level, Params, Declarations, Body), Source) :-
    Head =.. [KernelName | Params],
    append([long:g = get_global_id(0) | Declarations], [Body], List),
    statements(List, Statements),
@@ -141,13 +142,21 @@ pragmas(_, Pragmas) =>
 % device_kernel(Name, KernelName, Kernel): the kernels built on a device.
 :- dynamic device_kernel/3.
 
-load_kernel(Name, KernelName, _, Kernel), device_kernel(Name, KernelName, Kernel0) =>
+load_kernel(Name, KernelName, _, _, Kernel), device_kernel(Name, KernelName, Kernel0) =>
    Kernel = Kernel0.
-load_kernel(Name, KernelName, Source, Kernel) =>
+load_kernel(Name, KernelName, Level, Source, Kernel) =>
    device(Name, Device, Context, _),
-   cl_program(Context, Device, Source, "", Program),
+   debug(array(kernel), "~s", [Source]),
+   build_options(Level, Options),
+   cl_program(Context, Device, Source, Options, Program),
    cl_kernel(Program, KernelName, Kernel),
    assertz(device_kernel(Name, KernelName, Kernel)).
+
+% OpenCL compilers optimize unless told not to.
+build_options(0, Options) =>
+   Options = "-cl-opt-disable".
+build_options(_, Options) =>
+   Options = "".
 
 % The device runs the kernels of a schedule in order: its queue is in order.
 launch(_, _, _, 0) =>
