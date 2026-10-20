@@ -83,36 +83,37 @@ array:M.compile(prolog, Op) := Dict :-
 
 % compile_kernel(+M, +Expr, -Dict)
 % Dict is M with a kernel storing the value of Expr at each index of M.
-% The kernel is a clause of the kernel module, whose parameters are the
-% data of M, the data of each array Expr reads, and the index.
+% The kernel is a clause of the kernel module, whose parameters are the data
+% of M and the data of each array Expr reads. Its body loops over the index
+% of M.
 compile_kernel(M, Expr, Dict) :-
    length(Index, M.ndim()),
    phrase(array:op_args(Expr), AllArgs),
    list_to_ord_set(AllArgs, Args),
    phrase(value(Expr, ctx{index: Index}, Value), Goals),
-   conjunction(Goals, Body0),
+   conjunction(Goals, Element),
    MIndexExpr-MValidExpr = M.index_expr(Index),
-   Body = (
-      Body0,
-      (  MValidExpr
-      -> MValue is Value,
-         MIndex is MIndexExpr+1,
-         nb_setarg(MIndex, M.id, MValue)
-      ;  true
-      )
-   ),
+   maplist([Dim, I, between(0, Max, I)]>>(Max is Dim - 1), M.shape(), Index,
+           Betweens0),
+   conjunction(Betweens0, Betweens),
+   Body = forall(Betweens,
+                 (  Element,
+                    (  MValidExpr
+                    -> MValue is Value,
+                       MIndex is MIndexExpr+1,
+                       nb_setarg(MIndex, M.id, MValue)
+                    ;  true
+                    )
+                 )),
    maplist(get_dict(id), Args, Ids),
-   append([M.id | Ids], Index, Params),
+   Params = [M.id | Ids],
    % A kernel is named after its code, so a kernel already defined is reused.
    variant_sha1(Params-Body, KernelId),
    Head =.. [KernelId | Params],
    define_kernel(Head, Body),
    maplist(get_dict(data), Args, Datas),
-   append([M.data | Datas], Index, CallArgs),
-   Call =.. [KernelId | CallArgs],
-   maplist([Dim, I, between(0, Dim1, I)]>>(Dim1 is Dim-1), M.shape(), Index, L),
-   conjunction(L, Betweens),
-   Dict = M.put([kernel=forall(Betweens, kernel:Call)]).
+   Call =.. [KernelId, M.data | Datas],
+   Dict = M.put([kernel=kernel:Call]).
 
 define_kernel(Head, _), functor(Head, Name, Arity),
       current_predicate(kernel:Name/Arity) =>
