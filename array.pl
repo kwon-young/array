@@ -617,6 +617,12 @@ realize_array(M, Options) =>
 % Compilation
 % ============
 M.compile() := Dict :-
+   compile_array(M, Dict).
+
+% A realized array is an input: its kernel already ran.
+compile_array(M, Dict), get_dict(data, M, Data), nonvar(Data) =>
+   Dict = M.put(kernel, true).
+compile_array(M, Dict) =>
    once(Dict = M.compile(M.device, M.op)).
    % format("~p~n", [Dict.kernel]).
 
@@ -1000,6 +1006,20 @@ test('4x4') :-
     maplist([L]>>length(L, 4), List).
 
 :- end_tests(array_tolist).
+
+:- begin_tests(array_realize).
+
+% Reading a realized array must not compute it again: rand would change it.
+test('a realized input keeps its values', [forall(member(D, [prolog, c]))]) :-
+    A0 = array{}.rand([3], [device(D)]),
+    A = A0.realize(),
+    L1 = A.tolist(),
+    C = A.sum(),
+    _ = C.realize(),
+    L2 = A.tolist(),
+    L1 == L2.
+
+:- end_tests(array_realize).
 
 :- begin_tests(array_matmul).
 
