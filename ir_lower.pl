@@ -7,7 +7,9 @@ lower_kernel/5 turns a fused schedule node into a kernel clause of the IR
 
   * each load is converted to the kernel's compute format, as C converts it
     when it loads an input into a variable of that type;
-  * each operand of an operation is in the compute format;
+  * an operation is an expression over operands in the compute format: a
+    variable only names a value a goal produces, a load, a cast, a
+    comparison's result or a reduction;
   * an inlined node, fused(Node, Expr), is rounded to Node's format;
   * the result is converted to the output's format before it is stored.
 */
@@ -126,7 +128,7 @@ cast(Format, In, _, Out) ==>
 
 % value(+Expr, +Ctx, -Value, -Format)//
 % The goals computing Value, the value of Expr at the index of Ctx, in
-% Format.
+% Format. Value is a value expression.
 value(A, Ctx, Value, Format), is_dict(A, array) ==>
    load(A, Ctx, Value, Format).
 % An inlined node is rounded to its format, as its buffer would be.
@@ -152,7 +154,7 @@ value(cast(A, To), Ctx, Value, Format) ==>
    cast(To, Value0, Format0, Value),
    { Format = To }.
 value(rand, _, Value, Format) ==>
-   [Value is random_float],
+   { Value = random_float },
    { Format = float64 }.
 value(A < B, Ctx, Value, Format) ==>
    operands([A, B], Ctx, [VA, VB]),
@@ -161,8 +163,7 @@ value(A < B, Ctx, Value, Format) ==>
 value(Op, Ctx, Value, Format), compound(Op) ==>
    { compound_name_arguments(Op, Name, Args) },
    operands(Args, Ctx, Values),
-   { compound_name_arguments(Expr, Name, Values) },
-   [Value is Expr],
+   { compound_name_arguments(Value, Name, Values) },
    { Format = Ctx.compute }.
 
 % The operands of an operation, in the compute format.

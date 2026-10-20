@@ -1,10 +1,9 @@
 :- module(runtime_prolog, []).
 
-:- use_module(library(dcg/high_order)).
 :- use_module(array, []).
-:- use_module(view, [replace_nth0/4]).
 :- use_module(lu_decomposition).
-:- use_module(fusion, [node_index/3, read_shape/2]).
+:- use_module(ir_lower, [lower_kernel/5]).
+:- use_module(ir_prolog, [ir_prolog/2]).
 
 /* 
  * Runtime Backend Interface
@@ -76,130 +75,29 @@ array:M.compile(prolog, solve(A, B)) := Dict :-
                  lu_decomposition:solve(A.data, OffsetA,
                                         B.data, OffsetB,
                                         N, M_, M.data, OffsetX)).
-array:M.compile(prolog, rand) := Dict :-
-   compile_kernel(M, random_float, Dict).
 array:M.compile(prolog, Op) := Dict :-
    compile_kernel(M, Op, Dict).
 
-% compile_kernel(+M, +Expr, -Dict)
-% Dict is M with a kernel storing the value of Expr at each index of M.
-% The kernel is a clause of the kernel module, whose parameters are the data
-% of M and the data of each array Expr reads. Its body loops over the index
-% of M.
-compile_kernel(M, Expr, Dict) :-
-   length(Index, M.ndim()),
-   phrase(array:op_args(Expr), AllArgs),
-   list_to_ord_set(AllArgs, Args),
-   phrase(value(Expr, ctx{index: Index}, Value), Goals),
-   conjunction(Goals, Element),
-   MIndexExpr-MValidExpr = M.index_expr(Index),
-   maplist([Dim, I, between(0, Max, I)]>>(Max is Dim - 1), M.shape(), Index,
-           Betweens0),
-   conjunction(Betweens0, Betweens),
-   Body = forall(Betweens,
-                 (  Element,
-                    (  MValidExpr
-                    -> MValue is Value,
-                       MIndex is MIndexExpr+1,
-                       nb_setarg(MIndex, M.id, MValue)
-                    ;  true
-                    )
-                 )),
-   maplist(get_dict(id), Args, Ids),
-   Params = [M.id | Ids],
+% compile_kernel(+M, +Op, -Dict)
+% Dict is M with a kernel computing Op into M: the kernel IR of Op, in its
+% Prolog dialect, as a clause of the kernel module.
+compile_kernel(M, Op, Dict) :-
+   lower_kernel(prolog, M, Op, Kernel, Arrays),
+   ir_prolog(Kernel, (Head0 :- Body)),
+   Head0 =.. [_ | Params],
    % A kernel is named after its code, so a kernel already defined is reused.
    variant_sha1(Params-Body, KernelId),
    Head =.. [KernelId | Params],
    define_kernel(Head, Body),
-   maplist(get_dict(data), Args, Datas),
-   Call =.. [KernelId, M.data | Datas],
-   Dict = M.put([kernel=kernel:Call]).
+   maplist(get_dict(data), Arrays, Datas),
+   Call =.. [KernelId | Datas],
+   Dict = M.put(kernel, kernel:Call).
 
 define_kernel(Head, _), functor(Head, Name, Arity),
       current_predicate(kernel:Name/Arity) =>
    true.
 define_kernel(Head, Body) =>
    assertz((kernel:Head :- Body)).
-
-conjunction(Goals, Conjunction) :-
-   foldl([G, C0, C]>>mkconj(C0, G, C), Goals, true, Conjunction).
-
-% value(+Expr, +Ctx, -Value)//
-% The goals computing Value, an arithmetic expression for the value of Expr
-% at the index of Ctx.
-value(A, Ctx, Value), is_dict(A, array) ==>
-   { Goal-Value = A.index_input(Ctx.index) },
-   [Goal].
-value(fused(_Node, Expr), Ctx, Value) ==>
-   value(Expr, Ctx, Value).
-% Expr is computed at the index of the node that Via reads.
-value(reindex(Via, Expr), Ctx, Value) ==>
-   { node_index(Via, Ctx.index, Index) },
-   value(Expr, Ctx.put(index, Index), Value).
-value(reduce(Op, Axes, Parent), Ctx, Value) ==>
-   reduction(Op, Axes, Parent, Ctx, Value).
-value(contiguous(A), Ctx, Value) ==>
-   value(A, Ctx, Value).
-% Prolog arithmetic has no comparison function.
-value(A<B, Ctx, Value) ==>
-   value(A, Ctx, A1),
-   value(B, Ctx, B1),
-   [(A1 < B1 -> Value = 1 ; Value = 0)].
-value(Atom, _, Value), atom(Atom) ==>
-   { Value = Atom }.
-value(Op, Ctx, Value), compound(Op) ==>
-   { compound_name_arguments(Op, Name, Args) },
-   values(Args, Ctx, Values),
-   { compound_name_arguments(Value, Name, Values) }.
-
-values([], _, Values) ==>
-   { Values = [] }.
-values([A | As], Ctx, Values) ==>
-   value(A, Ctx, V),
-   values(As, Ctx, Vs),
-   { Values = [V | Vs] }.
-
-% A reduction accumulates the values of Parent at each index that the reduced
-% axes add to Ctx's index.
-reduction(Op, Axes, Parent, Ctx, Value) -->
-   {  array:identity(Op, Identity),
-      read_shape(Parent, Shape),
-      same_length(Axes, Js),
-      foldl(replace_nth0, Js, Axes, Ctx.index, Index),
-      maplist([Axis, J, between(0, Max, J)]>>(nth0(Axis, Shape, Dim), Max is Dim - 1),
-              Axes, Js, Betweens0),
-      conjunction(Betweens0, Betweens),
-      phrase(value(Parent, Ctx.put(index, Index), Item), Body0),
-      accumulate(Op, Acc, Item, Update),
-      append(Body0, [Update], Body1),
-      conjunction(Body1, Body)
-   },
-   [  Acc = acc(_),
-      nb_setarg(1, Acc, Identity),
-      forall(Betweens, Body),
-      arg(1, Acc, Value)
-   ].
-
-% A maximum propagates NaN, as aggregate_all/3 and numpy do: once A0 is NaN,
-% A0 < V is always false.
-accumulate(<, Acc, Item, Update) =>
-   Update = (
-      arg(1, Acc, A0),
-      V is Item,
-      (  (  A0 < V
-         ;  V =\= V
-         )
-      -> nb_setarg(1, Acc, V)
-      ;  true
-      )
-   ).
-accumulate(Op, Acc, Item, Update) =>
-   Expr =.. [Op, A0, Item],
-   Update = (
-      arg(1, Acc, A0),
-      V is Expr,
-      nb_setarg(1, Acc, V)
-   ).
 
 array:allocate(prolog, M) :-
    compound_name_arity(M.data, data, M.datasize).

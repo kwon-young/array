@@ -83,9 +83,13 @@ reference:
   maximum has no identity. `aggregate_all(max(...))` failing on an empty
   domain is then never observed.
 
-Value expressions, in `is`, use `+`, `*`, `sin`, `log`, `sqrt`, constants,
-`float`, `integer` and `random_float`. A comparison producing a value is a
-conditional: `( A < B -> V = 1 ; V = 0 )`.
+Value expressions use `+`, `*`, `sin`, `log`, `sqrt`, constants, `float`,
+`integer` and `random_float`. They appear in `is`, and in every other value
+position: a `cast`'s input, a `store`'s value and an aggregate's template, as
+in `cast(float32, VA*VB, P)` or `aggregate_all(sum(VA*VB), …)`. A variable
+only names a value a goal produces: a load, a cast, a comparison's result or
+a reduction; a sub-expression stays inside its expression. A comparison
+producing a value is a conditional: `( A < B -> V = 1 ; V = 0 )`.
 
 ## Reference semantics
 

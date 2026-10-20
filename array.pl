@@ -799,22 +799,6 @@ M.index_expr(Index) := IndexExpr-ValidExpr :-
       ), Views, Valids, View.index_expr(Index), IndexExpr),
    foldl(mkconj, Valids, View.valid_expr(Index), ValidExpr).
 
-M.index_input(Index) := AST-Value :-
-   IndexExpr-ValidExpr = M.index_expr(Index),
-   (  skip_view(M.op, constant(Constant))
-   -> IndexAST = (Value = Constant)
-   ;  IndexAST = (FlatIndex is IndexExpr+1, arg(FlatIndex, M.id, Value))
-   ),
-   (  ValidExpr = true
-   -> (  IndexAST = (Value = Constant)
-      -> Value = Constant, AST = true
-      ;  AST = IndexAST
-      )
-   ;  AST = (  ValidExpr
-            -> IndexAST
-            ;  Value = 0
-            )
-   ).
 skip_view(view(M), Op) =>
    skip_view(M.op, Op).
 skip_view(Op, R) =>

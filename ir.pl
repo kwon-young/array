@@ -39,14 +39,17 @@ load(Buffer-_Format, Index, Value) :-
    I is Index + 1,
    arg(I, Buffer, Value).
 
-store(Buffer-_Format, Index, Value) :-
+% A value position holds a value expression: store/3 and cast/3 evaluate it.
+store(Buffer-_Format, Index, Expr) :-
    I is Index + 1,
+   Value is Expr,
    nb_setarg(I, Buffer, Value).
 
-cast(Format, In, Out), float_format(Format) =>
+cast(Format, Expr, Out), float_format(Format) =>
+   In is Expr,
    round_to_format(Format, In, Out).
-cast(_, In, Out) =>
-   Out is integer(In).
+cast(_, Expr, Out) =>
+   Out is integer(Expr).
 
 % A value rounds to a float format as C converts it, to the nearest with
 % ties to even: through a one-element C buffer of buffer.pl.
@@ -163,14 +166,14 @@ goal(load(Buffer, Index, Value), Env0, Env) ==>
 goal(store(Buffer, Index, Value), Env0, Env) ==>
    { known_buffer(Buffer, Env0) },
    { index(Index, Env0) },
-   { value_format(Value, Env0, _) },
+   { value(Value, Env0) },
    { Env = Env0 }.
 goal(Value is Expr, Env0, Env) ==>
    { expr_format(Expr, Env0, Format) },
    assign(Value, Format, Env0, Env).
 goal(cast(Format, In, Out), Env0, Env) ==>
    { atom(Format), format(Format) -> true ; ir_error(not_a_format, Format) },
-   { number(In) -> true ; value_format(In, Env0, _) },
+   { value(In, Env0) },
    assign(Out, Format, Env0, Env).
 goal(Value = Number, Env0, Env), number(Number) ==>
    assign(Value, const, Env0, Env).
@@ -190,7 +193,7 @@ goal((Cond -> Then ; Else), Env0, Env) ==>
 goal(aggregate_all(Aggregate, Goal, Result), Env0, Env) ==>
    { aggregate(Aggregate, X) },
    { phrase(goal(Goal, Env0, GoalEnv), _) },
-   { value_format(X, GoalEnv, Format) },
+   { value_expression_format(X, GoalEnv, Format) },
    goal(Goal, Env0, _),
    assign(Result, Format, Env0, Env).
 goal(Goal, _, _) ==>
@@ -287,6 +290,15 @@ operand(X, Env) =>
    -> true
    ;  expr_format(X, Env, _)
    ).
+
+% A value position holds a number, or a value expression.
+value(Number, _), number(Number) =>
+   true.
+value(Expr, Env) =>
+   expr_format(Expr, Env, _).
+
+value_expression_format(Expr, Env, Format) :-
+   expr_format(Expr, Env, Format).
 
 value_format(Var, env(_, _, Values), Format), var(Var),
       member(V-F, Values), V == Var =>
@@ -557,6 +569,17 @@ test('formats of a comparison') :-
    Kernel = (_ :- forall(_, (load(_, _, VA0), cast(_, _, VA), P0 is _, cast(_, _, P),
                              (_ -> V = 1 ; _), _))),
    Formats == [VA0-uint32, VA-uint64, P0-uint64, P-uint64, V-bool].
+
+test('value positions evaluate their expressions') :-
+   Kernel = (kernel(O-float32, A-float64) :-
+                forall(between(0, 1, I),
+                       ( aggregate_all(sum(VA*2), (between(0, 0, _), load(A-float64, I, VA)), S),
+                         cast(float32, S + 0.1, V),
+                         store(O-float32, I, V*1) ))),
+   ir_verify(Kernel),
+   Out = data(_, _),
+   ir_run(Kernel, [Out, data(1.0, 2.0)]),
+   Out == data(2.0999999046325684, 4.099999904632568).
 
 test('a float cast rounds as C does') :-
    cast(float32, 0.1, X),
