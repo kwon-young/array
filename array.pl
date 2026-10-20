@@ -27,6 +27,7 @@
 
 :- use_module(runtime_prolog).
 :- use_module(runtime_c).
+:- use_module(runtime_opencl).
 % after the runtimes: the lup tests need to run before clpBNR first sets its
 % arithmetic flags
 :- use_module(precision).
@@ -478,7 +479,7 @@ M.contiguous() := Dict :-
 M.to(Device) := Dict :-
    (  M.device = Device
    -> Dict = M
-   ;  Dict = M.to(M.device, Device)
+   ;  once(Dict = M.to(M.device, Device))
    ).
 
 M.as(DType) := Dict :-
