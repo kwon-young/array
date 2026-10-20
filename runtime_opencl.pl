@@ -110,8 +110,7 @@ compile_kernel(Name, M, Expr, Dict) :-
    % A kernel is named after its code, so a kernel already built is reused.
    variant_sha1(Code, Hash),
    atom_concat(kernel_, Hash, KernelName),
-   kernel_source(Name, KernelName, Code, Source),
-   load_kernel(Name, KernelName, Level, Source, Kernel),
+   load_kernel(Name, KernelName, Level, Code, Kernel),
    maplist([A, mem(Data)]>>get_dict(data, A, Data), [M | Args], KernelArgs),
    Dict = M.put(kernel, runtime_opencl:launch(Name, Kernel, KernelArgs, M.size())).
 
@@ -144,8 +143,9 @@ pragmas(_, Pragmas) =>
 
 load_kernel(Name, KernelName, _, _, Kernel), device_kernel(Name, KernelName, Kernel0) =>
    Kernel = Kernel0.
-load_kernel(Name, KernelName, Level, Source, Kernel) =>
+load_kernel(Name, KernelName, Level, Code, Kernel) =>
    device(Name, Device, Context, _),
+   kernel_source(Name, KernelName, Code, Source),
    debug(array(kernel), "~s", [Source]),
    build_options(Level, Options),
    cl_program(Context, Device, Source, Options, Program),
