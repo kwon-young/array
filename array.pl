@@ -308,6 +308,7 @@ push(rand(Shape, Options), M, Dict) :-
 push(contiguous, M, Dict) :-
    Dict = M.empty(M.shape()).push_op(contiguous(M)).
 push(reduce(Op, Axes), M, Dict) :-
+   check_identity(Op, M.shape(), Axes),
    foldl(replace_nth0(1), Axes, M.shape(), Shape),
    sort(Axes, Axes_),
    (  Op == (<)
@@ -324,6 +325,12 @@ push(reduce(Op, Axes), M, Dict) :-
       )
    ),
    Dict = M.empty(Shape, [range(Range), dtype(DType)]).push_op(reduce(Op, Axes_, M)).
+% A maximum has no identity: like numpy, it can't reduce an empty axis.
+check_identity(<, Shape, Axes), member(Axis, Axes), nth0(Axis, Shape, 0) =>
+   domain_error(non_empty_axes, Axes).
+check_identity(_, _, _) =>
+   true.
+
 push(float(A), C) :-
    push(elementwise(float, [A]), C).
 push(integer(A), C) :-
@@ -1020,6 +1027,16 @@ test('a realized input keeps its values', [forall(member(D, [prolog, c]))]) :-
     L1 == L2.
 
 :- end_tests(array_realize).
+
+:- begin_tests(array_max).
+
+test('a maximum over an empty axis fails loudly',
+     [throws(error(domain_error(non_empty_axes, [1]), _))]) :-
+    A = array{}.fromlist([[1.0, 2.0]]),
+    B = A.shrink([0-1, 0-0]),
+    _ = B.max([1]).
+
+:- end_tests(array_max).
 
 :- begin_tests(array_matmul).
 
