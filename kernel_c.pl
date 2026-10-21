@@ -65,6 +65,8 @@ loops([Dim | Dims], TypeIndex, Call, Ast) :-
 
 % loops(+Dims, +TypeIndex, +Body, +Hint, -Ast)
 % Ast loops over Dims, with the statement Hint before the innermost loop.
+loops([], [], Body, _, Ast) =>
+   Ast = Body.
 loops([Dim], [Type:I], Body, Hint, Ast) =>
    mkconj(Hint, for(Type:I = 0, I < Dim, I++) { Body }, Ast).
 loops([Dim | Dims], [Type:I | Index], Body, Hint, Ast) =>

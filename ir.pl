@@ -153,6 +153,11 @@ goal(forall(Domain, Goal), Env0, Env) ==>
    goal(Domain, Env0, Env1),
    goal(Goal, Env1, _),
    { Env = Env0 }.
+% a dimension of size 1 whose index is known to be 0, as optimization leaves
+% it
+goal(between(Min, Max, I), Env0, Env), integer(I) ==>
+   { Min == 0, Max == 0, I == 0 -> true ; ir_error(not_a_binder, between(Min, Max, I)) },
+   { Env = Env0 }.
 goal(between(Min, Max, I), Env0, Env) ==>
    { Min == 0, integer(Max) -> true ; ir_error(not_a_binder, between(Min, Max, I)) },
    { fresh(I, Env0) },
@@ -581,6 +586,16 @@ test('value positions evaluate their expressions') :-
    ir_run(Kernel, [Out, data(1.0, 2.0)]),
    Out == data(2.0999999046325684, 4.099999904632568).
 
+test('a dimension of size 1 may have the constant index 0') :-
+   Kernel = (kernel(O-uint8, A-uint8) :-
+                forall(( between(0, 1, I), between(0, 0, 0) ),
+                       ( aggregate_all(sum(VA), (between(0, 0, 0), load(A-uint8, I, VA)), S),
+                         store(O-uint8, I + 0, S) ))),
+   ir_verify(Kernel),
+   Out = data(_, _),
+   ir_run(Kernel, [Out, data(1, 2)]),
+   Out == data(1, 2).
+
 test('a float cast rounds as C does') :-
    cast(float32, 0.1, X),
    X == 0.10000000149011612,
@@ -600,7 +615,9 @@ broken(unknown_goal, (kernel(O-int32) :-
    forall(between(0, 1, I), (nb_setarg(1, O, I), store(O-int32, I, 0))))).
 broken(not_an_index, (kernel(O-int32, A-int32) :-
    forall(between(0, 1, I), (load(A-int32, I, V), load(A-int32, V, W), store(O-int32, I, W))))).
-broken(outputs_not_first, (kernel(A-int32, O-int32) :-
+broken(not_a_binder, (kernel(O-int32) :-
+   forall(between(0, 1, 0), store(O-int32, 0, 1)))).
+broken(outputs_not_first,(kernel(A-int32, O-int32) :-
    forall(between(0, 1, I), (load(A-int32, I, V), store(O-int32, I, V))))).
 broken(mixed_formats([int32, int8]), (kernel(O-int32, A-int32, B-int8) :-
    forall(between(0, 1, I), (load(A-int32, I, VA), load(B-int8, I, VB),

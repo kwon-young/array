@@ -46,13 +46,25 @@ buffer_name(Buffer-Format, N, Name, Format) :-
    atom_concat(a, N, Name),
    Buffer = Name.
 
-% The output's index variables become the parameters i1, i2...
-index_param(between(0, Max, I), K, Dim, int:I) :-
+% The output's index variables become the parameters i1, i2... A dimension
+% whose index is a constant keeps its parameter, unused.
+index_param(between(0, Max, I), K, Dim, int:Name) :-
    Dim is Max + 1,
-   atom_concat(i, K, I).
+   atom_concat(i, K, Name),
+   name_index(I, Name).
+
+name_index(I, Name), var(I) =>
+   I = Name.
+name_index(_, _) =>
+   true.
 
 loop_index(between(0, Max, J), Dim, int:J) :-
    Dim is Max + 1.
+
+% A reduction loops over the binders of its variables: a binder whose index
+% is a constant runs its body once.
+loop_binder(between(_, _, J)) :-
+   var(J).
 
 conjoin(Goal, Conjunction0, Conjunction) :-
    mkconj(Conjunction0, Goal, Conjunction).
@@ -181,7 +193,8 @@ assigned(_) ==>
 reduction(Aggregate, Goal, Result, Ctx) -->
    {  Aggregate =.. [Op, Template],
       conjunction_list(Goal, Goals),
-      partition(binder, Goals, Binders, Body0),
+      partition(binder, Goals, Binders0, Body0),
+      include(loop_binder, Binders0, Binders),
       maplist(loop_index, Binders, Dims, TypedJs),
       var_format(Result, Ctx, Format),
       type_name(Ctx.dialect, Format, Type),
