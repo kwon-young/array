@@ -27,8 +27,9 @@ push (build the graph)
 ```
 
 The lowering is `ir_lower.pl`, and each dialect has a printer: `ir_prolog.pl`
-for the Prolog device, `ir_c.pl` for C and OpenCL C. The optimization step is
-not implemented yet: printers receive the lowered clause as it is.
+for the Prolog device, `ir_c.pl` for C and OpenCL C. Between them,
+`ir_optimize.pl` optimizes the clause with the rules each device declares
+(see Optimizing).
 
 ## The kernel clause
 
@@ -166,7 +167,8 @@ several stores in one `forall` when they share a domain, or a conjunction of
   value one branch assigns alone is local to that branch, as in
   `( Valid -> V is …, store(…) ; true )`.
 - An index variable is bound by `between(0, Max, I)`, which also gives its
-  bounds: `0 =< I =< Max`. Optimizations read bounds from the binders.
+  bounds: `0 =< I =< Max`. Optimizations read bounds from the binders. After
+  optimization, a dimension of size 1 may be `between(0, 0, 0)`.
 - The only variables shared with the outside are the head's buffers.
 
 ## Formats
@@ -337,26 +339,69 @@ the raw index terms the optimizations simplify.
 
 ## Optimizing
 
-The kernel clause is added to an e-graph as it is: head, goals, expressions
-and variables. Optimizations are rule sets in the syntax of
-`library(egraph)`, saturated together; a pipeline is the list of enabled
-rule names, which may depend on the target dialect.
+`ir_optimize.pl` adds the kernel clause to an e-graph of `library(egraph)` as
+it is (head, goals, expressions and variables), saturates it, and extracts
+the cheapest clause. Each device declares its rules with the multifile
+`ir_optimize:layers(Device, Layers)`: a layer is a list of module-qualified
+rules saturated together, and layers run in order. A device without layers
+isn't optimized. A kernel is optimized once: `ir_optimize/3` is tabled by
+variant, since the same kernel is lowered again by every realize computing
+it.
+
+`library(egraph)` doesn't count a property set on a class as a change, so a
+saturation could stop before a rule reading that property fires. A layer is
+therefore run one pass at a time until neither the nodes nor the properties
+change, at most 32 passes.
 
 Conventions for rules:
 
-- A rule never binds a variable of the kernel. Guards compare with `==`,
-  `\==` and the analysis properties.
-- Constants and bounds are properties, not rewrites. The bounds of an index
-  variable come from its binder: an analysis on `between(L, H, V)` gives the
-  class of `V` the bounds `L..H`. Bounds flow through `+`, `*`, `//` and `mod`
-  as clpfd domains.
+- A rule never binds a variable of the kernel. Guards read a property into a
+  variable and test it (`==`, `fd_inf/2`...), without unifying it with a
+  value.
+- Only index arithmetic is rewritten: a rule requires the `fd` property of
+  its operands, which only integers and index variables have. Values, whose
+  arithmetic may be inexact, are never touched.
+- A class whose value is known holds that number as a node. Without it,
+  saturation doesn't end: rewrites derive equalities like `X = 0+X`, and
+  associativity builds the classes `0+0`, `(0+0)+0`... which nothing merges.
+- To match every class, a rule uses the pattern `'$NODE'(_)`: a bare
+  variable pattern matches none.
 - No rule may duplicate or drop an impure expression (`random_float`) or a
   `store`.
 
-Examples of rule sets:
+### Index simplification
 
-- index simplification: `//` and `mod` folding under bounds, on `load` and
-  `store` indices;
+`ir_index.pl` removes a `//` or a `mod` that the bounds of the index
+variables make exact, which a C compiler can't do: the output indices are
+parameters of the kernel function, of unknown range. Identities, constants
+and strength reduction are left to the compiler. All devices use it, as a
+single layer.
+
+- Properties:
+  - `fd(V)`: `V` is a clpfd variable equal to the value of the class. A
+    binder `between(L, H, I)` gives the class of `I` the domain `L..H`, and
+    `+`, `*`, `//` and `mod` propagate it. Merging two classes unifies their
+    variables, which intersects their domains.
+  - `divisor(S)`: `S` divides every value of the class.
+- Rewrites, on non-negative operands (where `//` and `mod` agree with C's `/`
+  and `%`):
+  - `add_assoc`, `add_comm`: to find the multiple of `K` in a sum;
+  - `div_split`: `(A+B)//K = A//K + B//K` when `K` divides `A`;
+  - `mod_split`: `(A+B) mod K = B mod K` when `K` divides `A`;
+  - `mod_small`: `A mod K = A` when `A < K`.
+- `materialize`: a class whose `fd` is a number holds that number, as a node
+  of cost 0.
+
+A dimension of size 1 has an index known to be 0, so its binder is extracted
+as `between(0, 0, 0)`: the printers keep it as a dimension, with an unused
+index parameter in C, and print no loop for it in a reduction.
+
+What is left is linear arithmetic and divisions by multiples
+(`(I*256)//256`) that the compiler folds. Divisions that aren't affine stay,
+for instance `(F*2 + D)//8` with `F` in `0..7` and `D` in `0..1`.
+
+Future rule sets:
+
 - validity: a condition proven by bounds turns `( Cond -> Then ; Else )` into
   `Then`;
 - formats: a `cast` to the format a `load` already has is removed;
@@ -387,5 +432,6 @@ matmul store `data(20, 23, 44, 51)`.
 
 - Each backend's kernels agree with running the IR on the same inputs.
 - For each rule set: running the IR before and after saturation gives the
-  same values, on random inputs.
+  same values, on random inputs (`ir_index.pl` checks 50 random view
+  graphs).
 
