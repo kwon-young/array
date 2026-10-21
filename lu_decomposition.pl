@@ -225,6 +225,25 @@ copy_matrix_(A, Offset, Size, I, [Value | Values]) :-
    
 :- begin_tests(lup).
 
+% The expected values hold under Prolog's default arithmetic flags, which
+% clpBNR changes globally the first time it is used.
+default_flags([prefer_rationals-false, float_overflow-error,
+               float_zero_div-error, float_undefined-error]).
+
+pin_default_flags(Old) :-
+   default_flags(Flags),
+   maplist(old_flag, Flags, Old),
+   maplist(set_flag, Flags).
+
+restore_flags(Old) :-
+   maplist(set_flag, Old).
+
+old_flag(Name-_, Name-Value) :-
+   current_prolog_flag(Name, Value).
+
+set_flag(Name-Value) :-
+   set_prolog_flag(Name, Value).
+
 a(data(0, 5, 22r3,
        4, 2, 1,
        2, 7, 9)).
@@ -238,7 +257,7 @@ a(data(0, 5, 22r3,
 %     assertion(A == A_expected),
 %     assertion(P == P_expected).
 
-test(solve) :-
+test(solve, [setup(pin_default_flags(Old)), cleanup(restore_flags(Old))]) :-
     a(A),
     B = data(32, 11, 43),
     N = 3,
@@ -251,7 +270,8 @@ fill(T, Offset, [V | Vs]) :-
     Offset1 is Offset + 1,
     fill(T, Offset1, Vs).
 
-test(solve_shared_offsets) :-
+test(solve_shared_offsets,
+     [setup(pin_default_flags(Old)), cleanup(restore_flags(Old))]) :-
     N = 3,
     M = 1,
     OA = 2,
