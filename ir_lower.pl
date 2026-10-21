@@ -219,11 +219,12 @@ aggregate(<, Item, Aggregate) => Aggregate = max(Item).
 
 :- use_module(array).
 :- use_module(ir).
+:- use_module(ir_optimize, [optimize_kernel/3]).
 :- use_module(buffer, [buffer_to_data/4]).
 
 % ir_values(+C, +Device, +Tolerance, -List): the values of C, computed by
-% running the IR of each kernel of its schedule on Prolog data, one data term
-% per buffer, with the formats a realize under Tolerance chooses.
+% running the optimized IR of each kernel of its schedule on Prolog data, one
+% data term per buffer, with the formats a realize under Tolerance chooses.
 ir_values(C, Device, List) :-
    ir_values(C, Device, inf, List).
 ir_values(C, Device, Tolerance, List) :-
@@ -241,7 +242,8 @@ run_node(_, Node, Datas0, Datas), get_dict(op, Node, constant(_)) =>
 run_node(_, Node, Datas0, Datas), get_dict(data, Node, Data), nonvar(Data) =>
    Datas = Datas0.
 run_node(Device, Node, Datas0, Datas) =>
-   lower_kernel(Device, Node, Node.op, Kernel, Arrays),
+   lower_kernel(Device, Node, Node.op, Kernel0, Arrays),
+   optimize_kernel(Device, Kernel0, Kernel),
    ir_verify(Kernel),
    foldl(array_term, Arrays, Terms, Datas0, Datas),
    ir_run(Kernel, Terms).

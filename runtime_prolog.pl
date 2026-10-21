@@ -3,6 +3,8 @@
 :- use_module(array, []).
 :- use_module(lu_decomposition).
 :- use_module(ir_lower, [lower_kernel/5]).
+:- use_module(ir_optimize, [optimize_kernel/3]).
+:- use_module(ir_index, []).
 :- use_module(ir_prolog, [ir_prolog/2]).
 
 /* 
@@ -34,6 +36,14 @@ array:_M.dtype_size(prolog) := 1 :-
    true.
 
 % Prolog floats are doubles; integers and booleans are exact.
+% The kernel IR's index arithmetic is simplified: Prolog has no compiler
+% to remove its divisions.
+ir_optimize:layers(prolog, Layers) :-
+   Layers = [[ir_index:fd_int, ir_index:fd_between, ir_index:fd_add,
+              ir_index:fd_mul, ir_index:fd_div, ir_index:fd_mod,
+              ir_index:add_assoc, ir_index:add_comm, ir_index:div_split,
+              ir_index:mod_split, ir_index:mod_small, ir_index:materialize]].
+
 array:default_format(prolog, M, Format) :-
    prolog_format(M.dtype, Format).
 
@@ -82,7 +92,8 @@ array:M.compile(prolog, Op) := Dict :-
 % Dict is M with a kernel computing Op into M: the kernel IR of Op, in its
 % Prolog dialect, as a clause of the kernel module.
 compile_kernel(M, Op, Dict) :-
-   lower_kernel(prolog, M, Op, Kernel, Arrays),
+   lower_kernel(prolog, M, Op, Kernel0, Arrays),
+   optimize_kernel(prolog, Kernel0, Kernel),
    ir_prolog(Kernel, (Head0 :- Body)),
    Head0 =.. [_ | Params],
    % A kernel is named after its code, so a kernel already defined is reused.

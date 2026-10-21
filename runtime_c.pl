@@ -9,10 +9,19 @@
 :- use_module(precision, [transfer_precision/3]).
 :- use_module(kernel_c).
 :- use_module(ir_lower, [lower_kernel/5]).
+:- use_module(ir_optimize, [optimize_kernel/3]).
+:- use_module(ir_index, []).
 :- use_module(ir_c, [ir_c/3]).
 
 % Floats default to float64; integers and booleans take the smallest dtype
 % holding their range.
+% The kernel IR's index arithmetic is simplified where the compiler can't.
+ir_optimize:layers(c, Layers) :-
+   Layers = [[ir_index:fd_int, ir_index:fd_between, ir_index:fd_add,
+              ir_index:fd_mul, ir_index:fd_div, ir_index:fd_mod,
+              ir_index:add_assoc, ir_index:add_comm, ir_index:div_split,
+              ir_index:mod_split, ir_index:mod_small, ir_index:materialize]].
+
 array:default_format(c, M, Format) :-
    array:range_min_max(M.range, Min, Max),
    c_default_format(M.dtype, Min, Max, Format).
@@ -60,7 +69,8 @@ array:M.compile(c, Op) := Dict :-
 % as a C function computing one element, called by a runtime predicate
 % looping over M's index.
 compile_kernel(M, Op, Dict) :-
-   lower_kernel(c, M, Op, IR, Arrays),
+   lower_kernel(c, M, Op, IR0, Arrays),
+   optimize_kernel(c, IR0, IR),
    ir_c(c, IR, c_kernel(Buffers, Shape, TypeIndex, Body)),
    maplist(buffer_param, Buffers, [Out | TypeArgs]),
    length(TypeArgs, NArgs),

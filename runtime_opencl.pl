@@ -16,6 +16,7 @@ Prolog data goes through the C device.
 :- use_module(c99).
 :- use_module(kernel_c).
 :- use_module(ir_lower, [lower_kernel/5]).
+:- use_module(ir_optimize, [optimize_kernel/3]).
 :- use_module(ir_c, [ir_c/3]).
 :- use_module(opencl).
 :- use_module(swipl_ld, [clang_format/2]).
@@ -58,6 +59,9 @@ extension(Device, Extension) :-
 % Formats
 % =======
 
+ir_optimize:layers(opencl(_), Layers) :-
+   ir_optimize:layers(c, Layers).
+
 array:default_format(opencl(_), M, Format) :-
    array:default_format(c, M, Format).
 array:float_formats(opencl(Name), Formats) :-
@@ -93,7 +97,8 @@ array:M.compile(opencl(Name), Op) := Dict :-
 % in OpenCL C. The kernel runs one work item per element of M, which
 % unravels its global id into the element's index.
 compile_kernel(Name, M, Op, Dict) :-
-   lower_kernel(opencl(Name), M, Op, IR, Arrays),
+   lower_kernel(opencl(Name), M, Op, IR0, Arrays),
+   optimize_kernel(opencl(Name), IR0, IR),
    ir_c(opencl, IR, c_kernel(Buffers, Shape, TypeIndex, Body)),
    maplist(index_name, TypeIndex, Index),
    Exprs = view{}.from_shape(Shape).reverse_index_expr(g),
