@@ -41,7 +41,7 @@ merge_dims([Dim-Stride-(Min-Max) | T], AccDim-AccStride-(AccMin-AccMax), Merged)
    ),
    AccStride #= Dim * Stride,
    NewAccDim #= AccDim * Dim,
-   NewMin #= AccMin*AccDim + Min,
+   NewMin #= AccMin*Dim + Min,
    NewMax #= (AccMax-1)*Dim + Max,
    merge_dims(T, NewAccDim-Stride-(NewMin-NewMax), Merged).
 merge_dims([H | T], Acc, [Acc | MergedTail]) :-
@@ -542,6 +542,13 @@ test('symbolic no-op', []) :-
   Reshaped.shape == NewShape,
   Reshaped.strides == [1,4],
   Reshaped.mask == [0-4, 0-W].
+
+test('single element mask of unequal dims', [timeout(5)]) :-
+   Start = view{}.from_shape([6]).put([mask:[2-3]]),
+   Reshaped = Start.reshape([3, 2]),
+   view{shape: Shape, mask: Mask} :< Reshaped,
+   Shape == [3, 2],
+   Mask == [1-2, 0-1].
 
 test('single element mask', []) :-
    Start = view{}.from_shape([4]).put([mask:[1-2]]),
