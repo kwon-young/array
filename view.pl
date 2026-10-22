@@ -76,10 +76,14 @@ M.expand(Shape) := Dict :-
 M.squeeze() := Dict :-
    findall(Axis, nth0(Axis, M.shape, 1), Axes),
    Dict = M.squeeze(Axes).
+% Fails on a dim of padding: dropping it would drop its mask.
 M.squeeze(Axes) := Dict :-
    sort(0, @>, Axes, Axes_),
-   foldl([Axis, In, Out]>>nth0(Axis, In, 1-_-_, Out), Axes_, M.zip(), Zip),
+   foldl(squeeze_dim, Axes_, M.zip(), Zip),
    Dict = M.with_zip(Zip).
+squeeze_dim(Axis, In, Out) :-
+   nth0(Axis, In, 1-_-Mask, Out),
+   Mask == 0-1.
 
 M.unsqueeze(Axis) := Dict :-
    nth0(Axis, NewShape, 1, M.shape),
@@ -106,12 +110,15 @@ shrink_dim(Start-End, Dim-Stride-Mask0, Dim1-Stride-Mask, In, Out) :-
    Out #= In + Start*Stride.
 
 % The valid part of a shrunk dim: its old mask, shifted by Start and clipped
-% to the new dim. Empty when the shrink only keeps padding.
+% to the new dim. 0-0 when the shrink only keeps padding.
 shrink_mask(_, Dim, Dim1, 0-Max, Mask), Max == Dim =>
    dim_mask(Dim1, Mask).
 shrink_mask(Start, _, Dim1, Min-Max, Mask) =>
-   Min1 #= max(0, min(Dim1, Min - Start)),
-   Max1 #= max(Min1, min(Dim1, Max - Start)),
+   Low #= max(0, min(Dim1, Min - Start)),
+   High #= max(0, min(Dim1, Max - Start)),
+   NonEmpty #<==> (High #> Low),
+   Min1 #= Low*NonEmpty,
+   Max1 #= High*NonEmpty,
    Mask = Min1-Max1.
 
 :- table broadcast_view/3.
@@ -263,7 +270,13 @@ test('shrink inside the padding gives an empty mask', [timeout(5)]) :-
    Padded = view{}.from_shape([2]).pad([2-0]),
    View = Padded.shrink([0-1]),
    view{mask: Mask} :< View,
-   Mask == [1-1].
+   Mask == [0-0].
+
+test('shrink after the data gives an empty mask', [timeout(5)]) :-
+   Padded = view{}.from_shape([2]).pad([0-2]),
+   View = Padded.shrink([3-4]),
+   view{mask: Mask} :< View,
+   Mask == [0-0].
 
 test('shrink of an unpadded dim keeps a full mask', [timeout(5)]) :-
    View = view{}.from_shape([4]).shrink([1-3]),
@@ -278,6 +291,22 @@ test('shrink of a symbolic dim keeps a full mask', [timeout(5)]) :-
    Mask == [0-W].
 
 :- end_tests(shrink).
+
+:- begin_tests(squeeze).
+
+test('squeeze drops a dim of data', [timeout(5)]) :-
+   View = view{}.from_shape([1, 3]).squeeze([0]),
+   view{shape: Shape, strides: Strides, mask: Mask} :< View,
+   Shape == [3],
+   Strides == [1],
+   Mask == [0-3].
+
+test('squeeze of a dim of padding fails', [fail, timeout(5)]) :-
+   Padded = view{}.from_shape([2]).pad([1-0]),
+   Shrunk = Padded.shrink([0-1]),
+   _ = Shrunk.squeeze([0]).
+
+:- end_tests(squeeze).
 
 :- begin_tests(reshape).
 
