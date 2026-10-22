@@ -106,20 +106,17 @@ M.shrink(Shrink) := Dict :-
 shrink_dim(Start-End, Dim-Stride-Mask0, Dim1-Stride-Mask, In, Out) :-
    mask(Dim, Start-End),
    Dim1 #= (End - Start),
-   shrink_mask(Start, Dim, Dim1, Mask0, Mask),
+   shrink_mask(Start, Dim1, Mask0, Mask),
    Out #= In + Start*Stride.
 
 % The valid part of a shrunk dim: its old mask, shifted by Start and clipped
 % to the new dim. 0-0 when the shrink only keeps padding.
-shrink_mask(_, Dim, Dim1, 0-Max, Mask), Max == Dim =>
-   dim_mask(Dim1, Mask).
-shrink_mask(Start, _, Dim1, Min-Max, Mask) =>
+shrink_mask(Start, Dim1, Min-Max, Min1-Max1) :-
    Low #= max(0, min(Dim1, Min - Start)),
    High #= max(0, min(Dim1, Max - Start)),
    NonEmpty #<==> (High #> Low),
    Min1 #= Low*NonEmpty,
-   Max1 #= High*NonEmpty,
-   Mask = Min1-Max1.
+   Max1 #= High*NonEmpty.
 
 :- table broadcast_view/3.
 
@@ -296,7 +293,19 @@ test('shrink of a symbolic dim keeps a full mask', [timeout(5)]) :-
    W in 1..10,
    View = view{}.from_shape([W]).shrink([0-W]),
    view{mask: Mask} :< View,
-   Mask == [0-W].
+   W = 5,
+   Mask == [0-5].
+
+test('shrink finds the range giving a mask', [timeout(5)]) :-
+   Padded = view{shape: [6], strides: [1], mask: [1-5], offset: -1},
+   findall(Start-End,
+           (  [Start, End] ins 0..6,
+              View = Padded.shrink([Start-End]),
+              view{shape: [2], mask: [1-2]} :< View,
+              label([Start, End])
+           ),
+           Ranges),
+   Ranges == [0-2].
 
 :- end_tests(shrink).
 
