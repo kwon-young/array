@@ -185,15 +185,21 @@ load(A, Ctx, Value, Format) -->
       Buffer = _-BufferFormat
    },
    (  { array:skip_view(A.op, constant(Constant)) }
-   -> guarded_value(Valid, cast(Format, Constant, Value), Value)
-   ;  guarded_value(Valid, load(Buffer, IndexExpr, Value0), Value0),
+   -> guarded_value(Valid, cast(Format, Constant, Value), Value, Format)
+   ;  guarded_value(Valid, load(Buffer, IndexExpr, Value0), Value0,
+                    BufferFormat),
       cast(Format, Value0, BufferFormat, Value)
    ).
 
-guarded_value(true, Goal, _) ==>
+% Outside the mask, Value is the 0 of its Format.
+guarded_value(true, Goal, _, _) ==>
    [Goal].
-guarded_value(Valid, Goal, Value) ==>
-   [(Valid -> Goal ; Value = 0)].
+guarded_value(Valid, Goal, Value, Format) ==>
+   { zero(Format, Zero) },
+   [(Valid -> Goal ; Value = Zero)].
+
+zero(Format, Zero), ir:float_format(Format) => Zero = 0.0.
+zero(_, Zero) => Zero = 0.
 
 % A reduction of Ctx's node accumulates, in the node's format, the values of
 % Parent at each index that the reduced axes add to the node's index.

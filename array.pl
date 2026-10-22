@@ -1014,12 +1014,11 @@ test('a realized input keeps its values', [forall(member(D, [prolog, c]))]) :-
 
 :- begin_tests(array_shrink).
 
-% Compared with =:=: the Prolog device reads padding as the integer 0.
 shrunk_padding(D, Shrink, Expected) :-
     A = array{}.fromlist([1.0, 2.0], [device(D)]),
     B = A.pad([1-1]).shrink([Shrink]),
     List = B.tolist(),
-    maplist(=:=, List, Expected).
+    List == Expected.
 
 test('a shrink of a padded array reads the padding as 0',
      [forall(member(D, [prolog, c])), timeout(30)]) :-
@@ -1029,6 +1028,28 @@ test('a shrink of a padded array reads the padding as 0',
     shrunk_padding(D, 3-4, [0.0]).
 
 :- end_tests(array_shrink).
+
+:- begin_tests(array_pad).
+
+test('the padding of a float array is a float',
+     [forall(member(D, [prolog, c])), timeout(30)]) :-
+    A = array{}.fromlist([1.0, 2.0], [device(D)]),
+    List = A.pad([1-1]).tolist(),
+    List == [0.0, 1.0, 2.0, 0.0].
+
+test('the padding of a float constant is a float',
+     [forall(member(D, [prolog, c])), timeout(30)]) :-
+    A = array{}.full([2], 1.5, [device(D)]),
+    List = A.pad([1-1]).tolist(),
+    List == [0.0, 1.5, 1.5, 0.0].
+
+test('the padding of an integer array is an integer',
+     [forall(member(D, [prolog, c])), timeout(30)]) :-
+    A = array{}.fromlist([1, 2], [device(D)]),
+    List = A.pad([1-1]).tolist(),
+    List == [0, 1, 2, 0].
+
+:- end_tests(array_pad).
 
 :- begin_tests(array_max).
 
