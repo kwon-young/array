@@ -181,20 +181,11 @@ M.expand(Shape) := Dict :-
 M.squeeze() := Dict :-
    findall(Axis, nth0(Axis, M.shape(), 1), Axes),
    Dict = M.squeeze(Axes).
+% A reshape: a dim of padding stays below, in a view of its own.
 M.squeeze(Axes) := Dict :-
-   squeeze_array(M, Axes, Dict).
-
-% A dim of padding can't be dropped from its view: a new view reads the
-% padding through it.
-squeeze_array(M, Axes, Dict), squeezed_view(M, Axes, View) =>
-   Dict = M.replace_view(View).
-squeeze_array(M, Axes, Dict) =>
    sort(0, @>, Axes, Axes_),
    foldl([Axis, In, Out]>>nth0(Axis, In, 1, Out), Axes_, M.shape(), Shape),
    Dict = M.reshape(Shape).
-
-squeezed_view(M, Axes, View) :-
-   View = M.view().squeeze(Axes).
 
 M.unsqueeze(Axis) := Dict :-
    Dict = M.replace_view(M.view().unsqueeze(Axis)).
@@ -1158,6 +1149,15 @@ test('a squeezed row of padding reads 0',
     Row0 == [0.0, 0.0],
     Row2 = P.shrink([2-3, 0-2]).squeeze([0]).tolist(),
     Row2 == [3.0, 4.0].
+
+test('a squeezed dim of size 1 keeps one view whatever its stride',
+     [forall(member(D, [prolog, c])), timeout(30)]) :-
+    A = array{}.fromlist([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]], [device(D)]),
+    Row = A.transpose().shrink([1-2, 0-3]),
+    B = Row.squeeze([0]),
+    array{views: Views} :< B,
+    length(Views, 1),
+    B.tolist() == [2.0, 4.0, 6.0].
 
 test('an expanded element of padding reads 0',
      [forall(member(D, [prolog, c])), timeout(30)]) :-

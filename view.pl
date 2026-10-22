@@ -24,9 +24,15 @@ M.reshape(Shape) := Dict :-
    (  shape_size(Shape, M.size())
    -> merge_dims(M.zip(), MergedPairs),
       Dict = M.with_shape(Shape),
+      shape_strides(Shape, RowMajor),
+      maplist(unit_stride, Shape, RowMajor, Dict.strides),
       merge_dims(Dict.zip(), MergedPairs)
    ;  domain_error(M.shape, Shape)
    ).
+
+% The stride of a new dim of size 1 is never used: it is row-major.
+unit_stride(Dim, RowMajor, Stride) :-
+   (Dim #= 1) #==> (Stride #= RowMajor).
 
 :- table merge_dims/2.
 
@@ -34,8 +40,33 @@ merge_dims([], [1-1-(0-1)]).
 merge_dims([H | T], MergedPairs) :-
    merge_dims(T, H, MergedPairs).
 
-merge_dims([], Acc, [Acc]).
-merge_dims([Dim-Stride-(Min-Max) | T], AccDim-AccStride-(AccMin-AccMax), Merged) :-
+% A dim of size 1 of data has the single index 0: its stride is never used,
+% so it drops out of the merged form whatever its stride. A view of such
+% dims only merges as a scalar.
+merge_dims([], Acc, Merged) :-
+   unit_dim(Acc, Unit),
+   merge_last(Unit, Acc, Merged).
+merge_dims([H | T], Acc, Merged) :-
+   unit_dim(H, UnitH),
+   merge_next(UnitH, H, T, Acc, Merged).
+
+merge_last(1, _, [1-1-(0-1)]).
+merge_last(0, Acc, [Acc]).
+
+% H drops out.
+merge_next(1, _, T, Acc, Merged) :-
+   merge_dims(T, Acc, Merged).
+merge_next(0, H, T, Acc, Merged) :-
+   unit_dim(Acc, UnitAcc),
+   merge_acc(UnitAcc, H, T, Acc, Merged).
+
+% Acc drops out: it is a dim of size 1 that only dims of size 1 preceded.
+merge_acc(1, H, T, _, Merged) :-
+   merge_dims(T, H, Merged).
+merge_acc(0, H, T, Acc, Merged) :-
+   merge_pair(H, T, Acc, Merged).
+
+merge_pair(Dim-Stride-(Min-Max), T, AccDim-AccStride-(AccMin-AccMax), Merged) :-
    (  full_mask(Dim, Min-Max), full_mask(AccDim, AccMin-AccMax)
    ;  single_element_mask(Dim, Min-Max), single_element_mask(AccDim, AccMin-AccMax)
    ),
@@ -44,11 +75,15 @@ merge_dims([Dim-Stride-(Min-Max) | T], AccDim-AccStride-(AccMin-AccMax), Merged)
    NewMin #= AccMin*Dim + Min,
    NewMax #= (AccMax-1)*Dim + Max,
    merge_dims(T, NewAccDim-Stride-(NewMin-NewMax), Merged).
-merge_dims([H | T], Acc, [Acc | MergedTail]) :-
+merge_pair(H, T, Acc, [Acc | MergedTail]) :-
    H = Dim-Stride-_,
    Acc = _-AccStride-_,
    AccStride #\= Dim * Stride,
    merge_dims(T, H, MergedTail).
+
+unit_dim(Dim-_-(Min-Max), Unit) :-
+   Unit #<==> (Dim #= 1 #/\ Min #= 0 #/\ Max #= 1).
+
 full_mask(Dim, 0-Dim).
 single_element_mask(Dim, Min-Max) :-
    mask(Dim, Min-Max),
@@ -72,18 +107,6 @@ M.permute(Axes) := Dict :-
 
 M.expand(Shape) := Dict :-
    Dict = M.broadcast_view(Shape).
-
-M.squeeze() := Dict :-
-   findall(Axis, nth0(Axis, M.shape, 1), Axes),
-   Dict = M.squeeze(Axes).
-% A squeezed dim is a dim of data, of mask 0-1: dropping a dim of padding
-% would drop its mask.
-M.squeeze(Axes) := Dict :-
-   sort(0, @>, Axes, Axes_),
-   foldl(squeeze_dim, Axes_, M.zip(), Zip),
-   Dict = M.with_zip(Zip).
-squeeze_dim(Axis, In, Out) :-
-   nth0(Axis, In, 1-_-(0-1), Out).
 
 M.unsqueeze(Axis) := Dict :-
    nth0(Axis, NewShape, 1, M.shape),
@@ -337,26 +360,40 @@ test('a padded view is not contiguous', [timeout(5)]) :-
 
 :- end_tests(contiguous).
 
-:- begin_tests(squeeze).
+:- begin_tests(unit_dims).
 
-test('squeeze drops a dim of data', [timeout(5)]) :-
-   View = view{}.from_shape([1, 3]).squeeze([0]),
+test('reshape drops a dim of size 1 whatever its stride', [timeout(5)]) :-
+   View0 = view{shape: [1, 3], strides: [7, 1], mask: [0-1, 0-3], offset: 0},
+   View = View0.reshape([3]),
    view{shape: Shape, strides: Strides, mask: Mask} :< View,
    Shape == [3],
    Strides == [1],
    Mask == [0-3].
 
-test('squeeze makes an unknown mask a mask of data', [timeout(5)]) :-
+test('reshape gives a new dim of size 1 its row-major stride', [timeout(5)]) :-
+   View = view{}.from_shape([3]).reshape([3, 1]),
+   view{strides: Strides, mask: Mask} :< View,
+   Strides == [1, 1],
+   Mask == [0-3, 0-1].
+
+test('reshape of dims of size 1 only is a scalar', [timeout(5)]) :-
+   View0 = view{shape: [1, 1], strides: [7, 5], mask: [0-1, 0-1], offset: 2},
+   View = View0.reshape([]),
+   view{shape: Shape, offset: Offset} :< View,
+   Shape == [],
+   Offset == 2.
+
+test('reshape makes an unknown mask of size 1 a mask of data', [timeout(5)]) :-
    View0 = view{shape: [1, 3], strides: [3, 1], mask: [Mask, 0-3], offset: 0},
-   _ = View0.squeeze([0]),
+   _ = View0.reshape([3]),
    Mask == 0-1.
 
-test('squeeze of a dim of padding fails', [fail, timeout(5)]) :-
+test('reshape keeps a dim of size 1 of padding', [fail, timeout(5)]) :-
    Padded = view{}.from_shape([2]).pad([1-0]),
    Shrunk = Padded.shrink([0-1]),
-   _ = Shrunk.squeeze([0]).
+   _ = Shrunk.reshape([]).
 
-:- end_tests(squeeze).
+:- end_tests(unit_dims).
 
 :- begin_tests(reshape).
 
@@ -517,7 +554,7 @@ test('masked split unaligned', [throws(error(domain_error(_,_),_))]) :-
   _ = Start.reshape(NewShape).
 
 % --- Symbolic ---
-test('symbolic contiguous', []) :-
+test('symbolic contiguous', [nondet]) :-
   W in 1..10,
   Start = view{}.from_shape([W,4]),
   W4 #= W*4,
@@ -527,14 +564,19 @@ test('symbolic contiguous', []) :-
   Reshaped.strides == [1],
   Reshaped.mask = [0-W4].
 
-test('symbolic non-contiguous fail', [fail]) :-
-  W in 1..10,
-  Start = view{shape:[4,W], strides:[1,W], offset:0, mask:[0-3, 0-W]},
-  W4 #= W*4,
-  NewShape = [W4],
-  _ = Start.reshape(NewShape).
+% only a dim of size 1 drops out whatever its stride
+test('symbolic non-contiguous only of size 1', [timeout(5)]) :-
+  findall(W,
+          (  W in 1..10,
+             Start = view{shape:[4,W], strides:[1,W], offset:0, mask:[0-3, 0-W]},
+             W4 #= W*4,
+             NewShape = [W4],
+             _ = Start.reshape(NewShape)
+          ),
+          Ws),
+  Ws == [1].
 
-test('symbolic no-op', []) :-
+test('symbolic no-op', [nondet]) :-
   W in 1..10,
   Start = view{}.from_shape([4,W]).put(strides, [1,4]),
   NewShape = [4,W],
