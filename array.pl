@@ -1012,6 +1012,24 @@ test('a realized input keeps its values', [forall(member(D, [prolog, c]))]) :-
 
 :- end_tests(array_realize).
 
+:- begin_tests(array_shrink).
+
+% Compared with =:=: the Prolog device reads padding as the integer 0.
+shrunk_padding(D, Shrink, Expected) :-
+    A = array{}.fromlist([1.0, 2.0], [device(D)]),
+    B = A.pad([1-1]).shrink([Shrink]),
+    List = B.tolist(),
+    maplist(=:=, List, Expected).
+
+test('a shrink of a padded array reads the padding as 0',
+     [forall(member(D, [prolog, c])), timeout(30)]) :-
+    shrunk_padding(D, 0-2, [0.0, 1.0]),
+    shrunk_padding(D, 2-4, [2.0, 0.0]),
+    shrunk_padding(D, 1-3, [1.0, 2.0]),
+    shrunk_padding(D, 3-4, [0.0]).
+
+:- end_tests(array_shrink).
+
 :- begin_tests(array_max).
 
 % A float64 array on Device holding Values, which may hold NaN: ranges can't,
