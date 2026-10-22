@@ -76,14 +76,14 @@ M.expand(Shape) := Dict :-
 M.squeeze() := Dict :-
    findall(Axis, nth0(Axis, M.shape, 1), Axes),
    Dict = M.squeeze(Axes).
-% Fails on a dim of padding: dropping it would drop its mask.
+% A squeezed dim is a dim of data, of mask 0-1: dropping a dim of padding
+% would drop its mask.
 M.squeeze(Axes) := Dict :-
    sort(0, @>, Axes, Axes_),
    foldl(squeeze_dim, Axes_, M.zip(), Zip),
    Dict = M.with_zip(Zip).
 squeeze_dim(Axis, In, Out) :-
-   nth0(Axis, In, 1-_-Mask, Out),
-   Mask == 0-1.
+   nth0(Axis, In, 1-_-(0-1), Out).
 
 M.unsqueeze(Axis) := Dict :-
    nth0(Axis, NewShape, 1, M.shape),
@@ -153,10 +153,8 @@ M.is_contiguous() := Res :-
    ).
 
 % The only index of a dim of size 1 is 0: its stride is never used.
-contiguous_stride(Dim, _, _), Dim == 1 =>
-   true.
-contiguous_stride(_, RowMajor, Stride) =>
-   RowMajor #= Stride.
+contiguous_stride(Dim, RowMajor, Stride) :-
+   (Dim #= 1) #\/ (RowMajor #= Stride).
 
 % Helpers
 % =======
@@ -323,6 +321,12 @@ test('a dim of size 1 has any stride', [timeout(5)]) :-
    View = view{shape: [1, 3], strides: [7, 1], mask: [0-1, 0-3], offset: 0},
    View.is_contiguous() == true.
 
+test('a dim with another stride is contiguous only of size 1', [timeout(5)]) :-
+   D in 1..5,
+   View = view{shape: [D, 3], strides: [7, 1], mask: [0-D, 0-3], offset: 0},
+   View.is_contiguous() == true,
+   D == 1.
+
 test('a column of a matrix is not contiguous', [timeout(5)]) :-
    View = view{}.from_shape([2, 3]).shrink([0-2, 1-2]),
    View.is_contiguous() == false.
@@ -341,6 +345,11 @@ test('squeeze drops a dim of data', [timeout(5)]) :-
    Shape == [3],
    Strides == [1],
    Mask == [0-3].
+
+test('squeeze makes an unknown mask a mask of data', [timeout(5)]) :-
+   View0 = view{shape: [1, 3], strides: [3, 1], mask: [Mask, 0-3], offset: 0},
+   _ = View0.squeeze([0]),
+   Mask == 0-1.
 
 test('squeeze of a dim of padding fails', [fail, timeout(5)]) :-
    Padded = view{}.from_shape([2]).pad([1-0]),
