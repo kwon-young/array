@@ -296,7 +296,18 @@ M.tolist(Options) := List :-
    shape_list(M.shape(), List),
    flatten(List, Flat),
    M1 = M.contiguous().realize(Options),
-   compound_name_arguments(M1.to(prolog).realize().data, data, Flat).
+   M2 = M1.to(prolog).realize(),
+   data_slice(M2.data, M2.data_offset(), Flat).
+
+% Flat is the slice of the arguments of Data from Offset.
+data_slice(_, _, Flat), Flat == [] =>
+   true.
+data_slice(Data, Offset, Flat) =>
+   compound_name_arguments(Data, data, Args),
+   length(Prefix, Offset),
+   append(Prefix, Rest, Args),
+   append(Flat, _, Rest).
+
 shape_list([], _).
 shape_list([Dim | Shape], L) :-
    length(L, Dim),
@@ -613,6 +624,26 @@ M.ndim0() := NDim :-
 M.is_contiguous() := Res :-
    maplist(view:is_contiguous, M.views, [H | T]),
    foldl(mkconj, T, H, Res).
+
+% The elements of a contiguous M are the M.size() elements of its buffer
+% from the offset of its element 0, through all its views. An empty M reads
+% nothing: its offset may lie outside the buffer.
+M.data_offset() := Offset :-
+   data_offset(M, M.size(), Offset).
+
+data_offset(_, 0, Offset) =>
+   Offset = 0.
+data_offset(M, Size, Offset) =>
+   length(Zeros, M.ndim()),
+   maplist(=(0), Zeros),
+   IndexExpr-_ = M.index_expr(Zeros),
+   Offset is IndexExpr,
+   check_in_buffer(Offset, Size, M.datasize).
+
+check_in_buffer(Offset, Size, DataSize), Offset >= 0, Offset + Size =< DataSize =>
+   true.
+check_in_buffer(Offset, Size, DataSize) =>
+   domain_error(in_buffer_of_size(DataSize), slice(Offset, Size)).
 
 % Runtime
 % =======
@@ -1041,6 +1072,74 @@ test('a shrink of a padded array reads the padding as 0',
     shrunk_padding(D, 3-4, [0.0]).
 
 :- end_tests(array_shrink).
+
+:- begin_tests(array_slice).
+
+slice(Base, Shrink, Slice) :-
+    Slice = Base.shrink(Shrink).
+
+matrix(D, M) :-
+    M = array{}.fromlist([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], [device(D)]).
+
+test('a slice of a buffer reads its elements',
+     [forall(member(D, [prolog, c])), timeout(30)]) :-
+    A = array{}.fromlist([1.0, 2.0, 3.0], [device(D)]),
+    slice(A, [0-2], Prefix),
+    Prefix.tolist() == [1.0, 2.0],
+    slice(A, [1-3], Suffix),
+    Suffix.tolist() == [2.0, 3.0],
+    matrix(D, M),
+    slice(M, [1-2, 0-3], Row),
+    Row.tolist() == [[4.0, 5.0, 6.0]].
+
+test('contiguous keeps a slice', [timeout(30)]) :-
+    matrix(prolog, M),
+    slice(M, [1-2, 0-3], Row),
+    C = Row.contiguous(),
+    array{op: Op} :< C,
+    Op = view(_).
+
+test('contiguous copies a column',
+     [forall(member(D, [prolog, c])), timeout(30)]) :-
+    matrix(D, M),
+    slice(M, [0-2, 1-2], Column),
+    C = Column.contiguous(),
+    array{op: Op} :< C,
+    Op = contiguous(_),
+    Column.tolist() == [[2.0], [5.0]].
+
+test('a slice is transferred alone',
+     [forall(member(From-To, [prolog-c, c-prolog])), timeout(30)]) :-
+    A = array{}.fromlist([1.0, 2.0, 3.0], [device(From)]),
+    slice(A, [1-3], Suffix),
+    B = Suffix.to(To),
+    array{datasize: Size} :< B,
+    Size == 2,
+    B.tolist() == [2.0, 3.0].
+
+test('an empty slice of padding reads nothing',
+     [forall(member(From-To, [prolog-c, c-prolog])), timeout(30)]) :-
+    A = array{}.fromlist([1.0, 2.0], [device(From)]),
+    Empty = A.pad([1-0]).shrink([0-0]),
+    Empty.tolist() == [],
+    Empty.to(To).tolist() == [].
+
+test('a view past its buffer fails loudly',
+     [throws(error(domain_error(in_buffer_of_size(2), slice(1, 2)), _)),
+      timeout(30)]) :-
+    A = array{}.fromlist([1.0, 2.0]),
+    View = view{shape: [2], strides: [1], mask: [0-2], offset: 1},
+    B = A.replace_view(View),
+    _ = B.tolist().
+
+test('solve reads a matrix from an offset', [timeout(30)]) :-
+    Big = array{}.fromlist([[9.0, 9.0], [2.0, 0.0], [0.0, 4.0]]),
+    A = Big.shrink([1-3, 0-2]),
+    B = array{}.fromlist([2.0, 8.0]),
+    X @= solve(A, B),
+    X.tolist() == [1.0, 2.0].
+
+:- end_tests(array_slice).
 
 :- begin_tests(array_squeeze).
 

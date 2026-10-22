@@ -230,9 +230,11 @@ read_through(Via, Input0, Input), is_dict(Input0, array) =>
 read_through(_, Input0, Input) =>
    Input = Input0.
 
-% Below the top view, a contiguous view maps a flat index to itself.
+% Below the top view, a contiguous view from offset 0 maps a flat index to
+% itself.
 identity_view(View) :-
-   View.is_contiguous() == true.
+   View.is_contiguous() == true,
+   View.offset == 0.
 
 % An inlined node has no buffer, but a kernel still holds its value in some
 % format: integers and booleans take their default format, and floats the

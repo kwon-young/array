@@ -78,9 +78,9 @@ array:M.compile(prolog, solve(A, B)) := Dict :-
     -> true
     ;  B.shape() = [N], M_ = 1
     ),
-    OffsetA = A.view().offset,
-    OffsetB = B.view().offset,
-    OffsetX = M.view().offset,
+    OffsetA = A.data_offset(),
+    OffsetB = B.data_offset(),
+    OffsetX = M.data_offset(),
     Dict = M.put(kernel,
                  lu_decomposition:solve(A.data, OffsetA,
                                         B.data, OffsetB,

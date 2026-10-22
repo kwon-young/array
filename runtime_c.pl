@@ -186,7 +186,7 @@ array:allocate(c, M) :-
 
 array:M.to(c, prolog) := Dict :-
    M1 = M.contiguous().realize(),
-   buffer_to_data(M1.data, M1.dtype(), M1.datasize, Data),
+   buffer_to_data(M1.data, M1.dtype(), M1.data_offset(), M1.size(), Data),
    % prolog floats hold every C value exactly
    Dict = M.empty(M1.shape(), [device(prolog), data(Data), precision(M1.precision)]).
 
@@ -195,4 +195,4 @@ array:M.to(prolog, c) := Dict :-
    Copy = M.empty(M1.shape(), [device=c, data(Data)]),
    transfer_precision(M1, Copy, Dict),
    array:bind_default_format(Dict),
-   buffer_from_data(Data, Dict.dtype(), M1.datasize, M1.data).
+   buffer_from_data(Data, Dict.dtype(), M1.data_offset(), M1.size(), M1.data).

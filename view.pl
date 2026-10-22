@@ -145,13 +145,21 @@ M.size() := Size :-
 M.ndim() := NDim :-
    length(M.shape, NDim).
 
+% As in numpy, the elements are one row-major block, from any offset: the
+% strides are row-major but on dims of size 1, and every element is valid.
 M.is_contiguous() := Res :-
-   (  shape_strides(M.shape, M.strides),
-      shape_mask(M.shape, M.mask),
-      M.offset = 0
+   (  shape_strides(M.shape, RowMajor),
+      maplist(contiguous_stride, M.shape, RowMajor, M.strides),
+      shape_mask(M.shape, M.mask)
    -> Res = true
    ;  Res = false
    ).
+
+% The only index of a dim of size 1 is 0: its stride is never used.
+contiguous_stride(Dim, _, _), Dim == 1 =>
+   true.
+contiguous_stride(_, RowMajor, Stride) =>
+   RowMajor #= Stride.
 
 % Helpers
 % =======
@@ -291,6 +299,30 @@ test('shrink of a symbolic dim keeps a full mask', [timeout(5)]) :-
    Mask == [0-W].
 
 :- end_tests(shrink).
+
+:- begin_tests(contiguous).
+
+test('a view from an offset is contiguous', [timeout(5)]) :-
+   View = view{}.from_shape([3]).shrink([1-3]),
+   View.is_contiguous() == true.
+
+test('a row of a matrix is contiguous', [timeout(5)]) :-
+   View = view{}.from_shape([2, 3]).shrink([1-2, 0-3]),
+   View.is_contiguous() == true.
+
+test('a dim of size 1 has any stride', [timeout(5)]) :-
+   View = view{shape: [1, 3], strides: [7, 1], mask: [0-1, 0-3], offset: 0},
+   View.is_contiguous() == true.
+
+test('a column of a matrix is not contiguous', [timeout(5)]) :-
+   View = view{}.from_shape([2, 3]).shrink([0-2, 1-2]),
+   View.is_contiguous() == false.
+
+test('a padded view is not contiguous', [timeout(5)]) :-
+   View = view{}.from_shape([2]).pad([1-0]),
+   View.is_contiguous() == false.
+
+:- end_tests(contiguous).
 
 :- begin_tests(squeeze).
 

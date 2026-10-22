@@ -230,7 +230,7 @@ check_format(Name, _, Format) =>
 % The elements of a contiguous array are the Bytes from Offset in its buffer.
 bytes(M, Offset, Bytes) :-
    Size = M.dtype_size(),
-   Offset is M.view().offset * Size,
+   Offset is M.data_offset() * Size,
    Bytes is M.size() * Size.
 
 % OpenCL has no empty buffer.
@@ -295,6 +295,16 @@ test('prolog round trip', [forall(opencl_device(Name, _))]) :-
              A.device == opencl(Name),
              A.tolist() == L
           )).
+
+test('a slice is transferred alone',
+     [forall(opencl_device(Name, _)), timeout(30)]) :-
+   A = array{}.fromlist([1.0, 2.0, 3.0], [device(c)]),
+   Suffix = A.shrink([1-3]),
+   B = Suffix.to(opencl(Name)),
+   B.tolist() == [2.0, 3.0],
+   C = array{}.fromlist([1.0, 2.0, 3.0], [device(opencl(Name))]),
+   Prefix = C.shrink([0-2]),
+   Prefix.to(c).tolist() == [1.0, 2.0].
 
 test('allocation is zeroed', [forall(opencl_device(Name, _))]) :-
    A = array{}.empty([3], [device(opencl(Name)), dtype(integer),

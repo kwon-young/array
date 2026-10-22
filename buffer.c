@@ -148,6 +148,7 @@ static foreign_t c_buffer_type_size(term_t type_t, term_t size)
   return FALSE;
 }
 
+// The size arguments of the compound from the argument offset.
 static foreign_t c_buffer_from_compound(term_t t, term_t type_t, term_t offset_t, term_t it_size, term_t comp)
 {
   atom_t type, name;
@@ -175,10 +176,11 @@ static foreign_t c_buffer_from_compound(term_t t, term_t type_t, term_t offset_t
   return FALSE;
 }
 
+// The size elements of the buffer from the element offset.
 static foreign_t c_buffer_to_compound(term_t t, term_t type_t, term_t offset_t, term_t it_size, term_t name_t, term_t comp_out)
 {
   atom_t type, name;
-  size_t buffer_size, size, type_size, buffer_offset;
+  size_t buffer_size, size, type_size, offset_elements;
   void *buffer;
   PL_blob_t *blob_type;
 
@@ -187,11 +189,17 @@ static foreign_t c_buffer_to_compound(term_t t, term_t type_t, term_t offset_t, 
       && atom_size(type, &type_size)
       && PL_get_blob(t, &buffer, &buffer_size, &blob_type)
       && blob_type == &buffer_blob
-      && PL_get_size_ex(offset_t, &buffer_offset)
+      && PL_get_size_ex(offset_t, &offset_elements)
       && PL_get_size_ex(it_size, &size))
   {
-    buffer += buffer_offset;
-    
+    size_t byte_offset = offset_elements * type_size;
+    if (byte_offset > buffer_size) {
+      return FALSE;
+    }
+    // load() checks its bounds against the rest of the buffer
+    buffer = (char *)buffer + byte_offset;
+    buffer_size -= byte_offset;
+
     term_t args = PL_new_term_refs(size);
     
     for (size_t offset = 0; offset < size; offset++)
