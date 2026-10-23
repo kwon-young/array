@@ -15,6 +15,9 @@ Status: draft.
 - Pure, apart from the store: no accumulators, no counters, no `+=`.
   Equality saturation needs terms whose meaning doesn't depend on an order of
   side effects. Mutation only appears when a dialect lowers the IR.
+  The one order a kernel may state is an `iterate`: its iterations run in
+  order, and one may read back, through `after/2`, what the previous ones
+  stored.
 
 ## Where it sits
 
@@ -44,7 +47,9 @@ kernel(Out-Format0, In1-Format1, ..., InN-FormatN) :-
   first, then the inputs. The pair is the buffer's name everywhere in the
   kernel: its accesses use the same term, `In1-Format1`.
 - `Body` ranges over the output's domain, a `forall` over a `between` per
-  dimension, and stores every element. The domain is part of the kernel:
+  dimension, and stores every element. A kernel computing an element from
+  others, as a factorization, ranges over the independent part of the domain,
+  say a batch, and stores the rest inside it, in `iterate`s and `forall`s. The domain is part of the kernel:
   calling the clause computes the whole output, the output indices get
   their bounds from their binders like any index variable, and schedule
   decisions such as `parallel/1` apply to it. Calling a function per element,
@@ -63,6 +68,8 @@ kernel(Out-Format0, In1-Format1, ..., InN-FormatN) :-
 | `Value is Expr` | arithmetic |
 | `cast(Format, In, Out)` | `Out` is `In` in `Format` |
 | `( Cond -> Then ; Else )` | `Cond` is a conjunction of index or value comparisons |
+| `iterate(between(0, Max, K), Goal)` | runs `Goal` for `K` from 0 to `Max`, in order: each iteration sees the stores of the previous ones |
+| `load(after(Out-Format, K), Index, Value)` | `Value` is the element `Index` of the output `Out`, as the iterations of `K` before the current one stored it |
 | `aggregate_all(sum(X), Goal, Sum)` | sum of `X` over the solutions of `Goal` |
 | `aggregate_all(max(X), Goal, Max)` | maximum of `X` over the solutions of `Goal` |
 | annotations | see [Annotations](#annotations) |
@@ -84,7 +91,8 @@ reference:
   maximum has no identity. `aggregate_all(max(...))` failing on an empty
   domain is then never observed.
 
-Value expressions use `+`, `*`, `sin`, `log`, `sqrt`, constants, `float`,
+Value expressions use `+`, `-`, `*`, `/` (of floats only: C truncates a
+division of integers), `sin`, `log`, `sqrt`, constants, `float`,
 `integer` and `random_float`. They appear in `is`, and in every other value
 position: a `cast`'s input, a `store`'s value and an aggregate's template, as
 in `cast(float32, VA*VB, P)` or `aggregate_all(sum(VA*VB), …)`. A variable
@@ -153,7 +161,12 @@ Casts:
 
 - A buffer the body stores into is an output; a buffer it loads is an input.
 - No buffer is both loaded and stored in one kernel: there is no update in
-  place. The buffer pool guarantees it, since an input keeps its memory
+  place. The one exception is an output read back with `after(Out, K)`,
+  inside an `iterate` over `K`, at an element an earlier iteration stored.
+  The verifier checks that `K` is an enclosing `iterate`'s and that `Out` is
+  stored; that the element is stored earlier is up to the kernel. The
+  reference catches it: an output starts unbound, so reading an element no
+  iteration stored is an instantiation error. The buffer pool guarantees it, since an input keeps its memory
   until its reader has run, and it is also what makes C's `restrict`
   correct.
 - Every element of an output is stored exactly once.
@@ -171,7 +184,7 @@ several stores in one `forall` when they share a domain, or a conjunction of
   value one branch assigns alone is local to that branch, as in
   `( Valid -> V is …, store(…) ; true )`.
 - An index variable is bound by `between(0, Max, I)`, which also gives its
-  bounds: `0 =< I =< Max`. Optimizations read bounds from the binders. After
+  bounds: `0 =< I =< Max`. An `iterate` binds one, as its domain. Optimizations read bounds from the binders. After
   optimization, a dimension of size 1 may be `between(0, 0, 0)`.
 - The only variables shared with the outside are the head's buffers.
 
@@ -322,6 +335,9 @@ kernel(O-float64) :-
 ```
 
 `random_float` isn't pure: rules must never duplicate or remove it.
+Nor may a rule move a goal across the iterations of an `iterate`: an
+`after/2` load depends on their order. The index rules only rewrite
+arithmetic, which keeps it.
 
 ## From the fused graph to the IR
 

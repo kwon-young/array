@@ -4,6 +4,7 @@
    cast/3,
    simd/1,
    parallel/1,
+   iterate/2,
    ir_run/2,
    ir_verify/1,
    ir_formats/2
@@ -29,12 +30,16 @@ kernel on Prolog data (ir_run/2), checks the invariants of the spec
 
 :- meta_predicate
    simd(0),
-   parallel(0).
+   parallel(0),
+   iterate(0, 0).
 
 % Reference semantics
 % ===================
 
-% A buffer is Data-Format, with Data a data(...) term.
+% A buffer is Data-Format, with Data a data(...) term. An output read back
+% inside an iterate is after(Buffer, K): as the iterations before K left it.
+load(after(Buffer, _), Index, Value) :-
+   load(Buffer, Index, Value).
 load(Buffer-_Format, Index, Value) :-
    I is Index + 1,
    arg(I, Buffer, Value).
@@ -56,6 +61,11 @@ cast(_, Expr, Out) =>
 round_to_format(Format, In, Out) :-
    buffer_from_data(Buffer, Format, 1, data(In)),
    buffer_to_data(Buffer, Format, 1, data(Out)).
+
+% The iterations of an iterate run in order, each seeing the stores of the
+% previous ones: forall runs them so.
+iterate(Domain, Goal) :-
+   forall(Domain, Goal).
 
 % Annotations run their goal unchanged.
 simd(Goal) :-
@@ -153,6 +163,13 @@ goal(forall(Domain, Goal), Env0, Env) ==>
    goal(Domain, Env0, Env1),
    goal(Goal, Env1, _),
    { Env = Env0 }.
+% an iterate binds one index, whose iterations an after/2 may read
+goal(iterate(Domain, Goal), Env0, Env) ==>
+   { Domain = between(_, _, K), var(K) -> true ; ir_error(not_a_binder, Domain) },
+   goal(Domain, Env0, Env1),
+   { Env1 = env(Buffers, Indices, Values) },
+   goal(Goal, env(Buffers, [iteration(K) | Indices], Values), _),
+   { Env = Env0 }.
 % a dimension of size 1 whose index is known to be 0, as optimization leaves
 % it
 goal(between(Min, Max, I), Env0, Env), integer(I) ==>
@@ -163,6 +180,9 @@ goal(between(Min, Max, I), Env0, Env) ==>
    { fresh(I, Env0) },
    { Env0 = env(Buffers, Indices, Values) },
    { Env = env(Buffers, [I | Indices], Values) }.
+goal(load(after(Buffer, K), Index, Value), Env0, Env) ==>
+   { iteration(K, Env0) },
+   goal(load(Buffer, Index, Value), Env0, Env).
 goal(load(Buffer, Index, Value), Env0, Env) ==>
    { known_buffer(Buffer, Env0) },
    { index(Index, Env0) },
@@ -175,6 +195,7 @@ goal(store(Buffer, Index, Value), Env0, Env) ==>
    { Env = Env0 }.
 goal(Value is Expr, Env0, Env) ==>
    { expr_format(Expr, Env0, Format) },
+   { division_format(Expr, Format) },
    assign(Value, Format, Env0, Env).
 goal(cast(Format, In, Out), Env0, Env) ==>
    { atom(Format), known_format(Format) -> true ; ir_error(not_a_format, Format) },
@@ -237,6 +258,24 @@ bound(Var, env(Buffers, Indices, Values)) :-
    ;  member(B-_, Values)
    ),
    B == Var,
+   !.
+
+% K is the index of an enclosing iterate.
+iteration(K, env(_, Indices, _)), var(K), member(iteration(K0), Indices), K0 == K =>
+   true.
+iteration(K, _) =>
+   ir_error(not_an_iteration, K).
+
+% A division is of floats: C truncates integers, Prolog would not.
+division_format(Expr, Format), division(Expr), \+ float_format(Format) =>
+   ir_error(integer_division, Expr).
+division_format(_, _) =>
+   true.
+
+division(Expr) :-
+   sub_term(T, Expr),
+   compound(T),
+   compound_name_arity(T, /, 2),
    !.
 
 known_buffer(B-F, env(Buffers, _, _)), member(B0-F0, Buffers), B0 == B =>
@@ -347,6 +386,7 @@ operand_formats_of(Env, Arg) -->
 value_op(_ + _).
 value_op(_ - _).
 value_op(_ * _).
+value_op(_ / _).
 value_op(- _).
 value_op(sin(_)).
 value_op(log(_)).
@@ -409,6 +449,11 @@ accesses(Body, Buffers) :-
    maplist(access_position(Buffers), Accesses, Positions),
    findall(P, member(load(P), Positions), Loaded),
    findall(P, member(store(P), Positions), Stored),
+   (  member(reload(P), Positions), \+ memberchk(P, Stored)
+   -> nth1(P, Buffers, B-_),
+      ir_error(reloaded_input, B)
+   ;  true
+   ),
    (  member(P, Loaded), memberchk(P, Stored)
    -> nth1(P, Buffers, B-_),
       ir_error(loaded_and_stored, B)
@@ -429,12 +474,16 @@ access((_ -> Then ; Else)) ==>
    access(Else).
 access(forall(_, Goal)) ==>
    access(Goal).
+access(iterate(_, Goal)) ==>
+   access(Goal).
 access(aggregate_all(_, Goal, _)) ==>
    access(Goal).
 access(simd(Goal)) ==>
    access(Goal).
 access(parallel(Goal)) ==>
    access(Goal).
+access(load(after(B-_, _), _, _)) ==>
+   [reload(B)].
 access(load(B-_, _, _)) ==>
    [load(B)].
 access(store(B-_, _, _)) ==>
@@ -532,10 +581,91 @@ example(select, (kernel(O-float64, C-bool, A-float64, B-float64) :-
             ;  load(B-float64, 0, VB), V is VB
             ),
             store(O-float64, I, V) )))).
+example(cumsum, Kernel) :-
+   cumsum_kernel(2, 4, Kernel).
+example(trsv, Kernel) :-
+   trsv_kernel(1, 3, Kernel).
+example(cholesky, Kernel) :-
+   cholesky_kernel(2, 3, Kernel).
 example(rand, (kernel(O-float64) :-
    forall(between(0, 3, I),
           ( V is random_float,
             store(O-float64, I, V) )))).
+
+% cumsum_kernel(+Rows, +N, -Kernel): the cumulative sum of each row of N,
+% in N steps, each reading the previous sum back.
+cumsum_kernel(Rows, N, (kernel(O-float64, A-float64) :-
+   forall(between(0, R1, R),
+          iterate(between(0, N1, K),
+                  ( load(A-float64, R*N + K, VA),
+                    ( K > 0
+                    -> load(after(O-float64, K), R*N + K - 1, P)
+                    ;  P = 0.0
+                    ),
+                    V is P + VA,
+                    store(O-float64, R*N + K, V) ))))) :-
+   R1 is Rows - 1,
+   N1 is N - 1.
+
+% trsv_kernel(+Batch, +N, -Kernel): X solves L X = B, L lower triangular,
+% by forward substitution.
+trsv_kernel(Batch, N, (kernel(X-float64, L-float64, B-float64) :-
+   forall(between(0, B1, P),
+          iterate(between(0, N1, I),
+                  ( aggregate_all(sum(T),
+                       ( between(0, N1, J),
+                         ( J < I
+                         -> load(L-float64, P*NN + I*N + J, VL),
+                            load(after(X-float64, I), P*N + J, VX),
+                            T is VL*VX
+                         ;  T = 0.0
+                         ) ),
+                       S),
+                    load(B-float64, P*N + I, VB),
+                    load(L-float64, P*NN + I*N + I, VD),
+                    V is (VB - S)/VD,
+                    store(X-float64, P*N + I, V) ))))) :-
+   B1 is Batch - 1,
+   N1 is N - 1,
+   NN is N*N.
+
+% cholesky_kernel(+Batch, +N, -Kernel): L L' = A, L lower triangular, column
+% by column, each reading the previous columns back.
+cholesky_kernel(Batch, N, (kernel(L-float64, A-float64) :-
+   forall(between(0, B1, P),
+          iterate(between(0, N1, J),
+                  ( aggregate_all(sum(T),
+                       ( between(0, N1, K),
+                         ( K < J
+                         -> load(after(L-float64, J), P*NN + J*N + K, VK),
+                            T is VK*VK
+                         ;  T = 0.0
+                         ) ),
+                       S),
+                    load(A-float64, P*NN + J*N + J, VA),
+                    D is sqrt(VA - S),
+                    store(L-float64, P*NN + J*N + J, D),
+                    forall(between(0, N1, I),
+                           ( I > J
+                           -> aggregate_all(sum(U),
+                                 ( between(0, N1, K2),
+                                   ( K2 < J
+                                   -> load(after(L-float64, J), P*NN + I*N + K2, LI),
+                                      load(after(L-float64, J), P*NN + J*N + K2, LJ),
+                                      U is LI*LJ
+                                   ;  U = 0.0
+                                   ) ),
+                                 S2),
+                              load(A-float64, P*NN + I*N + J, VIJ),
+                              E is (VIJ - S2)/D,
+                              store(L-float64, P*NN + I*N + J, E)
+                           ;  I < J
+                           -> store(L-float64, P*NN + I*N + J, 0.0)
+                           ;  true
+                           )) ))))) :-
+   B1 is Batch - 1,
+   N1 is N - 1,
+   NN is N*N.
 
 % run(Name, Inputs, Output): Output after running the example on Inputs.
 run(Name, Inputs, Size, Output) :-
@@ -577,6 +707,78 @@ test('formats of a selection') :-
                              (_ -> (load(_, _, VA), V is _) ; (load(_, _, VB), _)),
                              _))),
    Formats == [VC-bool, VA-float64, V-float64, VB-float64].
+
+test('a cumulative sum reads its previous sums back', [timeout(10)]) :-
+   run(cumsum, [data(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0)], 8, O),
+   O == data(1.0, 3.0, 6.0, 10.0, 5.0, 11.0, 18.0, 26.0).
+
+test('a forward substitution', [timeout(10)]) :-
+   run(trsv, [data(2.0, 0.0, 0.0, 1.0, 2.0, 0.0, 1.0, 1.0, 2.0),
+              data(2.0, 4.0, 6.0)], 3, X),
+   X == data(1.0, 1.5, 1.75).
+
+test('a batch of cholesky factors', [timeout(10)]) :-
+   run(cholesky, [data(4.0, 2.0, 2.0, 2.0, 5.0, 3.0, 2.0, 3.0, 6.0,
+                       9.0, 0.0, 0.0, 0.0, 9.0, 0.0, 0.0, 0.0, 9.0)], 18, L),
+   L == data(2.0, 0.0, 0.0, 1.0, 2.0, 0.0, 1.0, 1.0, 2.0,
+             3.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 3.0).
+
+% A = B B' + N I is symmetric positive definite.
+spd(N, A) :-
+   length(B, N),
+   maplist(random_row(N), B),
+   findall(V, spd_element(N, B, V), A).
+
+random_row(N, Row) :-
+   length(Row, N),
+   maplist(random_between(-3, 3), Row).
+
+spd_element(N, B, V) :-
+   nth0(I, B, BI),
+   nth0(J, B, BJ),
+   foldl([X, Y, S0, S1]>>(S1 is S0 + X*Y), BI, BJ, 0, S),
+   diagonal_shift(I, J, N, Shift),
+   V is float(S + Shift).
+
+diagonal_shift(I, J, N, Shift), I =:= J => Shift = N.
+diagonal_shift(_, _, _, Shift) => Shift = 0.
+
+test('a cholesky factor of a random matrix', [timeout(10)]) :-
+   set_random(seed(3)),
+   N = 4,
+   spd(N, As),
+   cholesky_kernel(1, N, Kernel),
+   ir_verify(Kernel),
+   A =.. [data | As],
+   NN is N*N,
+   functor(L, data, NN),
+   ir_run(Kernel, [L, A]),
+   L =.. [data | Ls],
+   N1 is N - 1,
+   forall(( between(0, N1, I), between(0, N1, J) ),
+          (  IJ is I*N + J,
+             (  I < J
+             -> nth0(IJ, Ls, Z), Z == 0.0
+             ;  findall(P, ( between(0, N1, K),
+                             IK is I*N + K, JK is J*N + K,
+                             nth0(IK, Ls, X), nth0(JK, Ls, Y),
+                             P is X*Y ), Ps),
+                sum_list(Ps, S),
+                nth0(IJ, As, AIJ),
+                abs(S - AIJ) =< 1.0e-9
+             )
+          )).
+
+test('reading an element no iteration stored is an error',
+     [throws(error(instantiation_error, _)), timeout(10)]) :-
+   Kernel = (kernel(O-float64, A-float64) :-
+                iterate(between(0, 2, K),
+                        ( load(after(O-float64, K), K, P),
+                          load(A-float64, K, VA),
+                          V is P + VA,
+                          store(O-float64, K, V) ))),
+   ir_verify(Kernel),
+   ir_run(Kernel, [data(_, _, _), data(1.0, 2.0, 3.0)]).
 
 test('rand stores floats in [0, 1)') :-
    run(rand, [], 4, O),
@@ -648,6 +850,15 @@ broken(branch_formats(float64, uint8), (kernel(O-float64, A-float64, B-uint8) :-
    forall(between(0, 1, I), (load(A-float64, I, VA),
                              ( VA =\= 0 -> V is VA ; load(B-uint8, I, VB), V is VB ),
                              store(O-float64, I, V))))).
+
+broken(not_an_iteration, (kernel(O-int32) :-
+   forall(between(0, 1, I), (load(after(O-int32, I), 0, V), store(O-int32, I, V))))).
+broken(reloaded_input, (kernel(O-int32, A-int32) :-
+   iterate(between(0, 1, K), (load(after(A-int32, K), K, V), store(O-int32, K, V))))).
+broken(not_a_binder, (kernel(O-int32) :-
+   iterate((between(0, 1, I), between(0, 1, J)), store(O-int32, I*2 + J, 1)))).
+broken(integer_division, (kernel(O-int32, A-int32) :-
+   forall(between(0, 1, I), (load(A-int32, I, V), W is V / 2, store(O-int32, I, W))))).
 
 test('a broken kernel is rejected', [forall(broken(Reason, Kernel))]) :-
    catch(ir_verify(Kernel), error(ir_error(Got, _), _), true),
