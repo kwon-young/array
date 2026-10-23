@@ -155,8 +155,100 @@ M.randn(Shape, Options) := Dict :-
 
 % Movement
 % ========
+% numpy's basic indexing, as a relation: Index holds an item per dim, from
+% the first, missing items reading their whole dim:
+%   * an integer I, -Dim =< I < Dim, from the end when negative, drops its
+%     dim; I may be a clpfd variable, and an index out of its dim fails;
+%   * Start:End or Start:End:Step slices its dim, clamping Start and End
+%     as numpy; inf and sup are bounds before the first and past the last
+%     index; Step is not 0, and reads backwards when negative;
+%   * : reads the whole dim, as inf:sup:1;
+%   * new adds a dim of size 1.
 M.index(Index) := Dict :-
-   Dict = M.replace_view(M.view().index(Index)).
+   index_dims(Index, M.shape(), Shrinks, Flags, Steps, Shape),
+   Dict = M.shrink(Shrinks).flip(Flags).stride(Steps).reshape(Shape).
+
+index_dims([], [], Shrinks, Flags, Steps, Shape) =>
+   Shrinks = [],
+   Flags = [],
+   Steps = [],
+   Shape = [].
+index_dims([], Dims, Shrinks, Flags, Steps, Shape) =>
+   index_dims([:], Dims, Shrinks, Flags, Steps, Shape).
+index_dims([I | Items], [Dim | Dims], Shrinks, Flags, Steps, Shape),
+      ( var(I) ; integer(I) ) =>
+   position(I, Dim, P),
+   P1 #= P + 1,
+   Shrinks = [P-P1 | Shrinks1],
+   Flags = [0 | Flags1],
+   Steps = [1 | Steps1],
+   index_dims(Items, Dims, Shrinks1, Flags1, Steps1, Shape).
+index_dims([new | Items], Dims, Shrinks, Flags, Steps, Shape) =>
+   Shape = [1 | Shape1],
+   index_dims(Items, Dims, Shrinks, Flags, Steps, Shape1).
+index_dims([Slice | Items], [Dim | Dims], Shrinks, Flags, Steps, Shape) =>
+   slice(Slice, Dim, Shrink, Flag, Step, Dim1),
+   Shrinks = [Shrink | Shrinks1],
+   Flags = [Flag | Flags1],
+   Steps = [Step | Steps1],
+   Shape = [Dim1 | Shape1],
+   index_dims(Items, Dims, Shrinks1, Flags1, Steps1, Shape1).
+% More items than dims: no index.
+index_dims([_ | _], [], _, _, _, _) =>
+   fail.
+
+% P is the position of the index I of a dim.
+position(I, Dim, P) :-
+   -Dim #=< I,
+   I #< Dim,
+   Negative #<==> (I #< 0),
+   P #= I + Negative*Dim.
+
+slice(:, Dim, Shrink, Flag, Step, Dim1) =>
+   slice(inf:sup:1, Dim, Shrink, Flag, Step, Dim1).
+slice(Start:(End:K), Dim, Shrink, Flag, Step, Dim1) =>
+   slice(Start, End, K, Dim, Shrink, Flag, Step, Dim1).
+slice(Start:End, Dim, Shrink, Flag, Step, Dim1) =>
+   slice(Start, End, 1, Dim, Shrink, Flag, Step, Dim1).
+slice(Item, _, _, _, _, _) =>
+   type_error(index_item, Item).
+
+% A slice reads the indices from Start by steps of K, before End: a shrink
+% to them, flipped when K is negative, and strided by abs(K).
+slice(Start0, End0, K, Dim, Lo-Hi, Flag, Step, Dim1) :-
+   bound(Start0, Dim, Start1),
+   bound(End0, Dim, End1),
+   K #\= 0,
+   Flag #<==> (K #< 0),
+   Step #= abs(K),
+   from_end(Start1, Dim, Start2),
+   from_end(End1, Dim, End2),
+   clamp(Flag, Dim, Start2, Start),
+   clamp(Flag, Dim, End2, End),
+   Hi #= Flag*(Start + 1) + (1 - Flag)*max(Start, End),
+   Lo #= Flag*min(End + 1, Hi) + (1 - Flag)*Start,
+   Dim1 #= (Hi - Lo + Step - 1) // Step.
+
+% inf is before the first index and sup past the last one, whatever the
+% direction.
+bound(B, _, V), var(B) =>
+   V = B.
+bound(B, _, V), integer(B) =>
+   V = B.
+bound(inf, Dim, V) =>
+   V #= -Dim - 1.
+bound(sup, Dim, V) =>
+   V = Dim.
+bound(B, _, _) =>
+   type_error(slice_bound, B).
+
+from_end(B, Dim, V) :-
+   Negative #<==> (B #< 0),
+   V #= B + Negative*Dim.
+
+% Forwards, a bound lies in 0..Dim; backwards, in -1..Dim-1.
+clamp(Flag, Dim, B, V) :-
+   V #= Flag*max(-1, min(Dim - 1, B)) + (1 - Flag)*max(0, min(Dim, B)).
 
 M.reshape(Shape) := Dict :-
    reshape_array(M, M.view(), Shape, Dict).
@@ -1246,6 +1338,89 @@ test('a flipped array is copied by contiguous', [timeout(30)]) :-
     Op = contiguous(_).
 
 :- end_tests(array_flip_stride).
+
+:- begin_tests(array_index).
+
+devices(D) :-
+    member(D, [prolog, c]).
+
+test('single element indexing', [forall(devices(D)), timeout(30)]) :-
+    X = array{}.arange(10, [device(D)]),
+    X.index([2]).tolist() == 2,
+    X.index([-2]).tolist() == 8,
+    Y = X.reshape([2, 5]),
+    Y.index([1, 3]).tolist() == 8,
+    Y.index([1, -1]).tolist() == 9,
+    Y.index([0]).tolist() == [0, 1, 2, 3, 4],
+    Y.index([0]).index([2]).tolist() == 2.
+
+test('slicing and striding', [forall(devices(D)), timeout(30)]) :-
+    X = array{}.arange(10, [device(D)]),
+    X.index([1:7:2]).tolist() == [1, 3, 5],
+    X.index([-2:10]).tolist() == [8, 9],
+    X.index([-3:3: -1]).tolist() == [7, 6, 5, 4],
+    X.index([5:sup]).tolist() == [5, 6, 7, 8, 9],
+    X.index([sup:inf: -2]).tolist() == [9, 7, 5, 3, 1],
+    X.index([5:2]).tolist() == [],
+    X.index([2:5: -1]).tolist() == [].
+
+test('slicing a dim of 3 dims', [forall(devices(D)), timeout(30)]) :-
+    X = array{}.fromlist([[[1], [2], [3]], [[4], [5], [6]]], [device(D)]),
+    X.index([1:2]).tolist() == [[[4], [5], [6]]].
+
+test('whole dims and new dims', [forall(devices(D)), timeout(30)]) :-
+    Y = array{}.arange(10, [device(D)]).reshape([2, 5]),
+    Y.index([:, 1]).tolist() == [1, 6],
+    Y.index([new, 0]).tolist() == [[0, 1, 2, 3, 4]],
+    % as numpy, the dims missing from the index come after the new dim
+    Y.index([0, new]).tolist() == [[0, 1, 2, 3, 4]],
+    Y.index([0, :, new]).tolist() == [[0], [1], [2], [3], [4]],
+    Y.index([1, sup:inf: -1]).tolist() == [9, 8, 7, 6, 5].
+
+test('an index out of its dim fails', [timeout(30)]) :-
+    X = array{}.arange(10),
+    \+ _ = X.index([10]),
+    \+ _ = X.index([-11]),
+    \+ _ = X.index([0, 0]).
+
+test('an index reads the padding', [forall(devices(D)), timeout(30)]) :-
+    A = array{}.fromlist([1.0, 2.0], [device(D)]).pad([1-1]),
+    A.index([0]).tolist() == 0.0,
+    A.index([1:3]).tolist() == [1.0, 2.0],
+    A.index([sup:inf: -1]).tolist() == [0.0, 2.0, 1.0, 0.0],
+    A.index([0:sup:2]).tolist() == [0.0, 2.0].
+
+test('an unknown index reads every row once labelled', [timeout(30)]) :-
+    Y = array{}.arange(10).reshape([2, 5]),
+    B = Y.index([I]),
+    findall(I-L, (label([I]), L = B.tolist()), Rows),
+    Rows == [-2-[0, 1, 2, 3, 4], -1-[5, 6, 7, 8, 9],
+             0-[0, 1, 2, 3, 4], 1-[5, 6, 7, 8, 9]].
+
+test('an index from the end of an unknown dim', [timeout(30)]) :-
+    W in 1..10,
+    A = array{}.empty([W]),
+    B = A.index([-1]),
+    W = 5,
+    B.data_offset() == 4.
+
+test('index finds the step giving a shape', [timeout(30)]) :-
+    A = array{}.empty([8]),
+    findall(K,
+            (  K in 1..8,
+               B = A.index([0:sup:K]),
+               B.shape() = [3],
+               label([K])
+            ),
+            Ks),
+    Ks == [3].
+
+test('an index item of another syntax fails loudly',
+     [throws(error(type_error(index_item, foo), _)), timeout(30)]) :-
+    X = array{}.arange(10),
+    _ = X.index([foo]).
+
+:- end_tests(array_index).
 
 :- begin_tests(array_squeeze).
 
