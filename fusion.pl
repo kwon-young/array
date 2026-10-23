@@ -271,6 +271,9 @@ read_shape(A, Shape), is_dict(A, array) =>
    Shape = A.shape().
 read_shape(reindex(Via, _), Shape) =>
    Shape = Via.shape().
+% An inlined node is computed at its reader's index, not its own.
+read_shape(fused(_, Expr), Shape) =>
+   read_shape(Expr, Shape).
 read_shape(Op, Shape), compound(Op) =>
    arg(1, Op, A),
    read_shape(A, Shape).
@@ -323,6 +326,33 @@ test('transposed read is inlined') :-
    C @= B.t() + A,
    kernels(C, [+]),
    C.tolist() == [[3, 8], [7, 12]].
+
+test('an inlined node is reduced at the shape it is read with',
+     [forall(member(D, [prolog, c])), timeout(30)]) :-
+   numlist(0, 23, L),
+   A = array{}.fromlist(L, [device(D)]),
+   X @= A + 1,
+   C @= X.reshape([2, 3, 4]).sum([1]),
+   kernels(C, [reduce]),
+   C.tolist() == [[15, 18, 21, 24], [51, 54, 57, 60]].
+
+test('an inlined node is reduced over the extent it is read with',
+     [forall(member(D, [prolog, c])), timeout(30)]) :-
+   numlist(0, 23, L),
+   A = array{}.fromlist(L, [device(D)]),
+   X @= A.reshape([4, 6]) + 1,
+   C @= X.transpose().sum([1]),
+   kernels(C, [reduce]),
+   C.tolist() == [40, 44, 48, 52, 56, 60].
+
+test('a reduction of a reshaped arange',
+     [forall(member(D, [prolog, c])), timeout(30)]) :-
+   A = array{}.arange(24, [device(D)]),
+   C @= A.reshape([2, 3, 4]).sum([1]),
+   C.tolist() == [[12, 15, 18, 21], [48, 51, 54, 57]],
+   P = array{}.arange(16, [device(D)]).reshape([4, 4]).pool([2, 2]),
+   S @= P.sum([2, 3]),
+   S.tolist() == [[10, 14, 18], [26, 30, 34], [42, 46, 50]].
 
 test('node read twice is materialized') :-
    A = array{}.fromlist([1, 2, 3], [device(c)]),
