@@ -15,12 +15,16 @@ Two kinds of constraints describe it:
     backwards, as a search over the arrays an op can build.
     On integers, every op is det.
   * Its range, enclosing its values, and its precision, bounding its
-    error, are clpBNR analyses: the user defines them on leaves only, as
-    true enclosures of their data, and never narrows them afterwards.
+    error, are clpBNR analyses, from which formats are chosen: the user
+    defines them on leaves, as true enclosures of their data, and only
+    narrows them afterwards with true facts.
     The library creates them forward, on fresh variables, when it pushes
-    an op, and never narrows an existing one either: a narrowing would
-    propagate back through ops whose inputs it says nothing true about, as
-    a sum or a selection, and formats are chosen from ranges.
+    an op.
+    An elementwise op relates its ranges both ways, true of each element.
+    An op whose elements come from some elements of its inputs, as a
+    reduction, a selection or a slice, only includes its range in the one
+    its inputs give (clpBNR's <=): narrowing it says nothing of the
+    elements it leaves out, so it never narrows its inputs.
 */
 
 :- use_module(library(lists), except([flatten/2])).
@@ -415,14 +419,16 @@ max_over(Axes, X, Y) =>
 % selection_sum(+Axes, +Terms, -Sum)
 % Sum is the sum of Terms over Axes, of which at most one term is not 0, as
 % the selections of a one-hot mask: an element of Sum is an element of
-% Terms, so Sum has the range of Terms, and rounds once. Its op is a sum.
+% Terms, so Sum is in the range of Terms, and rounds once. Its op is a sum.
 selection_sum([], Terms, Sum) =>
    Sum = Terms.
 selection_sum(Axes, Terms, Sum) =>
    foldl(replace_nth0(1), Axes, Terms.shape(), Shape),
    sort(Axes, Axes1),
    broadcast_dtype(Terms.dtype, integer, DType),
-   M0 = Terms.empty(Shape, [range(Terms.range), dtype(DType)]),
+   Range::real,
+   { Range <= Terms.range },
+   M0 = Terms.empty(Shape, [range(Range), dtype(DType)]),
    precision:selection_precision(M0.put([id: _, op: reduce(+, Axes1, Terms)]), Terms, M),
    Sum = M.squeeze(Axes1).
 
@@ -621,13 +627,22 @@ M.unsqueeze(Axis) := Dict :-
    Dict = M.reshape(Shape).
 
 M.shrink(Shrink) := Dict :-
-   Dict = M.replace_view(M.view().shrink(Shrink)).
+   Dict0 = M.replace_view(M.view().shrink(Shrink)),
+   subset_range(Dict0, Dict).
 
 M.flip(Flags) := Dict :-
    Dict = M.replace_view(M.view().flip(Flags)).
 
 M.stride(Steps) := Dict :-
-   Dict = M.replace_view(M.view().stride(Steps)).
+   Dict0 = M.replace_view(M.view().stride(Steps)),
+   subset_range(Dict0, Dict).
+
+% A view of some of the elements of an array has a range of its own, in the
+% range of the array: narrowing it says nothing of the other elements.
+subset_range(M0, M) :-
+   Range::real,
+   { Range <= M0.range },
+   M = M0.put(range, Range).
 
 M.flatten_() := Dict :-
    Dict = M.reshape([M.size()]).
@@ -762,17 +777,18 @@ push(reduce(Op, Axes), M, Dict) :-
    check_identity(Op, M.shape(), Axes),
    foldl(replace_nth0(1), Axes, M.shape(), Shape),
    sort(Axes, Axes_),
+   Range::real,
    (  Op == (<)
    -> % a maximum is one of the elements
       DType = M.dtype,
-      { Range == M.range }
+      { Range <= M.range }
    ;  view:shape_size(M.shape(), Size1),
       view:shape_size(Shape, Size2),
       N #= Size1 // Size2,
       sync_clpfd_clpBNR(N),
       broadcast_dtype(M.dtype, integer, DType),
       (  Op == (+)
-      -> { Range == M.range * N }
+      -> { Range <= M.range * N }
       )
    ),
    Dict = M.empty(Shape, [range(Range), dtype(DType)]).push_op(reduce(Op, Axes_, M)).
@@ -833,9 +849,12 @@ push(where(C0, A, B), D) :-
    ;  type_error(device, [C, A, B])
    ),
    broadcast_dtype(A.dtype, B.dtype, DType),
-   % an element of D is one of A or B
+   % an element of D is one of A or B: D is in their hull, the lower bound
+   % of the lower one up to the upper bound of the upper one
    Range::real,
-   { Range >= min(A.range, B.range), Range =< max(A.range, B.range) },
+   Up::real(0, inf),
+   Down::real(0, inf),
+   { Range <= min(A.range, B.range) + Up, Range <= max(A.range, B.range) - Down },
    broadcast([C, A, B], [C1, A1, B1]),
    D = A1.empty(A1.shape(), [range(Range), dtype(DType)]).push_op(where(C1, A1, B1)).
 push(solve(A, B), X) :-
@@ -1995,6 +2014,64 @@ test('index_put into an unknown dim', [nondet, timeout(60)]) :-
     B.tolist() == [1.0, 1.0, 5.0].
 
 :- end_tests(array_index_put).
+
+:- begin_tests(array_range).
+
+range_of(A, Min-Max) :-
+    array:range_min_max(A.range, Min, Max).
+
+% Narrowing the range of Result with Narrow leaves A's range unchanged.
+narrowing_keeps(A, Result, Narrow) :-
+    range_of(A, Before),
+    R = Result.range,
+    call(Narrow, R),
+    range_of(A, After),
+    After == Before.
+
+at_most(Bound, R) :-
+    { R =< Bound }.
+at_least(Bound, R) :-
+    { R >= Bound }.
+
+test('narrowing an element of a reduction leaves its input', [timeout(30)]) :-
+    A = array{}.fromlist([1, 2, 3, 4]),
+    S @= A.sum(),
+    narrowing_keeps(A, S, at_most(5)),
+    M @= A.max(),
+    narrowing_keeps(A, M, at_most(2)).
+
+test('narrowing a selection leaves its input', [timeout(30)]) :-
+    A = array{}.fromlist([1, 2, 3, 4]),
+    Mask = array{}.fromlist([1, 0, 1, 0]),
+    W @= where(Mask, A, 0),
+    narrowing_keeps(A, W, at_least(3)),
+    Z = array{}.fromlist([0, 1, 2, 4]),
+    G = Z.index([[3, 0]]),
+    narrowing_keeps(Z, G, at_least(3)).
+
+test('narrowing a slice leaves its array', [timeout(30)]) :-
+    A = array{}.fromlist([1, 2, 3, 4]),
+    narrowing_keeps(A, A.shrink([0-2]), at_most(2)),
+    narrowing_keeps(A, A.stride([2]), at_most(2)),
+    narrowing_keeps(A, A.index([0]), at_most(1)).
+
+test('narrowing an elementwise result narrows its input', [timeout(30)]) :-
+    A = array{}.fromlist([1, 2, 3, 4]),
+    B @= A + 1,
+    R = B.range,
+    { R =< 3 },
+    range_of(A, _-Max),
+    Max =< 2.
+
+test('narrowing an input narrows what it reduces to', [timeout(30)]) :-
+    R0::real(0, 10),
+    A = array{}.empty([4], [range(R0)]),
+    S @= A.sum(),
+    { R0 =< 1 },
+    range_of(S, _-Max),
+    Max =< 4.
+
+:- end_tests(array_range).
 
 :- begin_tests(array_where).
 
