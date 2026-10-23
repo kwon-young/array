@@ -180,7 +180,9 @@ M.index(Index) := Dict :-
    gather(Indexed, Advanced, M1, Dict).
 
 % B is A with the elements A.index(Index) reads replaced by Values, which
-% broadcast to their shape: Index is as in index/1. Values may be an array,
+% broadcast to their shape: Index is as in index/1. When index arrays write
+% an element several times, the last write in the order of their broadcast
+% shape wins. Values may be an array,
 % a number or a list, cast to the dtype of A when nothing is lost: a
 % boolean to an integer or a float, an integer to a float when its range
 % lies within +-2**53; an index_put that would lose precision fails.
@@ -189,22 +191,15 @@ A.index_put(Index, Values) := B :-
    exclude(==(dropped), Dims, Kept),
    maplist(result_dim, Kept, Shape),
    indexed_dims(Kept, 0, Indexed),
-   basic_index(Indexed, Index),
+   maplist(advanced, Dims, Advanced),
    value_array(Values, A, V0),
-   upcast(V0, A.dtype, V1),
-   V = V1.expand(Shape),
-   Ones = array{}.ones(Shape, [device(A.device)]),
+   upcast(V0, A.dtype, V),
+   written(Indexed, Advanced, Shape, A.device, V, Written, Values1),
    Strided = A.shrink(Shrinks).flip(Flags).stride(Steps),
    Placement = placement(Strided.shape(), Shrinks, Flags, Steps, A.shape()),
-   place(Placement, V, Placed),
-   place(Placement, Ones, Mask),
+   place(Placement, Values1, Placed),
+   place(Placement, Written, Mask),
    B @= where(Mask, Placed, A).
-
-% An index_put with index arrays is not there yet.
-basic_index([], _) =>
-   true.
-basic_index(_, Index) =>
-   domain_error(basic_index, Index).
 
 % An array of values on the device of A.
 value_array(Values, _, V), is_dict(Values, array) =>
@@ -327,47 +322,120 @@ indexed_dims([_ | Dims], P, Indexed) =>
    P1 is P + 1,
    indexed_dims(Dims, P1, Indexed).
 
-% gather(+Indexed, +X, -Y)
+% gather(+Indexed, +Advanced, +X, -Y)
 % Y reads X through the index arrays of Indexed, as one-hot masks: the
 % indexed dims of X merge into one dim of size N, the index arrays into one
 % linear index L, and Y sums where(L =:= arange(N), X, 0) over that dim.
 gather([], _, X, Y) =>
    Y = X.
 gather(Indexed, Advanced, X, Y) =>
-   pairs_keys_values(Indexed, Positions, Arrays0),
-   maplist(index_array(X.device), Arrays0, Arrays1),
-   broadcast(Arrays1, Arrays2),
-   [B0 | _] = Arrays2,
-   B = B0.shape(),
-   Shape = X.shape(),
-   maplist([P, Dim]>>nth0(P, Shape, Dim), Positions, IndexedDims),
-   maplist(in_dim, Arrays2, IndexedDims, Arrays),
-   indexed_front(Advanced, Positions, X, X1, Front),
-   Shape1 = X1.shape(),
-   length(Shape1, NDim),
-   length(IndexedDims, K),
-   NPost is NDim - Front - K,
-   length(Pre, Front),
-   length(Block, K),
-   length(Post, NPost),
-   append([Pre, Block, Post], Shape1),
-   foldl([D, N0, N1]>>(N1 is N0*D), IndexedDims, 1, N),
+   indexed_block(Indexed, Advanced, X.shape(), X.device,
+                 block(Permutation, Pre, _, Post, B, N, L)),
    append([Pre, [N], Post], MergedShape),
-   X2 = X1.reshape(MergedShape),
-   linear_index(Arrays, IndexedDims, L),
-   append(B, [1], BOne),
-   Mask @= (L.reshape(BOne) =:= array{}.arange(N, [device(X.device)])),
+   X1 = X.permute(Permutation).reshape(MergedShape),
+   one_hot(B, N, L, X.device, Hit),
    ones(Pre, OnesPre),
    ones(Post, OnesPost),
    ones(B, OnesB),
-   append([OnesPre, B, [N], OnesPost], MaskShape),
+   append([OnesPre, B, [N], OnesPost], HitShape),
    append([Pre, OnesB, [N], Post], XShape),
-   Selected @= where(Mask.reshape(MaskShape), X2.reshape(XShape), 0),
+   Selected @= where(Hit.reshape(HitShape), X1.reshape(XShape), 0),
    length(Pre, NPre),
    length(B, NB),
    Axis is NPre + NB,
    Sum = Selected.sum([Axis]),
    Y = Sum.as(X.dtype).
+
+% written(+Indexed, +Advanced, +Shape, +Device, +V, -Mask, -Placed)
+% Mask and Placed, of Shape, are the elements an index_put writes and their
+% values V, for the index arrays of Indexed: the one-hot masks of a gather,
+% read the other way. When several indices write one element, the last one
+% in the order of their broadcast shape wins.
+written([], _, Shape, Device, V, Mask, Placed) =>
+   Placed = V.expand(Shape),
+   Mask = array{}.ones(Shape, [device(Device)]).
+written(Indexed, Advanced, Shape, Device, V0, Mask, Placed) =>
+   indexed_block(Indexed, Advanced, Shape, Device,
+                 block(Permutation, Pre, Dims, Post, B, N, L)),
+   append([Pre, B, Post], Target),
+   V = V0.expand(Target),
+   one_hot(B, N, L, Device, Hit),
+   % the rank of each index, from 1 in row-major order
+   foldl([D, S0, S1]>>(S1 is S0*D), B, 1, Size),
+   Size1 is Size + 1,
+   append(B, [1], BOne),
+   Rank = array{}.arange(1, Size1, [device(Device)]).reshape(BOne),
+   Score @= where(Hit, Rank, 0),
+   length(B, NB),
+   axes(NB, BAxes),
+   max_over(BAxes, Score, Last),
+   Wins @= where(Hit, Rank =:= Last, 0),
+   ones(Pre, OnesPre),
+   ones(Post, OnesPost),
+   append([OnesPre, B, [N], OnesPost], WinsShape),
+   append([Pre, B, [1], Post], VShape),
+   Selected @= where(Wins.reshape(WinsShape), V.reshape(VShape), 0),
+   length(Pre, NPre),
+   numlist_from(NPre, NB, SumAxes),
+   sum_over(SumAxes, Selected, Values0),
+   Values = Values0.as(V.dtype),
+   Written @= (Last > 0),
+   append([OnesPre, [N], OnesPost], WrittenShape),
+   append([Pre, [N], Post], MergedShape),
+   append([Pre, Dims, Post], Shape1),
+   inverse_permutation(Permutation, Inverse),
+   Placed = Values.reshape(Shape1).permute(Inverse),
+   Mask0 = Written.reshape(WrittenShape).expand(MergedShape),
+   Mask = Mask0.reshape(Shape1).permute(Inverse).
+
+max_over([], X, Y) =>
+   Y = X.
+max_over(Axes, X, Y) =>
+   Y = X.max(Axes).
+
+sum_over([], X, Y) =>
+   Y = X.
+sum_over(Axes, X, Y) =>
+   Y = X.sum(Axes).
+
+% Axes are the N axes from First.
+numlist_from(_, 0, Axes) =>
+   Axes = [].
+numlist_from(First, N, Axes) =>
+   Last is First + N - 1,
+   numlist(First, Last, Axes).
+
+% Hit, of shape B ++ [N], holds L =:= arange(N).
+one_hot(B, N, L, Device, Hit) :-
+   append(B, [1], BOne),
+   Hit @= (L.reshape(BOne) =:= array{}.arange(N, [device(Device)])).
+
+% indexed_block(+Indexed, +Advanced, +Shape, +Device, -Block)
+% Block = block(Permutation, Pre, Dims, Post, B, N, L) for the dims of
+% Shape the index arrays of Indexed index: Permutation moves them after the
+% dims Pre, in place when the advanced items are adjacent, else first; Dims
+% are their sizes, of product N, B the broadcast shape of the index arrays
+% and L their linear index.
+indexed_block(Indexed, Advanced, Shape, Device,
+              block(Permutation, Pre, Dims, Post, B, N, L)) :-
+   pairs_keys_values(Indexed, Positions, Arrays0),
+   maplist(index_array(Device), Arrays0, Arrays1),
+   broadcast(Arrays1, Arrays2),
+   [B0 | _] = Arrays2,
+   B = B0.shape(),
+   maplist([P, Dim]>>nth0(P, Shape, Dim), Positions, Dims),
+   maplist(in_dim, Arrays2, Dims, Arrays),
+   length(Shape, NDim),
+   front_permutation(Advanced, Positions, NDim, Permutation, Front),
+   maplist([P, Dim]>>nth0(P, Shape, Dim), Permutation, Shape1),
+   length(Dims, K),
+   NPost is NDim - Front - K,
+   length(Pre, Front),
+   length(Block, K),
+   length(Post, NPost),
+   append([Pre, Block, Post], Shape1),
+   foldl([D, N0, N1]>>(N1 is N0*D), Dims, 1, N),
+   linear_index(Arrays, Dims, L).
 
 % An index array is an array of integers, on the device of the array it
 % indexes.
@@ -392,19 +460,25 @@ from_end_index(Min, _, I, I1), Min >= 0 =>
 from_end_index(_, Dim, I, I1) =>
    I1 @= I + Dim*(I < 0).
 
-% The indexed dims of X1 start at Front: in place when the advanced items
-% are adjacent, else first.
-indexed_front(Advanced, Positions, X, X1, Front), adjacent(Advanced) =>
-   X1 = X,
+% The indexed dims start at Front after Permutation: in place when the
+% advanced items are adjacent, else first.
+front_permutation(Advanced, Positions, NDim, Permutation, Front),
+      adjacent(Advanced) =>
+   axes(NDim, Permutation),
    Positions = [Front | _].
-indexed_front(_, Positions, X, X1, Front) =>
-   length(X.shape(), NDim),
-   Last is NDim - 1,
-   numlist(0, Last, Axes),
+front_permutation(_, Positions, NDim, Permutation, Front) =>
+   axes(NDim, Axes),
    subtract(Axes, Positions, Others),
    append(Positions, Others, Permutation),
-   X1 = X.permute(Permutation),
    Front = 0.
+
+% Inverse undoes the permute of Permutation.
+inverse_permutation(Permutation, Inverse) :-
+   length(Permutation, NDim),
+   axes(NDim, Axes),
+   pairs_keys_values(Pairs, Permutation, Axes),
+   keysort(Pairs, Sorted),
+   pairs_values(Sorted, Inverse).
 
 % The 1s of Advanced are one run.
 adjacent(Advanced) :-
@@ -1822,6 +1896,49 @@ test('index_put fails out of its array', [timeout(60)]) :-
     \+ _ = A.index_put([1:3], [1.0, 2.0, 3.0]),
     M = array{}.fromlist([[1, 2], [3, 4]]),
     \+ _ = M.index_put([0, new], [[5], [6]]).
+
+test('index_put writes through index arrays', [forall(devices(D)), timeout(120)]) :-
+    A = array{}.fromlist([10, 20, 30, 40], [device(D)]),
+    A.index_put([[3, 0]], [7, 8]).tolist() == [8, 20, 30, 7],
+    A.index_put([[1, 2]], 5).tolist() == [10, 5, 5, 40],
+    A.index_put([[-1]], [9]).tolist() == [10, 20, 30, 9],
+    Z = array{}.fromlist([[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11]], [device(D)]),
+    Z.index_put([[0, 2], [1, 2]], [-1, -2]).tolist()
+        == [[0, -1, 2], [3, 4, 5], [6, 7, -2], [9, 10, 11]],
+    Z.index_put([[1, 3]], [[0, 0, 0], [1, 1, 1]]).tolist()
+        == [[0, 1, 2], [0, 0, 0], [6, 7, 8], [1, 1, 1]],
+    R = array{}.fromlist([0, 3], [device(D)]),
+    C = array{}.fromlist([0, 2], [device(D)]),
+    Z.index_put([R.reshape([2, 1]), C], [[-1, -2], [-3, -4]]).tolist()
+        == [[-1, 1, -2], [3, 4, 5], [6, 7, 8], [-3, 10, -4]],
+    Z.index_put([1:3, [0, 2]], [[50, 51], [52, 53]]).tolist()
+        == [[0, 1, 2], [50, 4, 51], [52, 7, 53], [9, 10, 11]].
+
+test('index_put places index arrays first unless adjacent',
+     [forall(devices(D)), timeout(120)]) :-
+    W = array{}.arange(24, [device(D)]).reshape([2, 3, 4]),
+    B = W.index_put([[0, 1], :, [1, 2]], [[100, 101, 102], [103, 104, 105]]),
+    B.tolist() == [[[0, 100, 2, 3], [4, 101, 6, 7], [8, 102, 10, 11]],
+                   [[12, 13, 103, 15], [16, 17, 104, 19], [20, 21, 105, 23]]].
+
+test('the last write of an element wins', [forall(devices(D)), timeout(120)]) :-
+    A = array{}.fromlist([10, 20, 30, 40], [device(D)]),
+    A.index_put([[0, 0]], [7, 8]).tolist() == [8, 20, 30, 40],
+    A.index_put([[1, 2, 1]], [5, 6, 7]).tolist() == [10, 7, 6, 40].
+
+test('index_put fails on an index that may be out of its dim', [timeout(60)]) :-
+    A = array{}.fromlist([10, 20, 30, 40]),
+    \+ _ = A.index_put([[4]], [1]),
+    \+ _ = A.index_put([[1, -5]], [1, 2]),
+    \+ _ = A.index_put([[1, 2]], [1, 2, 3]).
+
+% pclp's patch_submatrix: a block of a covariance written back by its keys.
+test('index_put patches a submatrix', [forall(devices(D)), timeout(120)]) :-
+    P = array{}.fromlist([[4.0, 1.0, 0.5], [1.0, 3.0, 0.2], [0.5, 0.2, 2.0]], [device(D)]),
+    Keys = array{}.fromlist([0, 2], [device(D)]),
+    Sub = array{}.fromlist([[9.0, 8.0], [8.0, 7.0]], [device(D)]),
+    P1 = P.index_put([Keys.reshape([2, 1]), Keys], Sub),
+    P1.tolist() == [[9.0, 1.0, 8.0], [1.0, 3.0, 0.2], [8.0, 0.2, 7.0]].
 
 test('index_put into an unknown dim', [nondet, timeout(60)]) :-
     W in 1..10,

@@ -345,6 +345,7 @@ case(flip_pad, [[1, 2, 3]]).
 case(where, [[-2.0, 1.0, -0.5, 3.0], [5.0, 6.0, 7.0, 8.0]]).
 case(gather, [[[1.5, 2.5, 3.5], [4.5, 5.5, 6.5], [7.5, 8.5, 9.5]]]).
 case(index_put, [[[1.5, 2.5, 3.5], [4.5, 5.5, 6.5], [7.5, 8.5, 9.5]], [0.5, 0.25]]).
+case(index_put_arrays, [[[1.5, 2.5, 3.5], [4.5, 5.5, 6.5], [7.5, 8.5, 9.5]], [0.5, 0.25, 0.125]]).
 
 graph(chain, [A], C) :-
    C @= sin(A + A) * A.
@@ -384,6 +385,8 @@ graph(gather, [A], C) :-
    C = A.index([[2, 0], [-1, 1]]).
 graph(index_put, [A, V], C) :-
    C = A.index_put([sup:inf: -2, 1], V).
+graph(index_put_arrays, [A, V], C) :-
+   C = A.index_put([[2, 0, 2], [-1, 1, -1]], V).
 
 computed(Name, Device, List) :-
    case(Name, Inputs),
