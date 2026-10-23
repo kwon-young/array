@@ -523,6 +523,15 @@ example(nested_sums, (kernel(O-uint8, A-uint8) :-
                  Y is S0*2 ),
                S),
             store(O-uint8, I, S) )))).
+% B has a single element: only the lanes selecting it may read it.
+example(select, (kernel(O-float64, C-bool, A-float64, B-float64) :-
+   forall(between(0, 2, I),
+          ( load(C-bool, I, VC),
+            ( VC =\= 0
+            -> load(A-float64, I, VA), V is VA
+            ;  load(B-float64, 0, VB), V is VB
+            ),
+            store(O-float64, I, V) )))).
 example(rand, (kernel(O-float64) :-
    forall(between(0, 3, I),
           ( V is random_float,
@@ -556,6 +565,18 @@ test('a maximum of rounded floats') :-
 test('nested sums') :-
    run(nested_sums, [data(1, 2, 3, 4, 5, 6, 7, 8)], 2, O),
    O == data(20, 52).
+
+test('a selection computes the operand it selects only') :-
+   run(select, [data(0, 1, 1), data(1.5, 2.5, 3.5), data(9.5)], 3, O),
+   O == data(9.5, 2.5, 3.5).
+
+test('formats of a selection') :-
+   example(select, Kernel),
+   ir_formats(Kernel, Formats),
+   Kernel = (_ :- forall(_, (load(_, _, VC),
+                             (_ -> (load(_, _, VA), V is _) ; (load(_, _, VB), _)),
+                             _))),
+   Formats == [VC-bool, VA-float64, V-float64, VB-float64].
 
 test('rand stores floats in [0, 1)') :-
    run(rand, [], 4, O),
@@ -622,6 +643,11 @@ broken(outputs_not_first,(kernel(A-int32, O-int32) :-
 broken(mixed_formats([int32, int8]), (kernel(O-int32, A-int32, B-int8) :-
    forall(between(0, 1, I), (load(A-int32, I, VA), load(B-int8, I, VB),
                              V is VA + VB, store(O-int32, I, V))))).
+
+broken(branch_formats(float64, uint8), (kernel(O-float64, A-float64, B-uint8) :-
+   forall(between(0, 1, I), (load(A-float64, I, VA),
+                             ( VA =\= 0 -> V is VA ; load(B-uint8, I, VB), V is VB ),
+                             store(O-float64, I, V))))).
 
 test('a broken kernel is rejected', [forall(broken(Reason, Kernel))]) :-
    catch(ir_verify(Kernel), error(ir_error(Got, _), _), true),

@@ -354,6 +354,12 @@ test('a reduction of a reshaped arange',
    S @= P.sum([2, 3]),
    S.tolist() == [[10, 14, 18], [26, 30, 34], [42, 46, 50]].
 
+test('a selection is inlined', [forall(member(D, [prolog, c])), timeout(30)]) :-
+   A = array{}.fromlist([-1.0, 2.0, -3.0], [device(D)]),
+   C @= where(A > 0, A * 2, 0) + 1,
+   kernels(C, [+]),
+   C.tolist() == [1.0, 5.0, 1.0].
+
 test('node read twice is materialized') :-
    A = array{}.fromlist([1, 2, 3], [device(c)]),
    B @= A * A,

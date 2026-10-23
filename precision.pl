@@ -52,6 +52,10 @@ inherited(A*B, _, I) =>
        + A.precision*B.precision.
 % a comparison is either right or flipped: its error is at most 1
 inherited(A<B, _, I) => I = (A.precision + B.precision > 0).
+% a selection keeps the error of what it selects, unless a wrong condition
+% selects the other one
+inherited(where(C, A, B), _, I) =>
+   I = max(A.precision, B.precision) + (C.precision > 0)*abs(A.range - B.range).
 inherited(sin(A), _, I) => I = A.precision.
 % |sqrt(x) - sqrt(y)| =< sqrt(|x - y|)
 inherited(sqrt(A), _, I) => I = sqrt(A.precision).

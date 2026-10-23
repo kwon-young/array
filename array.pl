@@ -497,6 +497,19 @@ push(elementwise(Op, Args), C) :-
    broadcast(Args, [H | T]),
    Term =.. [Op, H | T],
    C = H.empty(H.shape(), [range(Range), dtype(FinalDType)]).push_op(Term).
+% where(C, A, B) is A where C holds, else B: C is read as a boolean.
+push(where(C0, A, B), D) :-
+   C = C0.as(boolean),
+   (  dicts_same_value_for_key([C, A, B], device, _)
+   -> true
+   ;  type_error(device, [C, A, B])
+   ),
+   broadcast_dtype(A.dtype, B.dtype, DType),
+   % an element of D is one of A or B
+   Range::real,
+   { Range >= min(A.range, B.range), Range =< max(A.range, B.range) },
+   broadcast([C, A, B], [C1, A1, B1]),
+   D = A1.empty(A1.shape(), [range(Range), dtype(DType)]).push_op(where(C1, A1, B1)).
 push(solve(A, B), X) :-
    (  dicts_same_value_for_key([A, B], device, _)
    -> true
@@ -673,6 +686,11 @@ eval_(log(A), C) =>
 eval_(sqrt(A), C) =>
    eval_(A, A1),
    push(sqrt(A1), C).
+eval_(where(Cond, A, B), C) =>
+   eval_(Cond, Cond1),
+   eval_(A, A1),
+   eval_(B, B1),
+   push(where(Cond1, A1, B1), C).
 eval_(A @ B, C) =>
     eval_(A, A1),
     eval_(B, B1),
@@ -1421,6 +1439,71 @@ test('an index item of another syntax fails loudly',
     _ = X.index([foo]).
 
 :- end_tests(array_index).
+
+:- begin_tests(array_where).
+
+% A float64 array on Device holding Values, which may hold NaN.
+nan_array(Device, Values, A) :-
+    length(Values, N),
+    Data =.. [data | Values],
+    buffer:buffer_from_data(Buffer, float64, N, Data),
+    A0 = array{}.empty([N], [device(c), dtype(float), data(Buffer),
+                             format(float64)]),
+    A = A0.to(Device).
+
+test('where selects elementwise', [forall(member(D, [prolog, c])), timeout(30)]) :-
+    A = array{}.fromlist([-2.0, 1.0, -0.5, 3.0], [device(D)]),
+    C @= where(A > 0, A, 0),
+    C.tolist() == [0.0, 1.0, 0.0, 3.0].
+
+test('where never reads what it does not select',
+     [forall(member(D, [prolog, c])), timeout(30)]) :-
+    current_prolog_flag(float_undefined, Undefined),
+    setup_call_cleanup(
+        set_prolog_flag(float_undefined, nan),
+        (  NaN is nan,
+           nan_array(D, [1.0, NaN, 3.0], X),
+           M = array{}.fromlist([1, 0, 1], [device(D)]),
+           C @= where(M, X, 0),
+           C.tolist() == [1.0, 0.0, 3.0]
+        ),
+        set_prolog_flag(float_undefined, Undefined)).
+
+test('where reads a condition as a boolean',
+     [forall(member(D, [prolog, c])), timeout(30)]) :-
+    I = array{}.fromlist([0, 2, -1], [device(D)]),
+    A = array{}.fromlist([1, 2, 3], [device(D)]),
+    B = array{}.fromlist([7, 8, 9], [device(D)]),
+    C @= where(I, A, B),
+    C.tolist() == [7, 2, 3].
+
+test('where has the dtype and the range of its operands', [timeout(30)]) :-
+    A = array{}.fromlist([1, 2]),
+    B = array{}.fromlist([0.5, 4.0]),
+    C @= where(A > 1, A, B),
+    array{dtype: DType, range: Range} :< C,
+    DType == float,
+    array:range_min_max(Range, Min, Max),
+    Min =:= 0.5,
+    Max =:= 4.0,
+    T @= where(A > 1, A > 0, A < 0),
+    array{dtype: TType} :< T,
+    TType == boolean.
+
+test('a wrong condition selects the other operand', [timeout(30)]) :-
+    A = array{}.fromlist([1, 1]),
+    B = array{}.fromlist([5, 5]),
+    Exact = array{}.fromlist([1.0, -1.0]),
+    C @= where(Exact > 0, A, B),
+    precision:sup_precision(C, S0),
+    S0 =:= 0,
+    Noisy = array{}.fromlist([1.0, -1.0], [precision(0.1)]),
+    E @= where(Noisy > 0, A, B),
+    precision:sup_precision(E, S),
+    S >= 4,
+    S < 4.001.
+
+:- end_tests(array_where).
 
 :- begin_tests(array_squeeze).
 

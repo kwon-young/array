@@ -61,6 +61,7 @@ array:expression_op(prolog, _<_).
 array:expression_op(prolog, sin(_)).
 array:expression_op(prolog, log(_)).
 array:expression_op(prolog, sqrt(_)).
+array:expression_op(prolog, where(_, _, _)).
 array:expression_op(prolog, float(_)).
 array:expression_op(prolog, integer(_)).
 array:expression_op(prolog, reduce(_, _, _)).

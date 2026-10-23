@@ -157,6 +157,14 @@ value(cast(A, To), Ctx, Value, Format) ==>
 value(rand, _, Value, Format) ==>
    { Value = random_float },
    { Format = float64 }.
+% A selection computes the operand it selects only.
+value(where(C, A, B), Ctx, Value, Format) ==>
+   value(C, Ctx, VC, _),
+   {  Format = Ctx.compute,
+      branch(A, Ctx, Value, Then),
+      branch(B, Ctx, Value, Else)
+   },
+   [(VC =\= 0 -> Then ; Else)].
 value(A < B, Ctx, Value, Format) ==>
    operands([A, B], Ctx, [VA, VB]),
    [(VA < VB -> Value = 1 ; Value = 0)],
@@ -166,6 +174,12 @@ value(Op, Ctx, Value, Format), compound(Op) ==>
    operands(Args, Ctx, Values),
    { compound_name_arguments(Value, Name, Values) },
    { Format = Ctx.compute }.
+
+% Branch computes A into Value, in the compute format.
+branch(A, Ctx, Value, Branch) :-
+   phrase(operands([A], Ctx, [V]), Goals),
+   append(Goals, [Value is V], Goals1),
+   conjunction(Goals1, Branch).
 
 % The operands of an operation, in the compute format.
 operands([], _, Values) ==>

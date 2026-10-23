@@ -62,7 +62,7 @@ kernel(Out-Format0, In1-Format1, ..., InN-FormatN) :-
 | `store(Buffer-Format, Index, Value)` | writes `Value` as the element `Index` of `Buffer` |
 | `Value is Expr` | arithmetic |
 | `cast(Format, In, Out)` | `Out` is `In` in `Format` |
-| `( Cond -> Then ; Else )` | `Cond` is a conjunction of index comparisons |
+| `( Cond -> Then ; Else )` | `Cond` is a conjunction of index or value comparisons |
 | `aggregate_all(sum(X), Goal, Sum)` | sum of `X` over the solutions of `Goal` |
 | `aggregate_all(max(X), Goal, Max)` | maximum of `X` over the solutions of `Goal` |
 | annotations | see [Annotations](#annotations) |
@@ -88,9 +88,13 @@ Value expressions use `+`, `*`, `sin`, `log`, `sqrt`, constants, `float`,
 `integer` and `random_float`. They appear in `is`, and in every other value
 position: a `cast`'s input, a `store`'s value and an aggregate's template, as
 in `cast(float32, VA*VB, P)` or `aggregate_all(sum(VA*VB), …)`. A variable
-only names a value a goal produces: a load, a cast, a comparison's result or
-a reduction; a sub-expression stays inside its expression. A comparison
+only names a value a goal produces: a load, a cast, a comparison's result, a
+selection's result or a reduction; a sub-expression stays inside its
+expression. A comparison
 producing a value is a conditional: `( A < B -> V = 1 ; V = 0 )`.
+A selection is a conditional on a value whose branches both assign its
+result, each computing only the operand it selects:
+`( VC =\= 0 -> …, V is VA ; …, V is VB )`.
 
 ## Reference semantics
 
