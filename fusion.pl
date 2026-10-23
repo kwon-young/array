@@ -360,6 +360,20 @@ test('a selection is inlined', [forall(member(D, [prolog, c])), timeout(30)]) :-
    kernels(C, [+]),
    C.tolist() == [1.0, 5.0, 1.0].
 
+pair_array(N, A) :-
+   A = array{}.fromlist([N, N], [device(c)]).
+
+add_array(A, S0, S) :-
+   S @= S0 + A.
+
+test('a kernel reads more than ten buffers', [timeout(30)]) :-
+   numlist(1, 12, Ns),
+   maplist(pair_array, Ns, [A0 | As]),
+   foldl(add_array, As, A0, C),
+   kernels(C, Ops),
+   length(Ops, 1),
+   C.tolist() == [78, 78].
+
 test('node read twice is materialized') :-
    A = array{}.fromlist([1, 2, 3], [device(c)]),
    B @= A * A,

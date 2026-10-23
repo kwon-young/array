@@ -147,8 +147,9 @@ kernel_ast(KernelName, RuntimeName,
    append(Args, Index, ArgsIndex),
    Call =.. [KernelName, a0 | ArgsIndex],
    length(TypeArgs, NArgs),
-   ids(NArgs, t, term_t, Terms, TypeTerms),
-   RuntimeHead =.. [RuntimeName, term_t:t0 | TypeTerms],
+   % varargs: a foreign predicate of fixed arity takes at most 10 arguments
+   findall(t0+K, between(1, NArgs, K), Terms),
+   RuntimeHead =.. [RuntimeName, term_t:t0, int:arity, 'void*':context],
    maplist(get_blob_data, Terms, TypeArgs, BlobAstList),
    (  BlobAstList == []
    -> BlobAsts = true
@@ -169,13 +170,15 @@ kernel_ast(KernelName, RuntimeName,
       Body
    },
    'static foreign_t':RuntimeHead {
+      cast(arity, void),
+      cast(context, void),
       BlobAst,
       BlobAsts,
       LoopAst,
       return('TRUE')
    },
    install_t:install(void) {
-      'PL_register_foreign'(RuntimeStr, N, RuntimeName, 0)
+      'PL_register_foreign'(RuntimeStr, N, RuntimeName, 'PL_FA_VARARGS')
    }
    ).
 % Allocates the physical memory or underlying data storage for Array on the 'c' device.
