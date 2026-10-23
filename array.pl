@@ -179,6 +179,95 @@ M.index(Index) := Dict :-
    maplist(advanced, Dims, Advanced),
    gather(Indexed, Advanced, M1, Dict).
 
+% B is A with the elements A.index(Index) reads replaced by Values, which
+% broadcast to their shape: Index is as in index/1. Values may be an array,
+% a number or a list, cast to the dtype of A when nothing is lost: a
+% boolean to an integer or a float, an integer to a float when its range
+% lies within +-2**53; an index_put that would lose precision fails.
+A.index_put(Index, Values) := B :-
+   index_dims(Index, A.shape(), Shrinks, Flags, Steps, Dims),
+   exclude(==(dropped), Dims, Kept),
+   maplist(result_dim, Kept, Shape),
+   indexed_dims(Kept, 0, Indexed),
+   basic_index(Indexed, Index),
+   value_array(Values, A, V0),
+   upcast(V0, A.dtype, V1),
+   V = V1.expand(Shape),
+   Ones = array{}.ones(Shape, [device(A.device)]),
+   Strided = A.shrink(Shrinks).flip(Flags).stride(Steps),
+   Placement = placement(Strided.shape(), Shrinks, Flags, Steps, A.shape()),
+   place(Placement, V, Placed),
+   place(Placement, Ones, Mask),
+   B @= where(Mask, Placed, A).
+
+% An index_put with index arrays is not there yet.
+basic_index([], _) =>
+   true.
+basic_index(_, Index) =>
+   domain_error(basic_index, Index).
+
+% An array of values on the device of A.
+value_array(Values, _, V), is_dict(Values, array) =>
+   V = Values.
+value_array(Values, A, V), is_list(Values) =>
+   V = array{}.fromlist(Values, [device(A.device)]).
+value_array(Values, A, V), number(Values) =>
+   V = array{}.full([], Values, [device(A.device)]).
+
+% V1 is V in DType, cast when nothing is lost.
+upcast(V, DType, V1), get_dict(dtype, V, DType) =>
+   V1 = V.
+upcast(V, float, V1), get_dict(dtype, V, integer) =>
+   range_min_max(V.range, Min, Max),
+   Bound is 2**53,
+   Min >= -Bound,
+   Max =< Bound,
+   V1 = V.as(float).
+upcast(V, DType, V1), get_dict(dtype, V, boolean) =>
+   V1 = V.as(DType).
+upcast(_, _, _) =>
+   fail.
+
+% place(+Placement, +X, -Y)
+% Y is X, of the shape A.index(Index) reads, placed where it reads it in A:
+% the inverse of its shrink, flip, stride and reshape, reading 0 elsewhere.
+place(placement(StridedShape, Shrinks, Flags, Steps, Shape), X, Y) :-
+   X1 = X.reshape(StridedShape),
+   maplist([Lo-Hi, Size]>>(Size #= Hi - Lo), Shrinks, Sizes),
+   length(Shape, NDim),
+   axes(NDim, Axes),
+   foldl(dilate, Axes, Steps, Sizes, X1, X2),
+   X3 = X2.flip(Flags),
+   maplist([Lo-Hi, Dim, Lo-After]>>(After #= Dim - Hi), Shrinks, Shape, Pads),
+   Y = X3.pad(Pads).
+
+% Axes are the axes of NDim dims.
+axes(0, Axes) =>
+   Axes = [].
+axes(NDim, Axes) =>
+   Last is NDim - 1,
+   numlist(0, Last, Axes).
+
+% dilate(+Axis, +K, +Size, +X0, -X): index j of the dim Axis of X0 moves to
+% j*K in a dim of size Size, its gaps reading 0: the inverse of stride.
+dilate(Axis, K, Size, X0, X) :-
+   Shape0 = X0.shape(),
+   nth0(Axis, Shape0, N),
+   Axis1 is Axis + 1,
+   nth0(Axis1, Unit, 1, Shape0),
+   length(Shape0, NDim),
+   length(Pads, NDim),
+   maplist(=(0-0), Pads),
+   K1 #= K - 1,
+   nth0(Axis1, Pads1, 0-K1, Pads),
+   X1 = X0.reshape(Unit).pad(Pads1),
+   NK #= N*K,
+   replace_nth0(NK, Axis, Shape0, Merged),
+   X2 = X1.reshape(Merged),
+   maplist([D, 0-D]>>true, Merged, Shrink0),
+   replace_nth0(0-Size, Axis, Shrink0, Shrink),
+   X = X2.shrink(Shrink).
+
 index_dims([], [], Shrinks, Flags, Steps, Shape) =>
    Shrinks = [],
    Flags = [],
@@ -1668,6 +1757,80 @@ test('an index array holds integers',
     _ = X.index([F]).
 
 :- end_tests(array_gather).
+
+:- begin_tests(array_index_put).
+
+devices(D) :-
+    member(D, [prolog, c]).
+
+test('index_put writes what index reads', [forall(devices(D)), timeout(60)]) :-
+    A = array{}.fromlist([1.0, 2.0, 3.0, 4.0], [device(D)]),
+    A.index_put([2], 9.0).tolist() == [1.0, 2.0, 9.0, 4.0],
+    A.index_put([1:3], [7.0, 8.0]).tolist() == [1.0, 7.0, 8.0, 4.0],
+    A.index_put([0:sup:2], 0).tolist() == [0.0, 2.0, 0.0, 4.0],
+    A.index_put([sup:inf: -1], [10.0, 20.0, 30.0, 40.0]).tolist()
+        == [40.0, 30.0, 20.0, 10.0],
+    A.index_put([sup:inf: -2], [10.0, 20.0]).tolist() == [1.0, 20.0, 3.0, 10.0].
+
+test('index_put of a dim of a matrix', [forall(devices(D)), timeout(60)]) :-
+    M = array{}.fromlist([[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]], [device(D)]),
+    M.index_put([1], [0, 0, 0, 0]).tolist()
+        == [[1, 2, 3, 4], [0, 0, 0, 0], [9, 10, 11, 12]],
+    M.index_put([:, 2], 0).tolist() == [[1, 2, 0, 4], [5, 6, 0, 8], [9, 10, 0, 12]],
+    M.index_put([0:2, 1:3], [[7, 7], [7, 7]]).tolist()
+        == [[1, 7, 7, 4], [5, 7, 7, 8], [9, 10, 11, 12]],
+    M.index_put([1:3, :], [5, 6, 7, 8]).tolist()
+        == [[1, 2, 3, 4], [5, 6, 7, 8], [5, 6, 7, 8]],
+    M.index_put([0, new], [[20, 21, 22, 23]]).tolist()
+        == [[20, 21, 22, 23], [5, 6, 7, 8], [9, 10, 11, 12]].
+
+test('index_put writes over the padding', [forall(devices(D)), timeout(60)]) :-
+    A = array{}.fromlist([1.0, 2.0], [device(D)]).pad([1-1]),
+    A.index_put([0], 5.0).tolist() == [5.0, 1.0, 2.0, 0.0].
+
+test('index_put never reads what it writes over',
+     [forall(devices(D)), timeout(60)]) :-
+    current_prolog_flag(float_undefined, Undefined),
+    setup_call_cleanup(
+        set_prolog_flag(float_undefined, nan),
+        (  NaN is nan,
+           Data = data(1.0, NaN, 3.0),
+           buffer:buffer_from_data(Buffer, float64, 3, Data),
+           Range::real(1.0, 3.0),
+           A0 = array{}.empty([3], [device(c), dtype(float), data(Buffer),
+                                    format(float64), range(Range)]),
+           A = A0.to(D),
+           A.index_put([1], 2.0).tolist() == [1.0, 2.0, 3.0]
+        ),
+        set_prolog_flag(float_undefined, Undefined)).
+
+test('index_put casts its values when nothing is lost', [timeout(60)]) :-
+    F = array{}.fromlist([1.0, 2.0]),
+    F.index_put([0], 7).tolist() == [7.0, 2.0],
+    I = array{}.fromlist([1, 2, 3]),
+    I.index_put([0], 0).tolist() == [0, 2, 3],
+    \+ _ = I.index_put([0], 2.5),
+    Big is 2**60,
+    B = array{}.fromlist([Big]),
+    \+ _ = F.index_put([0], B),
+    Bool = array{}.fromlist([0, 1]),
+    \+ _ = Bool.index_put([0], 2).
+
+test('index_put fails out of its array', [timeout(60)]) :-
+    A = array{}.fromlist([1.0, 2.0, 3.0, 4.0]),
+    \+ _ = A.index_put([4], 1.0),
+    \+ _ = A.index_put([1:3], [1.0, 2.0, 3.0]),
+    M = array{}.fromlist([[1, 2], [3, 4]]),
+    \+ _ = M.index_put([0, new], [[5], [6]]).
+
+test('index_put into an unknown dim', [nondet, timeout(60)]) :-
+    W in 1..10,
+    A = array{}.full([W], 1.0),
+    B = A.index_put([-1], 5.0),
+    W = 3,
+    B.tolist() == [1.0, 1.0, 5.0].
+
+:- end_tests(array_index_put).
 
 :- begin_tests(array_where).
 
