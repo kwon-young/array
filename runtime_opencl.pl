@@ -340,6 +340,8 @@ case(transpose, [[[1, 2], [3, 4]]]).
 case(pad, [[1, 2]]).
 case(shared, [[1, 2, 3]]).
 case(float_reduce, [[[0.5, 1.5, 2.5], [3.5, 4.5, 5.5]]]).
+case(flip_stride, [[[1, 2, 3, 4, 5], [6, 7, 8, 9, 10], [11, 12, 13, 14, 15]]]).
+case(flip_pad, [[1, 2, 3]]).
 
 graph(chain, [A], C) :-
    C @= sin(A + A) * A.
@@ -369,6 +371,10 @@ graph(shared, [A], C) :-
 graph(float_reduce, [A], C) :-
    B @= sqrt(A),
    C @= B.sum([0]) * 0.5.
+graph(flip_stride, [A], C) :-
+   C @= A.flip([1, 0]).stride([1, 2]) * 2.
+graph(flip_pad, [A], C) :-
+   C @= A.pad([2-0]).flip([1]) + 1.
 
 computed(Name, Device, List) :-
    case(Name, Inputs),

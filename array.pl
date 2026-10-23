@@ -203,6 +203,12 @@ M.unsqueeze(Axis) := Dict :-
 M.shrink(Shrink) := Dict :-
    Dict = M.replace_view(M.view().shrink(Shrink)).
 
+M.flip(Flags) := Dict :-
+   Dict = M.replace_view(M.view().flip(Flags)).
+
+M.stride(Steps) := Dict :-
+   Dict = M.replace_view(M.view().stride(Steps)).
+
 M.flatten_() := Dict :-
    Dict = M.reshape([M.size()]).
 
@@ -1162,6 +1168,84 @@ test('solve reads a matrix from an offset', [timeout(30)]) :-
     X.tolist() == [1.0, 2.0].
 
 :- end_tests(array_slice).
+
+:- begin_tests(array_flip_stride).
+
+% The reference: flip, then stride, nested lists dim by dim.
+at_depth(0, Goal, L, R) :-
+    call(Goal, L, R).
+at_depth(D, Goal, L, R) :-
+    D > 0,
+    D1 is D - 1,
+    maplist(at_depth(D1, Goal), L, R).
+
+flip_list(0, L, L).
+flip_list(1, L, R) :-
+    reverse(L, R).
+
+every(K, L, R) :-
+    findall(X, (nth0(I, L, X), I mod K =:= 0), R).
+
+reference(Flags, Steps, L0, L) :-
+    length(Flags, N),
+    Last is N - 1,
+    numlist(0, Last, Axes),
+    foldl([Axis, F, A, B]>>at_depth(Axis, flip_list(F), A, B), Axes, Flags, L0, L1),
+    foldl([Axis, K, A, B]>>at_depth(Axis, every(K), A, B), Axes, Steps, L1, L).
+
+nested([], [X | Xs], X, Xs).
+nested([Dim | Shape], Xs0, L, Xs) :-
+    length(L, Dim),
+    foldl([E, A, B]>>nested(Shape, A, E, B), L, Xs0, Xs).
+
+test('flip and stride read as the reference',
+     [forall(member(D, [prolog, c])), timeout(60)]) :-
+    set_random(seed(7)),
+    forall(between(1, 12, _),
+           (  random_between(1, 3, NDim),
+              length(Shape, NDim),
+              maplist(random_between(1, 4), Shape),
+              length(Flags, NDim),
+              maplist(random_between(0, 1), Flags),
+              length(Steps, NDim),
+              maplist(random_between(1, 3), Steps),
+              foldl([Dim, S0, S]>>(S is S0*Dim), Shape, 1, Size),
+              numlist(1, Size, Is),
+              maplist([I, X]>>(X is float(I)), Is, Xs),
+              nested(Shape, Xs, L0, []),
+              A = array{}.fromlist(L0, [device(D)]),
+              B = A.flip(Flags).stride(Steps),
+              reference(Flags, Steps, L0, Expected),
+              B.tolist() == Expected
+           )).
+
+test('a flip reads the padding flipped',
+     [forall(member(D, [prolog, c])), timeout(30)]) :-
+    A = array{}.fromlist([1.0, 2.0], [device(D)]),
+    B = A.pad([1-0]).flip([1]),
+    B.tolist() == [2.0, 1.0, 0.0].
+
+test('a stride skips the padding',
+     [forall(member(D, [prolog, c])), timeout(30)]) :-
+    A = array{}.fromlist([1.0, 2.0, 3.0], [device(D)]),
+    B = A.pad([1-1]).stride([2]),
+    B.tolist() == [0.0, 2.0, 0.0].
+
+test('a flipped array reshapes into one view',
+     [forall(member(D, [prolog, c])), timeout(30)]) :-
+    A = array{}.fromlist([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], [device(D)]),
+    B = A.flip([1, 1]).reshape([6]),
+    array{views: Views} :< B,
+    length(Views, 1),
+    B.tolist() == [6.0, 5.0, 4.0, 3.0, 2.0, 1.0].
+
+test('a flipped array is copied by contiguous', [timeout(30)]) :-
+    A = array{}.fromlist([1.0, 2.0, 3.0]),
+    C = A.flip([1]).contiguous(),
+    array{op: Op} :< C,
+    Op = contiguous(_).
+
+:- end_tests(array_flip_stride).
 
 :- begin_tests(array_squeeze).
 

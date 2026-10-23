@@ -141,6 +141,34 @@ shrink_mask(Start, Dim1, Min-Max, Min1-Max1) :-
    Min1 #= Low*NonEmpty,
    Max1 #= High*NonEmpty.
 
+% Flags holds a boolean per dim: index i of a flipped dim reads its index
+% Dim-1-i.
+M.flip(Flags) := Dict :-
+   foldl(flip_dim, Flags, M.zip(), Zip, M.offset, Offset),
+   Dict = M.with_zip(Zip).put(offset, Offset).
+flip_dim(F, Dim-Stride-(Min-Max), Dim-Stride1-(Min1-Max1), In, Out) :-
+   F in 0..1,
+   Out #= In + F*(Dim - 1)*Stride,
+   Stride1 #= Stride*(1 - 2*F),
+   NonEmpty #<==> (Max #> Min),
+   Min1 #= (F*(Dim - Max) + (1 - F)*Min)*NonEmpty,
+   Max1 #= (F*(Dim - Min) + (1 - F)*Max)*NonEmpty.
+
+% Steps holds a step of at least 1 per dim: index j of a strided dim reads
+% its index j*Step.
+M.stride(Steps) := Dict :-
+   maplist(stride_dim, Steps, M.zip(), Zip),
+   Dict = M.with_zip(Zip).
+stride_dim(K, Dim-Stride-(Min-Max), Dim1-Stride1-(Min1-Max1)) :-
+   K #>= 1,
+   Dim1 #= (Dim + K - 1) // K,
+   Stride1 #= Stride*K,
+   Low #= (Min + K - 1) // K,
+   High #= (Max + K - 1) // K,
+   NonEmpty #<==> (High #> Low),
+   Min1 #= Low*NonEmpty,
+   Max1 #= High*NonEmpty.
+
 :- table broadcast_view/3.
 
 In.broadcast_view(Shape) := Out :-
@@ -329,6 +357,89 @@ test('shrink finds the range giving a mask', [timeout(5)]) :-
    Ranges == [0-2].
 
 :- end_tests(shrink).
+
+:- begin_tests(flip).
+
+test('flip reads a dim backwards', [timeout(5)]) :-
+   View = view{}.from_shape([4]).flip([1]),
+   view{shape: Shape, strides: Strides, mask: Mask, offset: Offset} :< View,
+   Shape == [4],
+   Strides == [-1],
+   Mask == [0-4],
+   Offset == 3.
+
+test('flip flips the padding', [timeout(5)]) :-
+   Padded = view{}.from_shape([2]).pad([1-0]),
+   View = Padded.flip([1]),
+   view{strides: Strides, mask: Mask, offset: Offset} :< View,
+   Strides == [-1],
+   Mask == [0-2],
+   Offset == 1.
+
+test('flip of one dim', [timeout(5)]) :-
+   View = view{}.from_shape([2, 3]).flip([0, 1]),
+   view{strides: Strides, offset: Offset} :< View,
+   Strides == [3, -1],
+   Offset == 2.
+
+test('flip keeps an empty mask empty', [timeout(5)]) :-
+   Padded = view{}.from_shape([2]).pad([2-0]),
+   Empty = Padded.shrink([0-1]),
+   View = Empty.flip([1]),
+   view{mask: Mask} :< View,
+   Mask == [0-0].
+
+test('flipping twice is the identity', [timeout(5)]) :-
+   View0 = view{}.from_shape([2, 3]).pad([1-0, 0-2]),
+   View = View0.flip([1, 1]).flip([1, 1]),
+   View == View0.
+
+test('flip finds the dims it flips', [timeout(5)]) :-
+   View = view{}.from_shape([2, 3]).flip([F0, F1]),
+   view{strides: [3, -1]} :< View,
+   F0 == 0,
+   F1 == 1.
+
+:- end_tests(flip).
+
+:- begin_tests(stride).
+
+test('stride reads every step', [timeout(5)]) :-
+   View = view{}.from_shape([8]).stride([3]),
+   view{shape: Shape, strides: Strides, mask: Mask} :< View,
+   Shape == [3],
+   Strides == [3],
+   Mask == [0-3].
+
+test('stride keeps the valid elements of a mask', [timeout(5)]) :-
+   View0 = view{shape: [7], strides: [1], mask: [2-5], offset: -2},
+   View = View0.stride([2]),
+   view{shape: Shape, mask: Mask} :< View,
+   Shape == [4],
+   Mask == [1-3].
+
+test('stride over a single valid element can miss it', [timeout(5)]) :-
+   View0 = view{shape: [4], strides: [1], mask: [1-2], offset: -1},
+   View = View0.stride([2]),
+   view{mask: Mask} :< View,
+   Mask == [0-0].
+
+test('a stride of 1 is the identity', [timeout(5)]) :-
+   View0 = view{}.from_shape([3, 4]).pad([1-1, 0-0]),
+   View = View0.stride([1, 1]),
+   View == View0.
+
+test('stride finds the step giving a shape', [timeout(5)]) :-
+   findall(K,
+           (  K in 1..8,
+              View = view{}.from_shape([8]).stride([K]),
+              view{shape: [3]} :< View,
+              label([K])
+           ),
+           Ks),
+   Ks == [3].
+
+:- end_tests(stride).
 
 :- begin_tests(contiguous).
 
