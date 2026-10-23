@@ -163,10 +163,21 @@ M.randn(Shape, Options) := Dict :-
 %     as numpy; inf and sup are bounds before the first and past the last
 %     index; Step is not 0, and reads backwards when negative;
 %   * : reads the whole dim, as inf:sup:1;
-%   * new adds a dim of size 1.
+%   * new adds a dim of size 1;
+%   * an array of integers, or a list of them, selects elements of its dim
+%     by value; the index arrays broadcast together, and their dims replace
+%     the dims they index, in place when the integers and arrays of Index
+%     are adjacent, else first, as numpy.
+%     The range of an index array must prove its indices are in their dim,
+%     -Dim =< I < Dim: an index that may be out of it fails.
 M.index(Index) := Dict :-
-   index_dims(Index, M.shape(), Shrinks, Flags, Steps, Shape),
-   Dict = M.shrink(Shrinks).flip(Flags).stride(Steps).reshape(Shape).
+   index_dims(Index, M.shape(), Shrinks, Flags, Steps, Dims),
+   exclude(==(dropped), Dims, Kept),
+   maplist(result_dim, Kept, Shape),
+   M1 = M.shrink(Shrinks).flip(Flags).stride(Steps).reshape(Shape),
+   indexed_dims(Kept, 0, Indexed),
+   maplist(advanced, Dims, Advanced),
+   gather(Indexed, Advanced, M1, Dict).
 
 index_dims([], [], Shrinks, Flags, Steps, Shape) =>
    Shrinks = [],
@@ -182,7 +193,16 @@ index_dims([I | Items], [Dim | Dims], Shrinks, Flags, Steps, Shape),
    Shrinks = [P-P1 | Shrinks1],
    Flags = [0 | Flags1],
    Steps = [1 | Steps1],
-   index_dims(Items, Dims, Shrinks1, Flags1, Steps1, Shape).
+   Shape = [dropped | Shape1],
+   index_dims(Items, Dims, Shrinks1, Flags1, Steps1, Shape1).
+% A dim indexed by an array stays whole until the gather.
+index_dims([A | Items], [Dim | Dims], Shrinks, Flags, Steps, Shape),
+      ( is_list(A) ; is_dict(A, array) ) =>
+   Shrinks = [0-Dim | Shrinks1],
+   Flags = [0 | Flags1],
+   Steps = [1 | Steps1],
+   Shape = [indexed(Dim, A) | Shape1],
+   index_dims(Items, Dims, Shrinks1, Flags1, Steps1, Shape1).
 index_dims([new | Items], Dims, Shrinks, Flags, Steps, Shape) =>
    Shape = [1 | Shape1],
    index_dims(Items, Dims, Shrinks, Flags, Steps, Shape1).
@@ -196,6 +216,123 @@ index_dims([Slice | Items], [Dim | Dims], Shrinks, Flags, Steps, Shape) =>
 % More items than dims: no index.
 index_dims([_ | _], [], _, _, _, _) =>
    fail.
+
+result_dim(indexed(Dim, _), D) =>
+   D = Dim.
+result_dim(Dim, D) =>
+   D = Dim.
+
+% An integer or an array is an advanced item of an index: 1.
+advanced(Dim, A), Dim == dropped => A = 1.
+advanced(indexed(_, _), A) => A = 1.
+advanced(_, A) => A = 0.
+
+% Indexed holds Position-IndexArray for each dim indexed by an array.
+indexed_dims([], _, Indexed) =>
+   Indexed = [].
+indexed_dims([indexed(_, A) | Dims], P, Indexed) =>
+   Indexed = [P-A | Indexed1],
+   P1 is P + 1,
+   indexed_dims(Dims, P1, Indexed1).
+indexed_dims([_ | Dims], P, Indexed) =>
+   P1 is P + 1,
+   indexed_dims(Dims, P1, Indexed).
+
+% gather(+Indexed, +X, -Y)
+% Y reads X through the index arrays of Indexed, as one-hot masks: the
+% indexed dims of X merge into one dim of size N, the index arrays into one
+% linear index L, and Y sums where(L =:= arange(N), X, 0) over that dim.
+gather([], _, X, Y) =>
+   Y = X.
+gather(Indexed, Advanced, X, Y) =>
+   pairs_keys_values(Indexed, Positions, Arrays0),
+   maplist(index_array(X.device), Arrays0, Arrays1),
+   broadcast(Arrays1, Arrays2),
+   [B0 | _] = Arrays2,
+   B = B0.shape(),
+   Shape = X.shape(),
+   maplist([P, Dim]>>nth0(P, Shape, Dim), Positions, IndexedDims),
+   maplist(in_dim, Arrays2, IndexedDims, Arrays),
+   indexed_front(Advanced, Positions, X, X1, Front),
+   Shape1 = X1.shape(),
+   length(Shape1, NDim),
+   length(IndexedDims, K),
+   NPost is NDim - Front - K,
+   length(Pre, Front),
+   length(Block, K),
+   length(Post, NPost),
+   append([Pre, Block, Post], Shape1),
+   foldl([D, N0, N1]>>(N1 is N0*D), IndexedDims, 1, N),
+   append([Pre, [N], Post], MergedShape),
+   X2 = X1.reshape(MergedShape),
+   linear_index(Arrays, IndexedDims, L),
+   append(B, [1], BOne),
+   Mask @= (L.reshape(BOne) =:= array{}.arange(N, [device(X.device)])),
+   ones(Pre, OnesPre),
+   ones(Post, OnesPost),
+   ones(B, OnesB),
+   append([OnesPre, B, [N], OnesPost], MaskShape),
+   append([Pre, OnesB, [N], Post], XShape),
+   Selected @= where(Mask.reshape(MaskShape), X2.reshape(XShape), 0),
+   length(Pre, NPre),
+   length(B, NB),
+   Axis is NPre + NB,
+   Sum = Selected.sum([Axis]),
+   Y = Sum.as(X.dtype).
+
+% An index array is an array of integers, on the device of the array it
+% indexes.
+index_array(Device, List, A), is_list(List) =>
+   A = array{}.fromlist(List, [device(Device), dtype(integer)]).
+index_array(_, A0, A), get_dict(dtype, A0, integer) =>
+   A = A0.
+index_array(_, A0, _) =>
+   type_error(integer_index_array, A0).
+
+% The range of an index array must prove its indices are in their dim: an
+% index that may be out of it fails. A negative index reads from the end.
+in_dim(I, Dim, I1) :-
+   must_be(integer, Dim),
+   range_min_max(I.range, Min, Max),
+   Min >= -Dim,
+   Max < Dim,
+   from_end_index(Min, Dim, I, I1).
+
+from_end_index(Min, _, I, I1), Min >= 0 =>
+   I1 = I.
+from_end_index(_, Dim, I, I1) =>
+   I1 @= I + Dim*(I < 0).
+
+% The indexed dims of X1 start at Front: in place when the advanced items
+% are adjacent, else first.
+indexed_front(Advanced, Positions, X, X1, Front), adjacent(Advanced) =>
+   X1 = X,
+   Positions = [Front | _].
+indexed_front(_, Positions, X, X1, Front) =>
+   length(X.shape(), NDim),
+   Last is NDim - 1,
+   numlist(0, Last, Axes),
+   subtract(Axes, Positions, Others),
+   append(Positions, Others, Permutation),
+   X1 = X.permute(Permutation),
+   Front = 0.
+
+% The 1s of Advanced are one run.
+adjacent(Advanced) :-
+   append(Before, [1 | Rest], Advanced),
+   maplist(==(0), Before),
+   append(Ones, After, Rest),
+   maplist(==(1), Ones),
+   maplist(==(0), After),
+   !.
+
+% L is the row-major position of the indices of Arrays in the dims Dims.
+linear_index(Arrays, Dims, L) :-
+   foldl([A, D, L0, L1]>>(L1 @= L0*D + A), Arrays, Dims, 0, L).
+
+ones(List, Ones) :-
+   same_length(List, Ones),
+   maplist(=(1), Ones).
 
 % P is the position of the index I of a dim.
 position(I, Dim, P) :-
@@ -1439,6 +1576,98 @@ test('an index item of another syntax fails loudly',
     _ = X.index([foo]).
 
 :- end_tests(array_index).
+
+:- begin_tests(array_gather).
+
+devices(D) :-
+    member(D, [prolog, c]).
+
+% A float64 array on Device holding Values, which may hold NaN: its range
+% is the given one.
+nan_array(Device, Values, Min, Max, A) :-
+    length(Values, N),
+    Data =.. [data | Values],
+    buffer:buffer_from_data(Buffer, float64, N, Data),
+    Range::real(Min, Max),
+    A0 = array{}.empty([N], [device(c), dtype(float), data(Buffer),
+                             format(float64), range(Range)]),
+    A = A0.to(Device).
+
+test('an array indexes by value', [forall(devices(D)), timeout(60)]) :-
+    X = array{}.arange(10, 1, -1, [device(D)]),
+    X.index([[3, 3, 1, 8]]).tolist() == [7, 7, 9, 2],
+    X.index([[3, 3, -3, 8]]).tolist() == [7, 7, 4, 2],
+    Y = array{}.fromlist([[1, 2], [3, 4], [5, 6]], [device(D)]),
+    Y.index([[1, -1]]).tolist() == [[3, 4], [5, 6]],
+    Y.index([[0, 1, 2], [0, 1, 0]]).tolist() == [1, 4, 5].
+
+test('index arrays broadcast together', [forall(devices(D)), timeout(60)]) :-
+    X = array{}.arange(35, [device(D)]).reshape([5, 7]),
+    X.index([[0, 2, 4], [0, 1, 2]]).tolist() == [0, 15, 30],
+    X.index([[0, 2, 4], 1]).tolist() == [1, 15, 29],
+    X.index([[0, 2, 4]]).tolist() == [[0, 1, 2, 3, 4, 5, 6],
+                                      [14, 15, 16, 17, 18, 19, 20],
+                                      [28, 29, 30, 31, 32, 33, 34]],
+    Z = array{}.fromlist([[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11]], [device(D)]),
+    Rows = array{}.fromlist([[0, 0], [3, 3]], [device(D)]),
+    Columns = array{}.fromlist([[0, 2], [0, 2]], [device(D)]),
+    Z.index([Rows, Columns]).tolist() == [[0, 2], [9, 11]],
+    R = array{}.fromlist([0, 3], [device(D)]),
+    C = array{}.fromlist([0, 2], [device(D)]),
+    Z.index([R.reshape([2, 1]), C]).tolist() == [[0, 2], [9, 11]],
+    Z.index([R, C]).tolist() == [0, 11].
+
+test('index arrays go first unless adjacent', [forall(devices(D)), timeout(60)]) :-
+    W = array{}.arange(24, [device(D)]).reshape([2, 3, 4]),
+    W.index([[0, 1], :, [1, 2]]).tolist() == [[1, 5, 9], [14, 18, 22]],
+    W.index([:, [0, 2], [1, 3]]).tolist() == [[1, 11], [13, 23]],
+    % an integer is an advanced item next to an array, as in numpy
+    W.index([1, :, [0, 1]]).tolist() == [[12, 16, 20], [13, 17, 21]],
+    W.index([:, 1, [0, 1]]).tolist() == [[4, 5], [16, 17]],
+    W.index([[0, 1], new, [0, 1]]).tolist() == [[[0, 1, 2, 3]], [[16, 17, 18, 19]]],
+    X = array{}.arange(35, [device(D)]).reshape([5, 7]),
+    X.index([1:3, [0, 6]]).tolist() == [[7, 13], [14, 20]].
+
+test('an index that may be out of its dim fails', [timeout(60)]) :-
+    Y = array{}.fromlist([[1, 2], [3, 4], [5, 6]]),
+    \+ _ = Y.index([[3, 4]]),
+    \+ _ = Y.index([[1, 5]]),
+    \+ _ = Y.index([[-4, 0]]),
+    X = array{}.arange(35).reshape([5, 7]),
+    \+ _ = X.index([[0, 2, 4], [0, 1]]),
+    % a loose range fails too: I - I is 0, but its range is [-3, 3]
+    I = array{}.fromlist([0, 3]),
+    J @= I - I,
+    \+ _ = Y.index([J]).
+
+test('a computed index array', [forall(devices(D)), timeout(60)]) :-
+    X = array{}.arange(10, 1, -1, [device(D)]),
+    I0 = array{}.fromlist([2, 0], [device(D)]),
+    I @= I0 + 1,
+    X.index([I]).tolist() == [7, 9].
+
+test('a gather never reads what it does not select',
+     [forall(devices(D)), timeout(60)]) :-
+    current_prolog_flag(float_undefined, Undefined),
+    setup_call_cleanup(
+        set_prolog_flag(float_undefined, nan),
+        (  NaN is nan,
+           nan_array(D, [1.0, NaN, 3.0], 1.0, 3.0, X),
+           X.index([[0, 2]]).tolist() == [1.0, 3.0]
+        ),
+        set_prolog_flag(float_undefined, Undefined)).
+
+test('a gather reads the padding', [forall(devices(D)), timeout(60)]) :-
+    A = array{}.fromlist([1.0, 2.0], [device(D)]).pad([1-1]),
+    A.index([[0, 2, 3]]).tolist() == [0.0, 2.0, 0.0].
+
+test('an index array holds integers',
+     [throws(error(type_error(integer_index_array, _), _)), timeout(60)]) :-
+    X = array{}.arange(10),
+    F = array{}.fromlist([1.0, 2.0]),
+    _ = X.index([F]).
+
+:- end_tests(array_gather).
 
 :- begin_tests(array_where).
 
