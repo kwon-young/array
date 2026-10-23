@@ -4,6 +4,25 @@
    '@='/2
 ]).
 
+/** <module> N-dimensional arrays
+
+An array is a lazy node of a computation graph, read through a stack of
+views.
+Two kinds of constraints describe it:
+
+  * Its shape, and the strides, masks and offsets of its views, are clpfd
+    relations: they may be unknown, constrained by the user, and queried
+    backwards, as a search over the arrays an op can build.
+    On integers, every op is det.
+  * Its range, enclosing its values, and its precision, bounding its
+    error, are clpBNR analyses: the user defines them on leaves only, as
+    true enclosures of their data, and never narrows them afterwards.
+    The library creates them forward, on fresh variables, when it pushes
+    an op, and never narrows an existing one either: a narrowing would
+    propagate back through ops whose inputs it says nothing true about, as
+    a sum or a selection, and formats are chosen from ranges.
+*/
+
 :- use_module(library(lists), except([flatten/2])).
 :- use_module(library(clpfd), except([transpose/2, sum/3])).
 :- use_module(library(pairs)).
@@ -343,7 +362,7 @@ gather(Indexed, Advanced, X, Y) =>
    length(Pre, NPre),
    length(B, NB),
    Axis is NPre + NB,
-   Sum = Selected.sum([Axis]),
+   selection_sum([Axis], Selected, Sum),
    Y = Sum.as(X.dtype).
 
 % written(+Indexed, +Advanced, +Shape, +Device, +V, -Mask, -Placed)
@@ -377,7 +396,7 @@ written(Indexed, Advanced, Shape, Device, V0, Mask, Placed) =>
    Selected @= where(Wins.reshape(WinsShape), V.reshape(VShape), 0),
    length(Pre, NPre),
    numlist_from(NPre, NB, SumAxes),
-   sum_over(SumAxes, Selected, Values0),
+   selection_sum(SumAxes, Selected, Values0),
    Values = Values0.as(V.dtype),
    Written @= (Last > 0),
    append([OnesPre, [N], OnesPost], WrittenShape),
@@ -393,10 +412,19 @@ max_over([], X, Y) =>
 max_over(Axes, X, Y) =>
    Y = X.max(Axes).
 
-sum_over([], X, Y) =>
-   Y = X.
-sum_over(Axes, X, Y) =>
-   Y = X.sum(Axes).
+% selection_sum(+Axes, +Terms, -Sum)
+% Sum is the sum of Terms over Axes, of which at most one term is not 0, as
+% the selections of a one-hot mask: an element of Sum is an element of
+% Terms, so Sum has the range of Terms, and rounds once. Its op is a sum.
+selection_sum([], Terms, Sum) =>
+   Sum = Terms.
+selection_sum(Axes, Terms, Sum) =>
+   foldl(replace_nth0(1), Axes, Terms.shape(), Shape),
+   sort(Axes, Axes1),
+   broadcast_dtype(Terms.dtype, integer, DType),
+   M0 = Terms.empty(Shape, [range(Terms.range), dtype(DType)]),
+   precision:selection_precision(M0.put([id: _, op: reduce(+, Axes1, Terms)]), Terms, M),
+   Sum = M.squeeze(Axes1).
 
 % Axes are the N axes from First.
 numlist_from(_, 0, Axes) =>
@@ -1824,6 +1852,19 @@ test('a gather reads the padding', [forall(devices(D)), timeout(60)]) :-
     A = array{}.fromlist([1.0, 2.0], [device(D)]).pad([1-1]),
     A.index([[0, 2, 3]]).tolist() == [0.0, 2.0, 0.0].
 
+test('a gather has the range and precision of what it selects', [timeout(60)]) :-
+    numlist(1, 100, Ns),
+    maplist([N, X]>>(X is 2*N), Ns, Xs),
+    A = array{}.fromlist(Xs, [device(c)]),
+    G = A.index([[99, 0]]),
+    G.tolist() == [200, 2],
+    array{format: Format} :< G,
+    Format == uint8,
+    maplist([N, X]>>(X is float(N)), Ns, Fs),
+    F = array{}.fromlist(Fs, [precision(0.01)]),
+    precision:sup_precision(F.index([[99, 0]]), P),
+    P < 0.0101.
+
 test('an index array holds integers',
      [throws(error(type_error(integer_index_array, _), _)), timeout(60)]) :-
     X = array{}.arange(10),
@@ -1931,6 +1972,12 @@ test('index_put fails on an index that may be out of its dim', [timeout(60)]) :-
     \+ _ = A.index_put([[4]], [1]),
     \+ _ = A.index_put([[1, -5]], [1, 2]),
     \+ _ = A.index_put([[1, 2]], [1, 2, 3]).
+
+test('index_put through arrays has the precision of its values', [timeout(60)]) :-
+    A = array{}.fromlist([1.0, 2.0, 3.0, 4.0]),
+    V = array{}.fromlist([5.0, 6.0], [precision(0.01)]),
+    precision:sup_precision(A.index_put([[1, 2]], V), P),
+    P < 0.0101.
 
 % pclp's patch_submatrix: a block of a covariance written back by its keys.
 test('index_put patches a submatrix', [forall(devices(D)), timeout(120)]) :-

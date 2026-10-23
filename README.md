@@ -102,6 +102,7 @@ Array.pl's power comes from a few core concepts:
 -   **`op`**: An operation in the computation graph. It can be a simple constant (`constant(0)`), a transformation on a parent array (`reshape(Parent)`), or an element-wise operation on multiple arrays (`elementwise(+, [A, B])`).
 -   **Schedule**: When an array needs to be computed (e.g., by calling `.tolist()` or `.realize()`), Array.pl creates a `schedule` by performing a topological sort of the dependency graph. This schedule is then compiled and executed by the target `device`.
 -   **Device**: A backend responsible for compilation and execution. The default is `prolog`, which generates and runs Prolog code.
+-   **Shapes and analyses**: The shape of an array and the strides, masks and offsets of its views are clpfd relations, which the user may constrain and query backwards. Its range (an enclosure of its values) and its precision (a bound on its error) are clpBNR analyses: the user defines them on leaves only, as true enclosures of their data, and never narrows them afterwards. The library creates them forward when it builds an op, and chooses the storage formats from them.
 
 ## Development
 

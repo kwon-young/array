@@ -1,5 +1,6 @@
 :- module(precision, [
    post_precision/2,
+   selection_precision/3,
    transfer_precision/3,
    choose_formats/3,
    sup_precision/2
@@ -28,6 +29,16 @@ post_precision(M0, M), get_dict(op, M0, solve(_, _)) =>
 post_precision(M0, M) =>
    inherited(M0.op, M0, Inherited),
    constrain(M0, Inherited, M).
+
+% selection_precision(+M0, +Terms, -M)
+% M is M0, a sum of Terms of which at most one is not 0, with its precision:
+% the error of that term and a single rounding to the format of M, since
+% adding 0 is exact in any order.
+selection_precision(M0, Terms, M) :-
+   M = M0.put(precision, P),
+   P::real(0, inf),
+   rounding_factor(M, U),
+   { P =< Terms.precision*(1 + U) + U*abs(M.range) }.
 
 % transfer_precision(+Source, +Copy0, -Copy)
 % Copy is Copy0, a copy of Source in another buffer, with its precision.
