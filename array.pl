@@ -159,10 +159,19 @@ M.index(Index) := Dict :-
    Dict = M.replace_view(M.view().index(Index)).
 
 M.reshape(Shape) := Dict :-
-   (  View = M.view().reshape(Shape)
-   -> Dict = M.replace_view(View)
-   ;  Dict = M.push_view(view{}.from_shape(Shape))
-   ).
+   reshape_array(M, M.view(), Shape, Dict).
+
+% Only integers decide a merge into the top view: a merge would constrain
+% unknown dims, strides or masks, while a pushed view holds for any.
+reshape_array(M, View, Shape, Dict), ground(View-Shape),
+      merged_view(View, Shape, Merged) =>
+   Dict = M.replace_view(Merged).
+reshape_array(M, _, Shape, Dict) =>
+   view:shape_size(Shape, M.size()),
+   Dict = M.push_view(view{}.from_shape(Shape)).
+
+merged_view(View, Shape, Merged) :-
+   Merged = View.reshape(Shape).
 
 M.t() := Dict :-
    Dict = M.transpose().
@@ -188,7 +197,8 @@ M.squeeze(Axes) := Dict :-
    Dict = M.reshape(Shape).
 
 M.unsqueeze(Axis) := Dict :-
-   Dict = M.replace_view(M.view().unsqueeze(Axis)).
+   nth0(Axis, Shape, 1, M.shape()),
+   Dict = M.reshape(Shape).
 
 M.shrink(Shrink) := Dict :-
    Dict = M.replace_view(M.view().shrink(Shrink)).
@@ -935,6 +945,27 @@ test('reshape that cannot be merged adds a new view') :-
   length(B.views, 2),
   B.views = [NewView, StartView],
   NewView == view{}.from_shape([6,4]).
+
+test('a reshape of unknown dims constrains nothing', [timeout(10)]) :-
+  W in 1..10,
+  W4 #= W*4,
+  View = view{shape:[4,W], strides:[1,W], offset:0, mask:[0-4, 0-W]},
+  A = array{}.empty([4, W]).replace_view(View),
+  B = A.reshape([W4]),
+  fd_dom(W, Dom),
+  Dom == 1..10,
+  array{views: Views} :< B,
+  length(Views, 2).
+
+test('a reshape of integers merges when it can', [timeout(10)]) :-
+  forall(member(W-N, [1-1, 3-2]),
+         (  View = view{shape:[4,W], strides:[1,W], offset:0, mask:[0-4, 0-W]},
+            A = array{}.empty([4, W]).replace_view(View),
+            W4 is W*4,
+            B = A.reshape([W4]),
+            array{views: Views} :< B,
+            length(Views, N)
+         )).
 
 test('reshape with mismatched size fails', [throws(error(domain_error(_,_),_))]) :-
   A = array{}.empty([2,3]),
