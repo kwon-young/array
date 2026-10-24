@@ -75,8 +75,8 @@ inherited(log(A), _, I) => I = A.precision / (A.range - A.precision).
 inherited(float(A), _, I) => I = A.precision.
 % rounding to an integer can move by one more
 inherited(integer(A), _, I) => I = A.precision + (A.precision > 0).
-inherited(reduce(+, _, A), M, I) =>
-   reduce_size(A, M, N),
+inherited(reduce(+, Axes, A), _, I) =>
+   array:reduce_count(A.shape(), Axes, N),
    I = N*A.precision.
 % max is 1-Lipschitz
 inherited(reduce(<, _, A), _, I) => I = A.precision.
@@ -88,8 +88,8 @@ rounding(reduce(<, _, _), _, _, R) => R = 0.
 % A sum of N terms, in any order (any binary tree of additions), has an
 % error of at most (N-1)*U*sum(|x_i|) =< (N-1)*U*N*|A|: kernels may reorder
 % a sum, for example into SIMD lanes.
-rounding(reduce(+, _, A), M, U, R) =>
-   reduce_size(A, M, N),
+rounding(reduce(+, Axes, A), _, U, R) =>
+   array:reduce_count(A.shape(), Axes, N),
    R = U*N*(N - 1)*abs(A.range).
 rounding(_, M, U, R) => R = U*abs(M.range).
 
@@ -113,11 +113,6 @@ device_float_formats(Device, Formats) =>
 bind_unit_roundoff(Format, U) :-
    unit_roundoff(Format, U0),
    U = U0.
-
-reduce_size(A, M, N) :-
-   view:shape_size(A.shape(), Size),
-   view:shape_size(M.shape(), ReducedSize),
-   N is Size // ReducedSize.
 
 % The guaranteed error of an array.
 sup_precision(A, S) :-

@@ -785,16 +785,21 @@ push(reduce(Op, Axes), M, Dict) :-
    -> % a maximum is one of the elements
       DType = M.dtype,
       { Range <= M.range }
-   ;  view:shape_size(M.shape(), Size1),
-      view:shape_size(Shape, Size2),
-      N #= Size1 // Size2,
-      sync_clpfd_clpBNR(N),
+   ;  reduce_count(M.shape(), Axes_, N),
       broadcast_dtype(M.dtype, integer, DType),
       (  Op == (+)
       -> { Range <= M.range * N }
       )
    ),
    Dict = M.empty(Shape, [range(Range), dtype(DType)]).push_op(reduce(Op, Axes_, M)).
+% N is the number of elements a reduction over Axes of Shape adds into each
+% element: the product of their dims, synced to clpBNR for the range and
+% precision analyses.
+reduce_count(Shape, Axes, N) :-
+   maplist([Axis, Dim]>>nth0(Axis, Shape, Dim), Axes, Dims),
+   view:shape_size(Dims, N),
+   sync_clpfd_clpBNR(N).
+
 % A maximum has no identity: like numpy, it can't reduce an empty axis.
 check_identity(<, Shape, Axes), member(Axis, Axes), nth0(Axis, Shape, 0) =>
    domain_error(non_empty_axes, Axes).
@@ -2271,6 +2276,29 @@ test('a maximum propagates NaN', [forall(member(D, [prolog, c]))]) :-
                        set_prolog_flag(float_undefined, Undefined)).
 
 :- end_tests(array_max).
+
+:- begin_tests(array_sum).
+
+test('a sum over a dim is pushed when another dim is symbolic', [nondet, timeout(10)]) :-
+    B in 1..64,
+    S @= array{}.ones([B, 4]).sum([1]),
+    B = 3,
+    L = S.tolist(),
+    length(L, 3),
+    maplist(=:=(4), L).
+
+test('a sum over a symbolic dim counts its dim', [nondet, timeout(10)]) :-
+    B in 1..64,
+    S @= array{}.ones([B, 4]).sum([0]),
+    B = 3,
+    L = S.tolist(),
+    length(L, 4),
+    maplist(=:=(3), L).
+
+test('a sum next to an empty dim', [timeout(10)]) :-
+    array{}.zeros([0, 3]).sum([1]).tolist() == [].
+
+:- end_tests(array_sum).
 
 :- begin_tests(array_matmul).
 
