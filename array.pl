@@ -796,7 +796,7 @@ push(reduce(Op, Axes), M, Dict) :-
 % element: the product of their dims, synced to clpBNR for the range and
 % precision analyses.
 reduce_count(Shape, Axes, N) :-
-   maplist([Axis, Dim]>>nth0(Axis, Shape, Dim), Axes, Dims),
+   maplist({Shape}/[Axis, Dim]>>nth0(Axis, Shape, Dim), Axes, Dims),
    view:shape_size(Dims, N),
    sync_clpfd_clpBNR(N).
 
@@ -2290,6 +2290,8 @@ test('a sum over a dim is pushed when another dim is symbolic', [nondet, timeout
 test('a sum over a symbolic dim counts its dim', [nondet, timeout(10)]) :-
     B in 1..64,
     S @= array{}.ones([B, 4]).sum([0]),
+    array:range_min_max(S.range, _, Max),
+    Max =< 64,
     B = 3,
     L = S.tolist(),
     length(L, 4),
