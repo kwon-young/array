@@ -98,6 +98,15 @@ array:M.compile(opencl(Name), Op) := Dict :-
 % unravels its global id into the element's index.
 compile_kernel(Name, M, Op, Dict) :-
    lower_kernel(opencl(Name), M, Op, IR0, Arrays),
+   ir_kernel(Name, IR0, Kernel, Size),
+   maplist(kernel_arg, Arrays, KernelArgs),
+   Dict = M.put(kernel, runtime_opencl:launch(Name, Kernel, KernelArgs, Size)).
+
+% ir_kernel(+Name, +IR0, -Kernel, -Size)
+% Kernel runs the IR clause IR0 on device Name, one work item per index of
+% the domain of its outer forall, of Size indices: an iterate inside runs in
+% order in its work item.
+ir_kernel(Name, IR0, Kernel, Size) :-
    optimize_kernel(opencl(Name), IR0, IR),
    ir_c(opencl, IR, c_kernel(Buffers, Shape, TypeIndex, Body)),
    maplist(index_name, TypeIndex, Index),
@@ -110,8 +119,38 @@ compile_kernel(Name, M, Op, Dict) :-
    variant_sha1(Code, Hash),
    atom_concat(kernel_, Hash, KernelName),
    load_kernel(Name, KernelName, Level, Code, Kernel),
-   maplist(kernel_arg, Arrays, KernelArgs),
-   Dict = M.put(kernel, runtime_opencl:launch(Name, Kernel, KernelArgs, M.size())).
+   foldl([D, S0, S1]>>(S1 is S0*D), Shape, 1, Size).
+
+% Runs the IR clause Kernel on Datas, its outputs unbound data(...) terms,
+% through device buffers of the formats of its head.
+array:run_ir(opencl(Name), Kernel, Datas) :-
+   ir_kernel(Name, Kernel, ClKernel, Size),
+   device(Name, Device, Context, Queue),
+   runtime_c:head_formats(Kernel, Formats),
+   maplist(check_format(Name, Device), Formats),
+   maplist(runtime_c:data_buffer, Datas, Formats, Hosts),
+   maplist(device_buffer(Context, Queue), Datas, Formats, Hosts, Mems),
+   maplist([Mem, mem(Mem)]>>true, Mems, Args),
+   launch(Name, ClKernel, Args, Size),
+   maplist(host_buffer(Queue), Datas, Formats, Hosts, Mems),
+   maplist(runtime_c:buffer_data, Datas, Formats, Hosts).
+
+device_buffer(Context, Queue, Data, Format, Host, Mem) :-
+   functor(Data, _, N),
+   buffer_type_size(Format, TypeSize),
+   Bytes is N*TypeSize,
+   buffer(Context, Bytes, Mem),
+   buffer_offset(Host, Format, N, 0, Pointer),
+   copy(cl_write, Queue, Mem, 0, Pointer, Bytes).
+
+host_buffer(_, Data, _, _, _), ground(Data) =>
+   true.
+host_buffer(Queue, Data, Format, Host, Mem) =>
+   functor(Data, _, N),
+   buffer_type_size(Format, TypeSize),
+   Bytes is N*TypeSize,
+   buffer_offset(Host, Format, N, 0, Pointer),
+   copy(cl_read, Queue, Mem, 0, Pointer, Bytes).
 
 index_name(_:I, I).
 

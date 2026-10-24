@@ -433,9 +433,11 @@ Future rule sets:
 | IR | C | OpenCL | Prolog |
 |---|---|---|---|
 | head | kernel function and runtime predicate, typed from the pairs | `__kernel` function, typed from the pairs | the clause itself |
-| output `forall` | runtime loops calling the kernel function | `get_global_id` | `forall` |
+| output `forall` | runtime loops calling the kernel function | `get_global_id`: a work item per index of its domain | `forall` |
 | `between` in a reduction | `for` loop | `for` loop | `between` |
 | `load`, `store` | `a1[Index]`, `a0[Index] = V` | same | `arg/3`, `nb_setarg/3` |
+| `iterate`, a `forall` inside the domain | `for` loop, in order | `for` loop, in order in its work item | `forall` |
+| `load(after(Out, K), …)` | `a0[Index]` | same | `arg/3` |
 | `X is E` | `T X = E;` with `T` the format of `X` | same | `X is E` |
 | `cast(F, I, O)` | `T O = (T)I;` (`round` from a float to an integer) | same | `round_to_format` or `integer` |
 | conditional | `if`/`else`, or `?:` for values | same | `->` |

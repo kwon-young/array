@@ -47,6 +47,9 @@ Two kinds of constraints describe it:
 :- multifile float_formats/2.
 :- multifile expression_op/2.
 :- multifile compute_format/3.
+% run_ir(+Device, +Kernel, +Datas): Device runs the kernel IR clause Kernel
+% on Datas, data(...) terms in the order of its head, its outputs unbound.
+:- multifile run_ir/3.
 
 :- use_module(runtime_prolog).
 :- use_module(runtime_c).
@@ -2072,6 +2075,42 @@ test('narrowing an input narrows what it reduces to', [timeout(30)]) :-
     Max =< 4.
 
 :- end_tests(array_range).
+
+:- begin_tests(ir_devices).
+
+:- use_module(ir_kernels).
+
+ir_device(prolog).
+ir_device(c).
+ir_device(opencl(Name)) :-
+    runtime_opencl:opencl_device(Name, _).
+
+% case(Name, Kernel, Inputs, OutputSize)
+case(cumsum, Kernel, [data(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0)], 8) :-
+    cumsum_kernel(2, 4, Kernel).
+case(trsv, Kernel, [data(2.0, 0.0, 0.0, 1.0, 2.0, 0.0, 1.0, 1.0, 2.0,
+                         3.0, 0.0, 0.0, 1.5, 0.5, 0.0, 0.25, 2.0, 4.0),
+                    data(2.0, 4.0, 6.0, 1.0, 2.0, 3.0)], 6) :-
+    trsv_kernel(2, 3, Kernel).
+case(cholesky, Kernel, [data(4.0, 2.0, 2.0, 2.0, 5.0, 3.0, 2.0, 3.0, 6.0,
+                             6.0, 1.5, 0.5, 1.5, 7.0, 2.0, 0.5, 2.0, 9.0)], 18) :-
+    cholesky_kernel(2, 3, Kernel).
+
+close_to(X, Y) :-
+    abs(X - Y) =< 1.0e-12 * max(1.0, abs(X)).
+
+test('a device runs an iterate as the reference',
+     [forall((ir_device(D), case(Name, Kernel, Inputs, Size))), timeout(60)]) :-
+    functor(Expected, data, Size),
+    ir:ir_run(Kernel, [Expected | Inputs]),
+    functor(Output, data, Size),
+    run_ir(D, Kernel, [Output | Inputs]),
+    Expected =.. [_ | Es],
+    Output =.. [_ | Os],
+    maplist(close_to, Es, Os),
+    Name \== none.
+
+:- end_tests(ir_devices).
 
 :- begin_tests(array_where).
 

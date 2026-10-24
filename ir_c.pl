@@ -93,8 +93,14 @@ statements(simd(Goal), Ctx) ==>
    statements(Goal, Ctx).
 statements(parallel(Goal), Ctx) ==>
    statements(Goal, Ctx).
+statements(load(after(Buffer-_, _), Index, Value), Ctx) ==>
+   assign(Value, Buffer[Index], Ctx).
 statements(load(Buffer-_, Index, Value), Ctx) ==>
    assign(Value, Buffer[Index], Ctx).
+statements(forall(Domain, Goal), Ctx) ==>
+   loop(Domain, Goal, Ctx).
+statements(iterate(Domain, Goal), Ctx) ==>
+   loop(Domain, Goal, Ctx).
 statements(Value is Expr, Ctx) ==>
    { expr(Expr, Ctx, CExpr) },
    assign(Value, CExpr, Ctx).
@@ -122,6 +128,17 @@ statements(Value = Number, Ctx), number(Number) ==>
    assign(Value, Number, Ctx).
 statements(aggregate_all(Aggregate, Goal, Result), Ctx) ==>
    reduction(Aggregate, Goal, Result, Ctx).
+
+% A forall inside the output's domain, or an iterate, is a loop: C runs its
+% iterations in order, as an iterate needs.
+loop(Domain, Goal, Ctx) -->
+   {  conjunction_list(Domain, Binders0),
+      include(loop_binder, Binders0, Binders),
+      maplist(loop_index, Binders, Dims, TypedJs),
+      block(Goal, Ctx, Body),
+      loops(Dims, TypedJs, Body, true, Loop)
+   },
+   [Loop].
 
 block(Goal, Ctx, Block) :-
    phrase(statements(Goal, Ctx), Statements),

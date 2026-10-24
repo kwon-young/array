@@ -94,16 +94,28 @@ array:M.compile(prolog, Op) := Dict :-
 % Prolog dialect, as a clause of the kernel module.
 compile_kernel(M, Op, Dict) :-
    lower_kernel(prolog, M, Op, Kernel0, Arrays),
+   ir_kernel(Kernel0, KernelId),
+   maplist(get_dict(data), Arrays, Datas),
+   Call =.. [KernelId | Datas],
+   Dict = M.put(kernel, kernel:Call).
+
+% ir_kernel(+Kernel0, -KernelId)
+% KernelId names the predicate of the kernel module running the IR clause
+% Kernel0, on the data of its buffers.
+ir_kernel(Kernel0, KernelId) :-
    optimize_kernel(prolog, Kernel0, Kernel),
    ir_prolog(Kernel, (Head0 :- Body)),
    Head0 =.. [_ | Params],
    % A kernel is named after its code, so a kernel already defined is reused.
    variant_sha1(Params-Body, KernelId),
    Head =.. [KernelId | Params],
-   define_kernel(Head, Body),
-   maplist(get_dict(data), Arrays, Datas),
+   define_kernel(Head, Body).
+
+% Runs the IR clause Kernel on Datas, its outputs unbound data(...) terms.
+array:run_ir(prolog, Kernel, Datas) :-
+   ir_kernel(Kernel, KernelId),
    Call =.. [KernelId | Datas],
-   Dict = M.put(kernel, kernel:Call).
+   call(kernel:Call).
 
 define_kernel(Head, _), functor(Head, Name, Arity),
       current_predicate(kernel:Name/Arity) =>

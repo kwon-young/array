@@ -71,6 +71,15 @@ array:M.compile(c, Op) := Dict :-
 % looping over M's index.
 compile_kernel(M, Op, Dict) :-
    lower_kernel(c, M, Op, IR0, Arrays),
+   ir_kernel(IR0, RuntimeName),
+   maplist(get_dict(data), Arrays, Datas),
+   Kernel =.. [RuntimeName | Datas],
+   Dict = M.put([kernel=runtime_c:Kernel]).
+
+% ir_kernel(+IR0, -RuntimeName)
+% RuntimeName names the foreign predicate running the IR clause IR0 on the
+% buffers of its head.
+ir_kernel(IR0, RuntimeName) :-
    optimize_kernel(c, IR0, IR),
    ir_c(c, IR, c_kernel(Buffers, Shape, TypeIndex, Body)),
    maplist(buffer_param, Buffers, [Out | TypeArgs]),
@@ -84,10 +93,35 @@ compile_kernel(M, Op, Dict) :-
    kernel_ast(KernelName, RuntimeName, Code, AST),
    name_variables(AST),
    N is 1 + NArgs,
-   load_kernel(RuntimeName/N, Level, AST),
-   maplist(get_dict(data), Arrays, Datas),
-   Kernel =.. [RuntimeName | Datas],
-   Dict = M.put([kernel=runtime_c:Kernel]).
+   load_kernel(RuntimeName/N, Level, AST).
+
+% Runs the IR clause Kernel on Datas, its outputs unbound data(...) terms,
+% through C buffers of the formats of its head.
+array:run_ir(c, Kernel, Datas) :-
+   ir_kernel(Kernel, RuntimeName),
+   head_formats(Kernel, Formats),
+   maplist(data_buffer, Datas, Formats, Buffers),
+   Call =.. [RuntimeName | Buffers],
+   call(runtime_c:Call),
+   maplist(buffer_data, Datas, Formats, Buffers).
+
+head_formats((Head :- _), Formats) :-
+   Head =.. [_ | Pairs],
+   pairs_values(Pairs, Formats).
+
+% An input is copied into a buffer, an output gets a zeroed one.
+data_buffer(Data, Format, Buffer), ground(Data) =>
+   functor(Data, _, Size),
+   buffer_from_data(Buffer, Format, Size, Data).
+data_buffer(Data, Format, Buffer) =>
+   functor(Data, _, Size),
+   buffer_alloc(Buffer, Format, Size, true).
+
+buffer_data(Data, _, _), ground(Data) =>
+   true.
+buffer_data(Data, Format, Buffer) =>
+   functor(Data, _, Size),
+   buffer_to_data(Buffer, Format, Size, Data).
 
 % An output never overlaps an input: an input lives in the buffer pool until
 % its reader has run.

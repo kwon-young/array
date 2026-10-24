@@ -38,6 +38,12 @@ goal(simd(Body), Goal) =>
    goal(Body, Goal).
 goal(parallel(Body), Goal) =>
    goal(Body, Goal).
+% iterate runs in order, as forall does.
+goal(iterate(Domain, Body), Goal) =>
+   goal(Body, GBody),
+   Goal = forall(Domain, GBody).
+goal(load(after(Data-_, _), Index, Value), Goal) =>
+   Goal = (I is Index + 1, arg(I, Data, Value)).
 goal(load(Data-_, Index, Value), Goal) =>
    Goal = (I is Index + 1, arg(I, Data, Value)).
 goal(store(Data-_, Index, Value), Goal), var(Value) =>
