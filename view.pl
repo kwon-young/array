@@ -250,7 +250,8 @@ shape_size(Shape, Size) :-
 shape_mask(Shape, Mask) :-
    same_length(Shape, Mask),
    maplist(dim_mask, Shape, Mask).
-dim_mask(Dim, 0-Dim).
+dim_mask(Dim, 0-Dim) :-
+   Dim #>= 0.
 
 shape_strides([], []).
 shape_strides([_ | Shape], [HeadStride | Strides]) :-
@@ -296,6 +297,14 @@ test('from_shape') :-
    view{}.from_shape([5]) = view{shape: [5], strides: [1], mask: [0-5], offset: 0},
    view{}.from_shape([2, 3]) = view{shape: [2, 3], strides: [3, 1], mask: [0-2, 0-3], offset: 0},
    view{}.from_shape([2, 3, 4]) = view{shape: [2, 3, 4], strides: [12, 4, 1], mask: [0-2, 0-3, 0-4], offset: 0}.
+
+test('a dim is not negative', [timeout(5)]) :-
+   _ = view{}.from_shape([D, 3]),
+   fd_inf(D, Inf),
+   Inf == 0.
+
+test('a negative dim has no view', [fail, timeout(5)]) :-
+   _ = view{}.from_shape([-1]).
 
 :- end_tests(view).
 

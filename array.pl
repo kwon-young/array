@@ -800,11 +800,15 @@ reduce_count(Shape, Axes, N) :-
    view:shape_size(Dims, N),
    sync_clpfd_clpBNR(N).
 
-% A maximum has no identity: like numpy, it can't reduce an empty axis.
-check_identity(<, Shape, Axes), member(Axis, Axes), nth0(Axis, Shape, 0) =>
-   domain_error(non_empty_axes, Axes).
+% A maximum has no identity: it only reduces non-empty axes.
+check_identity(<, Shape, Axes) =>
+   maplist(non_empty_axis(Shape), Axes).
 check_identity(_, _, _) =>
    true.
+
+non_empty_axis(Shape, Axis) :-
+   nth0(Axis, Shape, Dim),
+   Dim #\= 0.
 
 push(float(A), C) :-
    push(elementwise(float, [A]), C).
@@ -2256,8 +2260,7 @@ nan(X) :-
     float(X),
     float_class(X, nan).
 
-test('a maximum over an empty axis fails loudly',
-     [throws(error(domain_error(non_empty_axes, [1]), _))]) :-
+test('a maximum over an empty axis fails', [fail, timeout(10)]) :-
     A = array{}.fromlist([[1.0, 2.0]]),
     B = A.shrink([0-1, 0-0]),
     _ = B.max([1]).
@@ -2274,6 +2277,15 @@ test('a maximum propagates NaN', [forall(member(D, [prolog, c]))]) :-
                           C.max().tolist() == 3.0
                        ),
                        set_prolog_flag(float_undefined, Undefined)).
+
+test('a maximum over an unknown dim is pushed', [nondet, timeout(10)]) :-
+    S @= array{}.ones([B, 4]).max([0]),
+    B = 3,
+    S.tolist() == [1, 1, 1, 1].
+
+test('a maximum keeps its axis non-empty', [fail, timeout(10)]) :-
+    _ = array{}.ones([B, 4]).max([0]),
+    B = 0.
 
 :- end_tests(array_max).
 
@@ -2296,6 +2308,11 @@ test('a sum over a symbolic dim counts its dim', [nondet, timeout(10)]) :-
     L = S.tolist(),
     length(L, 4),
     maplist(=:=(3), L).
+
+test('a sum over an unknown dim is pushed', [nondet, timeout(10)]) :-
+    S @= array{}.ones([B, 4]).sum([1]),
+    B = 2,
+    S.tolist() == [4, 4].
 
 test('a sum next to an empty dim', [timeout(10)]) :-
     array{}.zeros([0, 3]).sum([1]).tolist() == [].

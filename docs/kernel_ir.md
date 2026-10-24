@@ -86,10 +86,10 @@ reference:
 - a maximum propagates NaN, as numpy's `max` does: dialects must lower it to
   agree, not to C's `if (acc < x) acc = x`, which ignores a NaN unless it
   comes first;
-- a maximum over an empty domain never reaches the IR: like numpy, the array
-  library rejects a maximum over a zero-size axis when it is pushed, since a
-  maximum has no identity. `aggregate_all(max(...))` failing on an empty
-  domain is then never observed.
+- a maximum over an empty domain never reaches the IR: a maximum has no
+  identity, so the array library only relates a maximum to non-empty axes,
+  and pushing one over a zero-size axis fails. `aggregate_all(max(...))`
+  failing on an empty domain is then never observed.
 
 Value expressions use `+`, `-`, `*`, `/` (of floats only: C truncates a
 division of integers), `sin`, `log`, `sqrt`, constants, `float`,
