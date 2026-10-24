@@ -36,6 +36,8 @@ Two kinds of constraints describe it:
 :- use_module(view).
 :- use_module(dtype).
 :- use_module(minimalloc).
+:- use_module(loop_index).
+:- use_module(array_ref).
 
 :- multifile compile/4.
 :- multifile allocate/2.
@@ -181,6 +183,135 @@ M.randn(Shape, Options) := Dict :-
 
 % Movement
 % ========
+% Scan
+% ====
+
+% Vs = Xs.scanl(Mod:Goal, V0, Axis): as scanl/4 of library(apply) along the
+% axis Axis of Xs, Vs stacks the states [V0, V1, ..., Vn] along Axis, with
+% call(Mod:Goal, X, V0, V1) for each slice X of Xs along Axis.
+% V0 is the initial state, and gives every state its shape and dtype: a
+% state V1 is cast to them when nothing is lost (as by index_put/2), else
+% the scan fails.
+% Goal is called once, on stand-ins: X, the slice of Xs at the step of the
+% scan, and V0, the state before the step. Its solutions are the
+% solutions of the scan. What it computes from the stand-ins is the step,
+% run at each index of the loop; what it computes without them is
+% computed once, out of the loop.
+% Goal must be module qualified: the functional notation calls this method
+% through '.'/3, which would qualify it with array.
+:- meta_predicate scanl(3, +, +, +, -).
+M.scanl(Mod:Goal, V00, Axis) := Vs :-
+   value_array(V00, M, V0),
+   nth0(Axis, M.shape(), N, SliceShape),
+   loop_index(K),
+   % the range and precision of Vs, which the state at a step shares
+   Range::real,
+   Precision::real(0, inf),
+   stand_in_slice(M, Axis, K, SliceShape, X),
+   stand_in_state(V0, K, Ref, Range, Precision, State),
+   call(Mod:Goal, X, State, V1),
+   upcast(V1, V0.dtype, V2),
+   V3 = V2.expand(V0.shape()),
+   independent_nodes(V3, [X, State], Independent),
+   distinct_nodes([M, V0 | Independent], Externals),
+   N1 #= N + 1,
+   nth0(Axis, Shape, N1, V0.shape()),
+   Vs0 = V0.empty(Shape, [range(Range), dtype(V0.dtype), precision(Precision)]),
+   Vs = Vs0.push_op(scan(V3, Externals, V0, Axis, K, Ref)),
+   array_ref(Ref, Vs).
+
+% X is the slice of M along Axis at the loop index K: an index of M that
+% only a kernel looping over K computes.
+stand_in_slice(M, Axis, K, Shape, X) :-
+   length(M.shape(), NDim),
+   length(Items0, NDim),
+   maplist(=(:), Items0),
+   replace_nth0(K, Axis, Items0, Items),
+   Range::real,
+   { Range <= M.range },
+   X0 = M.empty(Shape, [range(Range), dtype(M.dtype), precision(M.precision)]),
+   X = X0.put([id: _, op: index(M, Items)]).
+
+% State is the state at the loop index K of the array Ref names, of V0's
+% shape and dtype, in its range and with its precision.
+stand_in_state(V0, K, Ref, Range, Precision, State) :-
+   StateRange::real,
+   { StateRange <= Range },
+   State0 = V0.empty(V0.shape(), [range(StateRange), dtype(V0.dtype),
+                                  precision(Precision)]),
+   State = State0.put([id: _, op: index(Ref, [K])]).
+
+% independent_nodes(+Step, +StandIns, -Independent)
+% Independent are the nodes the step reads that depend on none of the
+% stand-ins: the step computes the others at each index of the loop. A step
+% depending on no stand-in is itself independent.
+independent_nodes(Step, StandIns, Independent) :-
+   rb_new(Deps0),
+   dependent(Step, StandIns, Dependent, Deps0, Deps),
+   rb_visit(Deps, Pairs),
+   pairs_values(Pairs, Values),
+   step_independent(Dependent, Step, Values, Independent).
+
+step_independent(false, Step, _, Independent) =>
+   Independent = [Step].
+step_independent(true, _, Values, Independent) =>
+   foldl(read_args, Values, [], Read),
+   include([_-false]>>true, Read, IndependentPairs),
+   pairs_keys(IndependentPairs, Independent).
+
+read_args(dependent(Args), Read0, Read) =>
+   append(Args, Read0, Read).
+read_args(independent(_), Read0, Read) =>
+   Read = Read0.
+
+% dependent(+A, +StandIns, -Dependent, +Deps0, -Deps): Dependent is true
+% when A reads a stand-in. Deps maps each visited node's id to
+% dependent(Args), Args pairing each node it reads with its dependency, or
+% to independent(A).
+dependent(A, _, Dependent, Deps0, Deps), get_dict(id, A, Id),
+      rb_lookup(Id, Dep, Deps0) =>
+   Deps = Deps0,
+   dependency(Dep, Dependent).
+dependent(A, StandIns, Dependent, Deps0, Deps), stand_in(A, StandIns) =>
+   Dependent = true,
+   get_dict(id, A, Id),
+   rb_insert_new(Deps0, Id, dependent([]), Deps).
+dependent(A, StandIns, Dependent, Deps0, Deps) =>
+   phrase(op_args(A.op), Args0),
+   foldl(dependent_arg(StandIns), Args0, Args, Deps0, Deps1),
+   pairs_values(Args, Dependents),
+   node_dependency(Dependents, A, Args, Dep),
+   dependency(Dep, Dependent),
+   rb_insert_new(Deps1, A.id, Dep, Deps).
+
+% An argument, paired with its dependency.
+dependent_arg(StandIns, A, A-Dependent, Deps0, Deps) :-
+   dependent(A, StandIns, Dependent, Deps0, Deps).
+
+stand_in(A, StandIns) :-
+   member(S, StandIns),
+   S.id == A.id,
+   !.
+
+node_dependency(Dependents, _, Args, Dep), memberchk(true, Dependents) =>
+   Dep = dependent(Args).
+node_dependency(_, A, _, Dep) =>
+   Dep = independent(A).
+
+dependency(dependent(_), Dependent) => Dependent = true.
+dependency(independent(_), Dependent) => Dependent = false.
+
+% The nodes of Nodes0, each once, by id.
+distinct_nodes(Nodes0, Nodes) :-
+   foldl(add_node, Nodes0, [], Nodes1),
+   reverse(Nodes1, Nodes).
+
+add_node(A, Nodes0, Nodes), get_dict(id, A, Id), member(B, Nodes0),
+      get_dict(id, B, Id0), Id0 == Id =>
+   Nodes = Nodes0.
+add_node(A, Nodes0, Nodes) =>
+   Nodes = [A | Nodes0].
+
 % numpy's basic indexing, as a relation: Index holds an item per dim, from
 % the first, missing items reading their whole dim:
 %   * an integer I, -Dim =< I < Dim, from the end when negative, drops its
@@ -2120,6 +2251,153 @@ test('a device runs an iterate as the reference',
     Name \== none.
 
 :- end_tests(ir_devices).
+
+:- begin_tests(array_scan).
+
+add(X, V0, V1) :-
+    V1 @= V0 + X.
+
+wide(X, V0, V1) :-
+    V1 @= V0 + X * 0.5.
+
+total(X, _, V1) :-
+    V1 @= X.sum().
+
+positive(X, _, V1) :-
+    V1 @= (X > 2).
+
+add_or_times(X, V0, V1) :-
+    member(Op, [+, *]),
+    E =.. [Op, V0, X],
+    V1 @= E.
+
+% the step leaks what it is given, to look at it from out of the scan
+add_weighted(W, Leak, X, V0, V1) :-
+    Leak = V0,
+    V1 @= V0 + X * W.
+
+add_iota(Iota, X, V0, V1) :-
+    Iota = array{}.arange(4),
+    V1 @= V0 + X * Iota.
+
+matrix(A) :-
+    A = array{}.fromlist([[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]]).
+
+zeros(Shape, Z) :-
+    Z = array{}.zeros(Shape, [dtype(integer)]).
+
+scan_op(Vs, Op) :-
+    array{op: Op} :< Vs.
+
+% E is A, or a view of it.
+reads(E, A) :-
+    array{id: Id} :< A,
+    view_of(E, Id).
+
+view_of(E, Id) :-
+    array{id: EId} :< E,
+    EId == Id,
+    !.
+view_of(E, Id) :-
+    array{op: view(P)} :< E,
+    view_of(P, Id).
+
+test('a scan stacks its states along its axis', [timeout(30)]) :-
+    context_module(M),
+    matrix(A),
+    zeros([4], Z4),
+    V0 = A.scanl(M:add, Z4, 0),
+    V0.shape() == [4, 4],
+    array{dtype: D0} :< V0,
+    D0 == integer,
+    zeros([3], Z3),
+    V1 = A.scanl(M:add, Z3, 1),
+    V1.shape() == [3, 5].
+
+test('a state is cast to V0 when nothing is lost', [timeout(30)]) :-
+    context_module(M),
+    matrix(A),
+    zeros([4], Z),
+    \+ _ = A.scanl(M:wide, Z, 0),
+    T = A.scanl(M:total, Z, 0),
+    T.shape() == [4, 4],
+    P = A.scanl(M:positive, Z, 0),
+    array{dtype: DP} :< P,
+    DP == integer,
+    zeros([], Z0),
+    \+ _ = A.scanl(M:add, Z0, 0).
+
+test('each solution of the step is a scan', [timeout(30)]) :-
+    context_module(M),
+    matrix(A),
+    zeros([4], Z),
+    findall(Name,
+            (  Vs = A.scanl(M:add_or_times, Z, 0),
+               scan_op(Vs, scan(Step, _, _, _, _, _)),
+               array{op: view(Body)} :< Step,
+               array{op: Op} :< Body,
+               functor(Op, Name, _)
+            ),
+            Names),
+    Names == [+, *].
+
+test('what the step computes without its stand-ins is out of the loop',
+     [timeout(30)]) :-
+    context_module(M),
+    matrix(A),
+    zeros([4], Z),
+    W @= Z + 2,
+    Vs = A.scanl(M:add_weighted(W, _), Z, 0),
+    scan_op(Vs, scan(Step, Externals, _, _, _, _)),
+    once(( member(E, Externals), reads(E, W) )),
+    once(( member(E1, Externals), reads(E1, A) )),
+    \+ ( member(E2, Externals), reads(E2, Step) ),
+    Ws = A.scanl(M:add_iota(Iota), Z, 0),
+    scan_op(Ws, scan(_, Externals2, _, _, _, _)),
+    once(( member(E3, Externals2), reads(E3, Iota) )).
+
+test('the states are in the range of the scan', [timeout(30)]) :-
+    context_module(M),
+    matrix(A),
+    zeros([4], Z),
+    Vs = A.scanl(M:add_weighted(1, State), Z, 0),
+    array:range_min_max(A.range, Min0, Max0),
+    R = Vs.range,
+    { R =< 5 },
+    array:range_min_max(State.range, _, Max),
+    Max =< 5,
+    array:range_min_max(A.range, Min1, Max1),
+    Min1-Max1 == Min0-Max0.
+
+test('a loop index is never bound, a reference names its scan',
+     [timeout(30)]) :-
+    context_module(M),
+    matrix(A),
+    zeros([4], Z),
+    Vs = A.scanl(M:add, Z, 0),
+    scan_op(Vs, scan(_, _, _, _, K, Ref)),
+    \+ K = 0,
+    get_attr(Ref, array_ref, Named),
+    array{id: Id} :< Named,
+    array{id: VsId} :< Vs,
+    Id == VsId.
+
+test('a scan of an unknown length', [timeout(30)]) :-
+    context_module(M),
+    N in 2..5,
+    A = array{}.empty([N, 4]),
+    Z = array{}.zeros([4], [dtype(float)]),
+    Vs = A.scanl(M:add, Z, 0),
+    N = 3,
+    Vs.shape() == [4, 4].
+
+test('an unqualified step is looked up in array',
+     [throws(error(existence_error(procedure, array:add/3), _)), timeout(30)]) :-
+    matrix(A),
+    zeros([4], Z),
+    _ = A.scanl(add, Z, 0).
+
+:- end_tests(array_scan).
 
 :- begin_tests(array_where).
 
