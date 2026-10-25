@@ -205,7 +205,7 @@ M.scanl(Mod:Goal, V00, Axis) := Vs :-
    nth0(Axis, M.shape(), N, SliceShape),
    loop_index(K),
    % the range and precision of Vs, which the state at a step shares
-   Range::real,
+   Range::real(-inf, inf),
    Precision::real(0, inf),
    stand_in_slice(M, Axis, K, SliceShape, X),
    stand_in_state(V0, K, Ref, Range, Precision, State),
@@ -227,7 +227,7 @@ stand_in_slice(M, Axis, K, Shape, X) :-
    length(Items0, NDim),
    maplist(=(:), Items0),
    replace_nth0(K, Axis, Items0, Items),
-   Range::real,
+   Range::real(-inf, inf),
    { Range <= M.range },
    X0 = M.empty(Shape, [range(Range), dtype(M.dtype), precision(M.precision)]),
    X = X0.put([id: _, op: index(M, Items)]).
@@ -235,7 +235,7 @@ stand_in_slice(M, Axis, K, Shape, X) :-
 % State is the state at the loop index K of the array Ref names, of V0's
 % shape and dtype, in its range and with its precision.
 stand_in_state(V0, K, Ref, Range, Precision, State) :-
-   StateRange::real,
+   StateRange::real(-inf, inf),
    { StateRange <= Range },
    State0 = V0.empty(V0.shape(), [range(StateRange), dtype(V0.dtype),
                                   precision(Precision)]),
@@ -1051,6 +1051,14 @@ op_args(fused(_Node, Expr)) ==>
    op_args(Expr).
 op_args(reindex(_Via, Expr)) ==>
    op_args(Expr).
+% A scan reads what its step reads from out of its loop.
+op_args(scan(_, Externals, _, _, _, _)) ==>
+   sequence(op_args, Externals).
+% A stand-in of a scan reads what it indexes, unless that is its own scan.
+op_args(index(Base, _)), is_dict(Base, array) ==>
+   [Base].
+op_args(index(_, _)) ==>
+   [].
 op_args(Op) ==>
    { compound_name_arguments(Op, _, Args) },
    sequence(op_args, Args).
@@ -1315,6 +1323,9 @@ schedule_array(Array, Visited0, Visited),
       get_dict(data, Array, Data), nonvar(Data) ==>
    { rb_insert_new(Visited0, Array.id, true, Visited) },
    [Array].
+% A stand-in of a scan only has values inside its loop.
+schedule_array(Array, _, _), get_dict(op, Array, index(_, _)) ==>
+   { throw(error(scan_stand_in_out_of_its_loop(Array), _)) }.
 schedule_array(Array, Visited0, Visited) ==>
    {  rb_insert_new(Visited0, Array.id, true, Visited1),
       phrase(op_args(Array.op), Inputs)
@@ -1378,6 +1389,9 @@ update_op(T, Array, NewArray), is_dict(Array, array) =>
    update_array(T, Array, NewArray).
 update_op(_, Atom, R), atomic(Atom) =>
    R = Atom.
+% the loop index and reference of a scan
+update_op(_, Var, R), var(Var) =>
+   R = Var.
 update_op(T, Op, NewOp), compound_name_arguments(Op, Name, Args) =>
    maplist(update_op(T), Args, NewArgs),
    compound_name_arguments(NewOp, Name, NewArgs).
@@ -1529,6 +1543,11 @@ M.dtype_size() := Size :-
    Size = M.dtype_size(M.device).
 M.data_byte_size() := Size :-
    Size is M.datasize * M.dtype_size().
+
+:- multifile prolog:error_message//1.
+
+prolog:error_message(scan_stand_in_out_of_its_loop(_)) -->
+   [ 'A stand-in of a scan, the slice or the state of a step, is read out of its scan' ].
 
 :- begin_tests(array_reshape).
 
@@ -2396,6 +2415,73 @@ test('an unqualified step is looked up in array',
     matrix(A),
     zeros([4], Z),
     _ = A.scanl(add, Z, 0).
+
+devices(D) :-
+    member(D, [prolog, c]).
+
+sum_step(X, V0, V1) :-
+    V1 @= V0 + X.sum().
+
+square_step(X, V0, V1) :-
+    V1 @= V0 + X.reshape([2, 2]).
+
+affine_step(Mat, X, V0, V1) :-
+    V1 @= Mat @ V0 + X.
+
+random_step(R, X, V0, V1) :-
+    R = array{}.rand([4]),
+    V1 @= V0 + R + X * 0.
+
+test('a scan computes its states in order', [forall(devices(D)), timeout(60)]) :-
+    context_module(M),
+    A = array{}.fromlist([[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]], [device(D)]),
+    Z4 = array{}.zeros([4], [dtype(integer), device(D)]),
+    V0 = A.scanl(M:add, Z4, 0),
+    V0.tolist() == [[0, 0, 0, 0], [1, 2, 3, 4], [6, 8, 10, 12], [15, 18, 21, 24]],
+    V0.shrink([1-4, 0-4]).tolist() == A.cumsum(0).tolist(),
+    Z3 = array{}.zeros([3], [dtype(integer), device(D)]),
+    V1 = A.scanl(M:add, Z3, 1),
+    V1.tolist() == [[0, 1, 3, 6, 10], [0, 5, 11, 18, 26], [0, 9, 19, 30, 42]],
+    S = A.scanl(M:sum_step, array{}.zeros([], [dtype(integer), device(D)]), 0),
+    S.tolist() == [0, 10, 36, 78],
+    Q = A.scanl(M:square_step, array{}.zeros([2, 2], [dtype(integer), device(D)]), 0),
+    Q.index([3]).tolist() == [[15, 18], [21, 24]].
+
+test('a state of a vector updated by a matrix', [forall(devices(D)), timeout(60)]) :-
+    context_module(M),
+    Mat = array{}.fromlist([[0.5, 0.25], [0.0, 2.0]], [device(D)]),
+    X = array{}.fromlist([[1.0, 0.0], [0.0, 1.0], [2.0, 3.0]], [device(D)]),
+    Z = array{}.zeros([2], [dtype(float), device(D)]),
+    Vs = X.scanl(M:affine_step(Mat), Z, 0),
+    Vs.tolist() == [[0.0, 0.0], [1.0, 0.0], [0.5, 1.0], [2.5, 5.0]].
+
+test('what a step computes out of the loop is computed once', [timeout(60)]) :-
+    context_module(M),
+    A = array{}.fromlist([[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]]),
+    Z = array{}.zeros([4], [dtype(integer)]),
+    W @= Z + 2,
+    Vs = A.scanl(M:add_weighted(W, _), Z, 0),
+    Vs.tolist() == [[0, 0, 0, 0], [2, 4, 6, 8], [12, 16, 20, 24], [30, 36, 42, 48]],
+    Rs = A.scanl(M:random_step(_), array{}.zeros([4], [dtype(float)]), 0),
+    Rs.tolist() = [_, R1, R2, _],
+    maplist([X1, X2]>>(abs(X2 - 2*X1) =< 1.0e-12), R1, R2).
+
+test('a stand-in read out of its scan fails loudly',
+     [throws(error(scan_stand_in_out_of_its_loop(_), _)), timeout(60)]) :-
+    context_module(M),
+    A = array{}.fromlist([[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]]),
+    Z = array{}.zeros([4], [dtype(integer)]),
+    _ = A.scanl(M:add_weighted(1, State), Z, 0),
+    _ = State.tolist().
+
+test('a scan of a length known after it is built', [timeout(60)]) :-
+    context_module(M),
+    N in 2..5,
+    A0 = array{}.fromlist([[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]]),
+    A1 = A0.reshape([N, 4]),
+    Vs = A1.scanl(M:add, array{}.zeros([4], [dtype(integer)]), 0),
+    N = 3,
+    Vs.index([3]).tolist() == [15, 18, 21, 24].
 
 :- end_tests(array_scan).
 

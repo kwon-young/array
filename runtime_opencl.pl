@@ -385,6 +385,7 @@ case(where, [[-2.0, 1.0, -0.5, 3.0], [5.0, 6.0, 7.0, 8.0]]).
 case(gather, [[[1.5, 2.5, 3.5], [4.5, 5.5, 6.5], [7.5, 8.5, 9.5]]]).
 case(index_put, [[[1.5, 2.5, 3.5], [4.5, 5.5, 6.5], [7.5, 8.5, 9.5]], [0.5, 0.25]]).
 case(index_put_arrays, [[[1.5, 2.5, 3.5], [4.5, 5.5, 6.5], [7.5, 8.5, 9.5]], [0.5, 0.25, 0.125]]).
+case(scan, [[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]], [[0.5, 0.25], [0.0, 2.0]]]).
 
 graph(chain, [A], C) :-
    C @= sin(A + A) * A.
@@ -426,6 +427,12 @@ graph(index_put, [A, V], C) :-
    C = A.index_put([sup:inf: -2, 1], V).
 graph(index_put_arrays, [A, V], C) :-
    C = A.index_put([[2, 0, 2], [-1, 1, -1]], V).
+graph(scan, [A, Mat], C) :-
+   context_module(M),
+   C = A.scanl(M:affine_sqrt(Mat), [0.0, 0.0], 0).
+
+affine_sqrt(Mat, X, V0, V1) :-
+   V1 @= Mat @ V0 + sqrt(X).
 
 computed(Name, Device, List) :-
    case(Name, Inputs),

@@ -105,8 +105,23 @@ materialized(Node, Graph) :-
    read(Node, Graph, Reader, _),
    buffer_op(Reader.op).
 
-inlined(Node, Graph) :-
+% The step of a scan computes every node it doesn't read from out of its
+% loop, nor from its stand-ins.
+inlined(Node, body(Externals)) =>
+   \+ body_leaf(Node, Externals).
+inlined(Node, Graph) =>
    \+ materialized(Node, Graph).
+
+body_leaf(Node, _) :-
+   get_dict(op, Node, index(_, _)).
+% an external, or the node an external is a view of
+body_leaf(Node, Externals) :-
+   member(E, Externals),
+   producer(E, P),
+   (  E.id == Node.id
+   ;  P.id == Node.id
+   ),
+   !.
 
 % A view has the buffer of its producer.
 has_buffer(Graph, Node) :-
@@ -182,10 +197,16 @@ broadcast(Via) :-
    Dim > 1.
 
 buffer_op(solve(_, _)).
+buffer_op(scan(_, _, _, _, _, _)).
 
 % Inlining
 % ========
 
+fuse_kernel(_, Node, Kernel), computed(Node),
+      get_dict(op, Node, scan(Step, Externals, V0, Axis, K, Ref)) =>
+   expr(body(Externals), Step, Fused),
+   Kernel = Node.put(op, scan(Fused, Externals, V0, Axis, K, Ref)),
+   bind_inlined_formats(Kernel).
 fuse_kernel(Graph, Node, Kernel), computed(Node) =>
    expr(Graph, Node.op, Op),
    Kernel = Node.put(op, Op),
@@ -208,6 +229,10 @@ expr(_, Op0, Op) =>
    Op = Op0.
 
 % inline(+Graph, +Via, +Node, -Expr)
+% Inside a scan, a node is computed where it is read, also through a
+% padding, where it would compute f(0) instead of reading 0.
+inline(body(_), Via, Node, _), padded(Via) =>
+   domain_error(read_unpadded_in_a_scan, Node).
 % A reduction loops over some axes of its own index, so it is computed at
 % the index of Node that Via reads: reindex(Via, Op).
 inline(Graph, Via, Node, Expr), get_dict(op, Node, reduce(_, _, _)) =>

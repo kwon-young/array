@@ -25,7 +25,9 @@ lower_kernel/5 turns a fused schedule node into a kernel clause of the IR
 % lower_kernel(+Device, +M, +Op, -Kernel, -Arrays)
 % Kernel is the IR clause computing Op into M on Device. Arrays are the
 % arrays whose buffers are the head's, in order: M, then its inputs.
-lower_kernel(Device, M, Op, Kernel, Arrays) :-
+lower_kernel(Device, M, scan(Step, Externals, V0, Axis, K, _), Kernel, Arrays) =>
+   lower_scan(Device, M, Step, Externals, V0, Axis, K, Kernel, Arrays).
+lower_kernel(Device, M, Op, Kernel, Arrays) =>
    top_expr(Op, M, Expr),
    phrase(array:op_args(Expr), AllArgs),
    list_to_ord_set(AllArgs, Args),
@@ -51,6 +53,54 @@ lower_kernel(Device, M, Op, Kernel, Arrays) :-
    guard(Valid, Element0, Element),
    Head =.. [kernel | Buffers],
    Kernel = (Head :- forall(Domain, Element)).
+
+% lower_scan(+Device, +M, +Step, +Externals, +V0, +Axis, +K, -Kernel, -Arrays)
+% Kernel computes the scan M in one work item: it stores V0 as the state at
+% index 0 along Axis, then for K1 from 0, the state at K1 + 1 that Step
+% computes from the state at K1, read back, and the slice of the scanned
+% array at K1. K1 stands for the loop index K of the stand-ins of Step.
+% The inputs are the externals, and the views of them that Step reads.
+lower_scan(Device, M, Step, Externals, V0, Axis, K, Kernel, Arrays) :-
+   phrase(array:op_args(Step), StepArgs),
+   exclude([A]>>stand_in_read(A, _), StepArgs, Leaves),
+   append(Externals, Leaves, Inputs0),
+   list_to_ord_set(Inputs0, Inputs),
+   Arrays = [M | Inputs],
+   maplist(buffer, Arrays, Buffers),
+   [Out | _] = Buffers,
+   pairs_keys_values(BufferPairs, Arrays, Buffers),
+   list_to_assoc(BufferPairs, BufferAssoc),
+   load_formats(Device, M, Step, Inputs, Compute, LoadFormats),
+   pairs_keys_values(LoadPairs, Inputs, LoadFormats),
+   list_to_assoc(LoadPairs, LoadAssoc),
+   Shape = V0.shape(),
+   Ctx0 = ctx{node: M, buffers: BufferAssoc, loads: LoadAssoc,
+              compute: Compute, scan: scan(K, K1, Externals, Axis, M)},
+   store_state(V0, Ctx0, Shape, Out, Axis, 0, Init),
+   store_state(Step, Ctx0, Shape, Out, Axis, K1 + 1, Next),
+   nth0(Axis, M.shape(), Steps1),
+   N1 is Steps1 - 2,
+   Head =.. [kernel | Buffers],
+   Kernel = (Head :- forall(between(0, 0, _),
+                            ( Init,
+                              iterate(between(0, N1, K1), Next) ))).
+
+% store_state(+Expr, +Ctx0, +Shape, +Out, +Axis, +At, -Goal)
+% Goal stores Expr, of Shape, as the state of the scan Ctx0.node at index At
+% along Axis.
+store_state(Expr, Ctx0, Shape, Out, Axis, At, Goal) :-
+   M = Ctx0.node,
+   same_length(Index, Shape),
+   Ctx = Ctx0.put(index, Index),
+   phrase(value(Expr, Ctx, Value, Format), Goals0),
+   phrase(cast(M.dtype(), Value, Format, Stored), Goals1),
+   nth0(Axis, StateIndex, At, Index),
+   IndexExpr-_ = M.index_expr(StateIndex),
+   append([Goals0, Goals1, [store(Out, IndexExpr, Stored)]], Goals),
+   conjunction(Goals, Element),
+   maplist(binder, Index, Shape, Domain0),
+   conjunction(Domain0, Domain),
+   Goal = forall(Domain, Element).
 
 % The ops that compile to a cast or to random numbers at the top of a kernel.
 top_expr(rand, _, Expr) =>
@@ -130,6 +180,10 @@ cast(Format, In, _, Out) ==>
 % value(+Expr, +Ctx, -Value, -Format)//
 % The goals computing Value, the value of Expr at the index of Ctx, in
 % Format. Value is a value expression.
+% A stand-in of a scan, or a view of one, reads its scan's arrays at the
+% loop index.
+value(A, Ctx, Value, Format), is_dict(A, array), stand_in_read(A, StandIn) ==>
+   scan_read(A, StandIn, Ctx, Value, Format).
 value(A, Ctx, Value, Format), is_dict(A, array) ==>
    load(A, Ctx, Value, Format).
 % An inlined node is rounded to its format, as its buffer would be.
@@ -189,6 +243,67 @@ operands([A | As], Ctx, Values) ==>
    cast(Ctx.compute, V0, F0, V),
    operands(As, Ctx, Vs),
    { Values = [V | Vs] }.
+
+% stand_in_read(+A, -StandIn): A is the stand-in StandIn, or a view of it.
+stand_in_read(A, StandIn), get_dict(op, A, index(_, _)) =>
+   StandIn = A.
+stand_in_read(A, StandIn), get_dict(op, A, view(P)), get_dict(op, P, index(_, _)) =>
+   StandIn = P.
+stand_in_read(_, _) =>
+   fail.
+
+% scan_read(+A, +StandIn, +Ctx, -Value, -Format)//
+% Value is the element of A at the index of Ctx: the element of the slice
+% of the scanned array, or of the state, at the loop index.
+scan_read(A, StandIn, Ctx, Value, Format) -->
+   {  scan_context(Ctx, StandIn, scan(K, K1, Externals, Axis, M)),
+      stand_in_index(A, StandIn, Ctx.index, Index),
+      get_dict(op, StandIn, index(Base, Items))
+   },
+   scan_element(Base, Items, Index, K, K1, Externals, Axis, M, Ctx, Value0, Format0),
+   cast(Ctx.compute, Value0, Format0, Value),
+   { Format = Ctx.compute }.
+
+scan_context(Ctx, _, Scan), get_dict(scan, Ctx, Scan0) =>
+   Scan = Scan0.
+scan_context(_, StandIn, _) =>
+   throw(error(scan_stand_in_out_of_its_loop(StandIn), _)).
+
+stand_in_index(A, StandIn, Index0, Index), get_dict(id, A, Id),
+      get_dict(id, StandIn, Id0), Id == Id0 =>
+   Index = Index0.
+stand_in_index(A, _, Index0, Index) =>
+   node_index(A, Index0, Index).
+
+% The slice of a scanned array: the external of its id, with the loop index
+% at its items' K. Read by id: the allocation updates the externals, not the
+% stand-ins' ops.
+scan_element(Base, Items, Index, K, K1, Externals, _, _, Ctx, Value, Format),
+      is_dict(Base, array) ==>
+   {  once(( member(Array, Externals), get_dict(id, Array, Id),
+                get_dict(id, Base, Id0), Id == Id0 )),
+      foldl(slice_item(K, K1), Items, Full, Index, []),
+      get_assoc(Array, Ctx.buffers, Buffer),
+      Buffer = _-Format,
+      IndexExpr-Valid = Array.index_expr(Full)
+   },
+   guarded_value(Valid, load(Buffer, IndexExpr, Value), Value, Format).
+% The state: what the earlier iterations of the scan M stored at the loop
+% index. Ctx.node is the node computed there, an inlined one in a step.
+scan_element(_, _, Index, _, K1, _, Axis, M, Ctx, Value, Format) ==>
+   {  get_assoc(M, Ctx.buffers, Buffer),
+      Buffer = _-Format,
+      nth0(Axis, Full, K1, Index),
+      IndexExpr-_ = M.index_expr(Full)
+   },
+   [load(after(Buffer, K1), IndexExpr, Value)].
+
+slice_item(K, K1, Item, Item1, Index0, Index), Item == K =>
+   Item1 = K1,
+   Index = Index0.
+slice_item(_, _, :, Item1, [I | Index], Index1) =>
+   Item1 = I,
+   Index1 = Index.
 
 % A load reads the element at the index of Ctx, or 0 outside a mask, and
 % converts it to the load format.
