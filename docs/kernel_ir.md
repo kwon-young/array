@@ -170,7 +170,10 @@ Casts:
   iteration stored is an instantiation error. The buffer pool guarantees it, since an input keeps its memory
   until its reader has run, and it is also what makes C's `restrict`
   correct.
-- Every element of an output is stored exactly once.
+- Every element of an output is stored exactly once, but inside an
+  `iterate`, where iterations may store the same element in turn: an
+  `after/2` load reads the last stored before its iteration. A fold keeps
+  its states so, in two slots.
 
 Together, these make the body independent of the order of its stores and
 loads, which equality saturation needs. A kernel may have several outputs:

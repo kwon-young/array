@@ -214,27 +214,28 @@ M.randn(Shape, Options) := Dict :-
 %     them. The scanned arrays have the same batch.
 :- meta_predicate scan(3, +, +, +, -).
 M.scan(Goal, V0, Axis) := Vs :-
-   scan_arrays(Goal, [M], V0, Axis, [], Vs).
+   scan_arrays(Goal, [M], V0, Axis, [], all, Vs).
 
 :- meta_predicate scan(3, +, +, +, +, -).
 M.scan(Goal, V0, Axis, Options) := Vs :-
-   scan_arrays(Goal, [M], V0, Axis, Options, Vs).
+   scan_arrays(Goal, [M], V0, Axis, Options, all, Vs).
 
 :- meta_predicate scan(4, +, +, +, +, +, -).
 M.scan(Goal, Ys, V0, Axis, Options) := Vs :-
-   scan_arrays(Goal, [M, Ys], V0, Axis, Options, Vs).
+   scan_arrays(Goal, [M, Ys], V0, Axis, Options, all, Vs).
 
 :- meta_predicate scan(5, +, +, +, +, +, +, -).
 M.scan(Goal, Ys, Zs, V0, Axis, Options) := Vs :-
-   scan_arrays(Goal, [M, Ys, Zs], V0, Axis, Options, Vs).
+   scan_arrays(Goal, [M, Ys, Zs], V0, Axis, Options, all, Vs).
 
 :- meta_predicate scan(6, +, +, +, +, +, +, +, -).
 M.scan(Goal, Ys, Zs, Ws, V0, Axis, Options) := Vs :-
-   scan_arrays(Goal, [M, Ys, Zs, Ws], V0, Axis, Options, Vs).
+   scan_arrays(Goal, [M, Ys, Zs, Ws], V0, Axis, Options, all, Vs).
 
-% scan_arrays(+Goal, +Xss, +V0, +Axis, +Options, -Vs): Vs scans the arrays
-% Xss, the first giving the device of the others and of V0.
-scan_arrays(Mod:Goal, [M | Ys0], V00, Axis, Options, Vs) :-
+% scan_arrays(+Goal, +Xss, +V0, +Axis, +Options, +Storage, -Vs): Vs scans
+% the arrays Xss, the first giving the device of the others and of V0. Vs
+% holds the states that Storage keeps along its axis.
+scan_arrays(Mod:Goal, [M | Ys0], V00, Axis, Options, Storage, Vs) :-
    maplist([Y0, Y]>>value_array(Y0, M, Y), Ys0, Ys),
    value_array(V00, M, V0),
    option(batched_dims(Dims), Options, []),
@@ -253,8 +254,8 @@ scan_arrays(Mod:Goal, [M | Ys0], V00, Axis, Options, Vs) :-
    Range::real(-inf, inf),
    Precision::real(0, inf),
    maplist(stand_in_slice(Batch, BatchShape, AxisE, K, N), Ms, Xs),
-   N1 #= N + 1,
-   nth0(AxisE, ElementShape, N1, StateShape),
+   kept_states(Storage, N, Kept),
+   nth0(AxisE, ElementShape, Kept, StateShape),
    index_items(Batch, AxisE, K, ElementShape, StateItems),
    stand_in_state(V0, StateShape, StateItems, Ref, Range, Precision, State),
    append(Xs, [State, V1], StepArgs),
@@ -267,8 +268,19 @@ scan_arrays(Mod:Goal, [M | Ys0], V00, Axis, Options, Vs) :-
    distinct_nodes(Externals0, Externals),
    append(BatchShape, ElementShape, Shape),
    Vs0 = V0.empty(Shape, [range(Range), dtype(V0.dtype), precision(Precision)]),
-   Vs = Vs0.push_op(scan(V3, Externals, V0, AxisE, Batch, K, Ref)),
+   Vs = Vs0.push_op(scan(V3, Externals, V0, AxisE, Batch, K, Ref, Storage)),
    array_ref(Ref, Vs).
+
+% kept_states(+Storage, +N, -Kept): of the N + 1 states of a scan of N
+% steps, Storage keeps Kept along its axis:
+%   * all: every state, the state K at K;
+%   * last(N): two, as each step reads the state before it only: the state
+%     K at (K + N) mod 2, the last at 0.
+kept_states(all, N, Kept) =>
+   Kept #= N + 1.
+kept_states(last(N0), N, Kept) =>
+   N0 = N,
+   Kept = 2.
 
 % V = Xs.fold(Mod:Goal, V0, Axis), and the other forms of scan, with
 % Options and more scanned arrays: as foldl/4 to foldl/7 of library(apply),
@@ -293,10 +305,10 @@ M.fold(Goal, Ys, Zs, V0, Axis, Options) := V :-
 M.fold(Goal, Ys, Zs, Ws, V0, Axis, Options) := V :-
    fold_arrays(Goal, [M, Ys, Zs, Ws], V0, Axis, Options, V).
 
-% The last state of the scan, along its axis in Vs: after the batch, at the
-% axis among the others.
+% The last state of the scan, which keeps it at 0 along its axis in Vs:
+% after the batch, at the axis among the others.
 fold_arrays(Goal, Xss, V0, Axis, Options, V) :-
-   scan_arrays(Goal, Xss, V0, Axis, Options, Vs),
+   scan_arrays(Goal, Xss, V0, Axis, Options, last(_), Vs),
    option(batched_dims(Dims), Options, []),
    length(Dims, NB),
    include(>(Axis), Dims, Before),
@@ -304,7 +316,7 @@ fold_arrays(Goal, Xss, V0, Axis, Options, V) :-
    AxisVs is NB + Axis - NBefore,
    length(Colons, AxisVs),
    maplist(=(:), Colons),
-   append(Colons, [-1], Index),
+   append(Colons, [0], Index),
    V = Vs.index(Index).
 
 % batch_first(+Dims, +Axis, +M, -M1, -Axis1)
@@ -1217,7 +1229,7 @@ op_args(fused(_Node, Expr)) ==>
 op_args(reindex(_Via, Expr)) ==>
    op_args(Expr).
 % A scan reads what its step reads from out of its loop.
-op_args(scan(_, Externals, _, _, _, _, _)) ==>
+op_args(scan(_, Externals, _, _, _, _, _, _)) ==>
    sequence(op_args, Externals).
 % A stand-in of a scan reads what it indexes, unless that is its own scan.
 op_args(index(Base, _)), is_dict(Base, array) ==>
@@ -2525,7 +2537,7 @@ test('each solution of the step is a scan', [timeout(30)]) :-
     zeros([4], Z),
     findall(Name,
             (  Vs = A.scan(M:add_or_times, Z, 0),
-               scan_op(Vs, scan(Step, _, _, _, _, _, _)),
+               scan_op(Vs, scan(Step, _, _, _, _, _, _, _)),
                array{op: view(Body)} :< Step,
                array{op: Op} :< Body,
                functor(Op, Name, _)
@@ -2540,12 +2552,12 @@ test('what the step computes without its stand-ins is out of the loop',
     zeros([4], Z),
     W @= Z + 2,
     Vs = A.scan(M:add_weighted(W, _), Z, 0),
-    scan_op(Vs, scan(Step, Externals, _, _, _, _, _)),
+    scan_op(Vs, scan(Step, Externals, _, _, _, _, _, _)),
     once(( member(E, Externals), reads(E, W) )),
     once(( member(E1, Externals), reads(E1, A) )),
     \+ ( member(E2, Externals), reads(E2, Step) ),
     Ws = A.scan(M:add_iota(Iota), Z, 0),
-    scan_op(Ws, scan(_, Externals2, _, _, _, _, _)),
+    scan_op(Ws, scan(_, Externals2, _, _, _, _, _, _)),
     once(( member(E3, Externals2), reads(E3, Iota) )).
 
 test('the states are in the range of the scan', [timeout(30)]) :-
@@ -2567,7 +2579,7 @@ test('a loop index is never bound, a reference names its scan',
     matrix(A),
     zeros([4], Z),
     Vs = A.scan(M:add, Z, 0),
-    scan_op(Vs, scan(_, _, _, _, _, K, Ref)),
+    scan_op(Vs, scan(_, _, _, _, _, K, Ref, _)),
     \+ K = 0,
     get_attr(Ref, array_ref, Named),
     array{id: Id} :< Named,
@@ -2685,7 +2697,7 @@ test('a scan runs a work item per element of its batch', [timeout(60)]) :-
     fusion:fuse([Vs], Schedule0, Schedule),
     precision:choose_formats(Schedule, [Vs], inf),
     member(Node, Schedule),
-    array{op: scan(_, _, _, _, _, _, _)} :< Node,
+    array{op: scan(_, _, _, _, _, _, _, _)} :< Node,
     !,
     array{op: Op} :< Node,
     ir_lower:lower_kernel(prolog, Node, Op, (_ :- forall(Domain, _)), _),
@@ -2830,6 +2842,16 @@ test('a fold is the last state of its scan', [forall(devices(D)), timeout(60)]) 
     Z3 = array{}.zeros([3], [dtype(integer), device(D)]),
     V1 = A.index([1]).fold(M:add, Z3, 1),
     V1.tolist() == [54, 70, 86].
+
+test('a fold keeps two states, the last at 0', [timeout(60)]) :-
+    context_module(M),
+    A = array{}.arange(24).reshape([2, 3, 4]),
+    Z = array{}.zeros([2, 4], [dtype(integer)]),
+    V = A.fold(M:add, Z, 1, [batched_dims([0])]),
+    array{op: view(Vs)} :< V,
+    Vs.shape() == [2, 2, 4],
+    scan_op(Vs, scan(_, _, _, _, _, _, _, last(N))),
+    N == 3.
 
 % A step of a left-looking Cholesky factorization: X is the row k of the
 % identity, U the upper triangle of ones. The column k of the factor is the

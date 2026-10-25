@@ -25,8 +25,10 @@ lower_kernel/5 turns a fused schedule node into a kernel clause of the IR
 % lower_kernel(+Device, +M, +Op, -Kernel, -Arrays)
 % Kernel is the IR clause computing Op into M on Device. Arrays are the
 % arrays whose buffers are the head's, in order: M, then its inputs.
-lower_kernel(Device, M, scan(Step, Externals, V0, Axis, Batch, K, _), Kernel, Arrays) =>
-   lower_scan(Device, M, Step, Externals, V0, Axis, Batch-K, Kernel, Arrays).
+lower_kernel(Device, M, scan(Step, Externals, V0, Axis, Batch, K, _, Storage),
+             Kernel, Arrays) =>
+   lower_scan(Device, M, Step, Externals, V0, Axis, Batch-K, Storage, Kernel,
+              Arrays).
 lower_kernel(Device, M, Op, Kernel, Arrays) =>
    top_expr(Op, M, Expr),
    phrase(array:op_args(Expr), AllArgs),
@@ -54,15 +56,17 @@ lower_kernel(Device, M, Op, Kernel, Arrays) =>
    Head =.. [kernel | Buffers],
    Kernel = (Head :- forall(Domain, Element)).
 
-% lower_scan(+Device, +M, +Step, +Externals, +V0, +Axis, +Batch-K, -Kernel,
-%            -Arrays)
+% lower_scan(+Device, +M, +Step, +Externals, +V0, +Axis, +Batch-K, +Storage,
+%            -Kernel, -Arrays)
 % Kernel computes the scan M in a work item per element of its batch, the
-% index Bs: it stores V0 at Bs as the state at index 0 along Axis of the
-% element, then for K1 from 0, the state at K1 + 1 that Step computes from
-% the state at K1, read back, and the slice of the scanned array at K1. Bs
-% and K1 stand for the loop indices Batch and K of the stand-ins of Step.
+% index Bs: it stores V0 at Bs as the state 0 along Axis of the element,
+% then for K1 from 0, the state K1 + 1 that Step computes from the state K1,
+% read back, and the slice of the scanned array at K1. Storage places the
+% state K along Axis, at its slot. Bs and K1 stand for the loop indices
+% Batch and K of the stand-ins of Step.
 % The inputs are the externals, and the views of them that Step reads.
-lower_scan(Device, M, Step, Externals, V0, Axis, Batch-K, Kernel, Arrays) :-
+lower_scan(Device, M, Step, Externals, V0, Axis, Batch-K, Storage, Kernel,
+           Arrays) :-
    phrase(array:op_args(Step), StepArgs),
    exclude([A]>>stand_in_read(A, _), StepArgs, Leaves),
    append(Externals, Leaves, Inputs0),
@@ -77,23 +81,46 @@ lower_scan(Device, M, Step, Externals, V0, Axis, Batch-K, Kernel, Arrays) :-
    list_to_assoc(LoadPairs, LoadAssoc),
    same_length(Batch, Bs),
    pairs_keys_values(Loops, [K | Batch], [K1 | Bs]),
+   length(Batch, NB),
+   AxisM is NB + Axis,
+   steps(Storage, M, AxisM, N),
+   % the state is read back at the slot of K1
+   slot(Storage, K1, ReadSlot),
+   pairs_keys_values(StateLoops, [K | Batch], [ReadSlot | Bs]),
    Ctx0 = ctx{node: M, buffers: BufferAssoc, loads: LoadAssoc,
-              compute: Compute, scan: scan(K1, Loops, Externals, M)},
+              compute: Compute,
+              scan: scan(K1, Loops, StateLoops, Externals, M)},
    same_length(Batch, BatchShape),
    append(BatchShape, Shape, V0.shape()),
    same_length(Index, Shape),
    append(Bs, Index, V0Index),
-   store_state(V0, V0Index, Index, Shape, Ctx0, Out, Axis, 0, Init),
-   store_state(Step, Index, Index, Shape, Ctx0, Out, Axis, K1 + 1, Next),
-   length(Batch, NB),
-   AxisM is NB + Axis,
-   nth0(AxisM, M.shape(), Steps1),
-   N1 is Steps1 - 2,
+   slot(Storage, 0, InitSlot),
+   slot(Storage, K1 + 1, NextSlot),
+   store_state(V0, V0Index, Index, Shape, Ctx0, Out, Axis, InitSlot, Init),
+   store_state(Step, Index, Index, Shape, Ctx0, Out, Axis, NextSlot, Next),
+   N1 is N - 1,
    batch_domain(Bs, BatchShape, BatchDomain),
    Head =.. [kernel | Buffers],
    Kernel = (Head :- forall(BatchDomain,
                             ( Init,
                               iterate(between(0, N1, K1), Next) ))).
+
+% steps(+Storage, +M, +AxisM, -N): the scan M takes N steps, along its axis
+% AxisM.
+steps(all, M, AxisM, N) =>
+   nth0(AxisM, M.shape(), States),
+   N is States - 1.
+steps(last(N0), _, _, N) =>
+   N = N0.
+
+% slot(+Storage, +K, -Slot): Storage keeps the state K at Slot, an index
+% expression. A ground one is an integer.
+slot(all, K, Slot) =>
+   Slot = K.
+slot(last(N), K, Slot), ground(K) =>
+   Slot is (K + N) mod 2.
+slot(last(N), K, Slot) =>
+   Slot = (K + N) mod 2.
 
 % A scan without a batch runs in a single work item.
 batch_domain([], [], Domain) =>
@@ -109,7 +136,7 @@ batch_domain(Bs, BatchShape, Domain) =>
 % the work item.
 store_state(Expr, ExprIndex, Index, Shape, Ctx0, Out, Axis, At, Goal) :-
    M = Ctx0.node,
-   Ctx0.scan = scan(_, Loops, _, _),
+   Ctx0.scan = scan(_, Loops, _, _, _),
    pairs_values(Loops, [_ | Bs]),
    Ctx = Ctx0.put(index, ExprIndex),
    phrase(value(Expr, Ctx, Value, Format), Goals0),
@@ -277,14 +304,21 @@ stand_in_read(_, _) =>
 % Value is the element of A at the index of Ctx: the element of the slice
 % of the scanned array, or of the state, at the loop index.
 scan_read(A, StandIn, Ctx, Value, Format) -->
-   {  scan_context(Ctx, StandIn, scan(K1, Loops, Externals, M)),
+   {  scan_context(Ctx, StandIn, scan(K1, Loops, StateLoops, Externals, M)),
       stand_in_index(A, StandIn, Ctx.index, Index),
       get_dict(op, StandIn, index(Base, Items)),
-      foldl(slice_item(Loops), Items, Full, Index, [])
+      read_loops(Base, Loops, StateLoops, ReadLoops),
+      foldl(slice_item(ReadLoops), Items, Full, Index, [])
    },
    scan_element(Base, Full, K1, Externals, M, Ctx, Value0, Format0),
    cast(Ctx.compute, Value0, Format0, Value),
    { Format = Ctx.compute }.
+
+% A slice reads at the loop indices, the state at its slot.
+read_loops(Base, Loops, _, ReadLoops), is_dict(Base, array) =>
+   ReadLoops = Loops.
+read_loops(_, _, StateLoops, ReadLoops) =>
+   ReadLoops = StateLoops.
 
 scan_context(Ctx, _, Scan), get_dict(scan, Ctx, Scan0) =>
    Scan = Scan0.
