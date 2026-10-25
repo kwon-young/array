@@ -170,6 +170,12 @@ c_default_format(Kind, Min, Max, Format) =>
 % proven to hold them: fall back to the default dtype of the kind instead.
 c_dtype(Kind, Min, Max, DType), unbounded(Min, Max) =>
    default_dtype(Kind, DType).
+% clpBNR may bound an integer range by floats, as for a view of an unbounded
+% one: the integers they hold.
+c_dtype(integer, Min, Max, DType), \+ ( integer(Min), integer(Max) ) =>
+   IMin is floor(Min),
+   IMax is ceiling(Max),
+   c_dtype(integer, IMin, IMax, DType).
 c_dtype(Kind, Min, Max, DType),
       once(dtype_info(DType0, Kind, Min, Max, [])) =>
    DType = DType0.

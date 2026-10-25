@@ -186,11 +186,11 @@ M.randn(Shape, Options) := Dict :-
 % Scan
 % ====
 
-% Vs = Xs.scanl(Mod:Goal, V0, Axis): as scanl/4 of library(apply) along the
+% Vs = Xs.scan(Mod:Goal, V0, Axis): as scanl/4 of library(apply) along the
 % axis Axis of Xs, Vs stacks the states [V0, V1, ..., Vn] along Axis, with
 % call(Mod:Goal, X, V0, V1) for each slice X of Xs along Axis.
-% Vs = Xs.scanl(Mod:Goal, Ys, V0, Axis, Options), up to
-% Xs.scanl(Mod:Goal, Ys, Zs, Ws, V0, Axis, Options): as scanl/5 to scanl/7,
+% Vs = Xs.scan(Mod:Goal, Ys, V0, Axis, Options), up to
+% Xs.scan(Mod:Goal, Ys, Zs, Ws, V0, Axis, Options): as scanl/5 to scanl/7,
 % with call(Mod:Goal, X, Y, V0, V1) and so on for the slices at the same
 % index of each scanned array. They all have the same length along Axis.
 % V0 is the initial state, and gives every state its shape and dtype: a
@@ -204,35 +204,37 @@ M.randn(Shape, Options) := Dict :-
 % loop.
 % Goal must be module qualified: the functional notation calls this method
 % through '.'/3, which would qualify it with array.
+% Not scanl nor foldl: a method is a predicate of array, two arguments
+% longer, and foldl/5 and foldl/6 would hide those of library(apply) here.
 %
 % Options:
 %   * batched_dims(Dims): the axes Dims of the scanned arrays are a batch
 %     of independent scans, run in parallel. They come first in V0 and in
 %     Vs, in the order of Dims; Goal sees an element of the batch, without
 %     them. The scanned arrays have the same batch.
-:- meta_predicate scanl(3, +, +, +, -).
-M.scanl(Goal, V0, Axis) := Vs :-
-   scan(Goal, [M], V0, Axis, [], Vs).
+:- meta_predicate scan(3, +, +, +, -).
+M.scan(Goal, V0, Axis) := Vs :-
+   scan_arrays(Goal, [M], V0, Axis, [], Vs).
 
-:- meta_predicate scanl(3, +, +, +, +, -).
-M.scanl(Goal, V0, Axis, Options) := Vs :-
-   scan(Goal, [M], V0, Axis, Options, Vs).
+:- meta_predicate scan(3, +, +, +, +, -).
+M.scan(Goal, V0, Axis, Options) := Vs :-
+   scan_arrays(Goal, [M], V0, Axis, Options, Vs).
 
-:- meta_predicate scanl(4, +, +, +, +, +, -).
-M.scanl(Goal, Ys, V0, Axis, Options) := Vs :-
-   scan(Goal, [M, Ys], V0, Axis, Options, Vs).
+:- meta_predicate scan(4, +, +, +, +, +, -).
+M.scan(Goal, Ys, V0, Axis, Options) := Vs :-
+   scan_arrays(Goal, [M, Ys], V0, Axis, Options, Vs).
 
-:- meta_predicate scanl(5, +, +, +, +, +, +, -).
-M.scanl(Goal, Ys, Zs, V0, Axis, Options) := Vs :-
-   scan(Goal, [M, Ys, Zs], V0, Axis, Options, Vs).
+:- meta_predicate scan(5, +, +, +, +, +, +, -).
+M.scan(Goal, Ys, Zs, V0, Axis, Options) := Vs :-
+   scan_arrays(Goal, [M, Ys, Zs], V0, Axis, Options, Vs).
 
-:- meta_predicate scanl(6, +, +, +, +, +, +, +, -).
-M.scanl(Goal, Ys, Zs, Ws, V0, Axis, Options) := Vs :-
-   scan(Goal, [M, Ys, Zs, Ws], V0, Axis, Options, Vs).
+:- meta_predicate scan(6, +, +, +, +, +, +, +, -).
+M.scan(Goal, Ys, Zs, Ws, V0, Axis, Options) := Vs :-
+   scan_arrays(Goal, [M, Ys, Zs, Ws], V0, Axis, Options, Vs).
 
-% scan(+Goal, +Xss, +V0, +Axis, +Options, -Vs): Vs scans the arrays Xss,
-% the first giving the device of the others and of V0.
-scan(Mod:Goal, [M | Ys0], V00, Axis, Options, Vs) :-
+% scan_arrays(+Goal, +Xss, +V0, +Axis, +Options, -Vs): Vs scans the arrays
+% Xss, the first giving the device of the others and of V0.
+scan_arrays(Mod:Goal, [M | Ys0], V00, Axis, Options, Vs) :-
    maplist([Y0, Y]>>value_array(Y0, M, Y), Ys0, Ys),
    value_array(V00, M, V0),
    option(batched_dims(Dims), Options, []),
@@ -267,6 +269,43 @@ scan(Mod:Goal, [M | Ys0], V00, Axis, Options, Vs) :-
    Vs0 = V0.empty(Shape, [range(Range), dtype(V0.dtype), precision(Precision)]),
    Vs = Vs0.push_op(scan(V3, Externals, V0, AxisE, Batch, K, Ref)),
    array_ref(Ref, Vs).
+
+% V = Xs.fold(Mod:Goal, V0, Axis), and the other forms of scan, with
+% Options and more scanned arrays: as foldl/4 to foldl/7 of library(apply),
+% V is the last state of the scan, of V0's shape.
+:- meta_predicate fold(3, +, +, +, -).
+M.fold(Goal, V0, Axis) := V :-
+   fold_arrays(Goal, [M], V0, Axis, [], V).
+
+:- meta_predicate fold(3, +, +, +, +, -).
+M.fold(Goal, V0, Axis, Options) := V :-
+   fold_arrays(Goal, [M], V0, Axis, Options, V).
+
+:- meta_predicate fold(4, +, +, +, +, +, -).
+M.fold(Goal, Ys, V0, Axis, Options) := V :-
+   fold_arrays(Goal, [M, Ys], V0, Axis, Options, V).
+
+:- meta_predicate fold(5, +, +, +, +, +, +, -).
+M.fold(Goal, Ys, Zs, V0, Axis, Options) := V :-
+   fold_arrays(Goal, [M, Ys, Zs], V0, Axis, Options, V).
+
+:- meta_predicate fold(6, +, +, +, +, +, +, +, -).
+M.fold(Goal, Ys, Zs, Ws, V0, Axis, Options) := V :-
+   fold_arrays(Goal, [M, Ys, Zs, Ws], V0, Axis, Options, V).
+
+% The last state of the scan, along its axis in Vs: after the batch, at the
+% axis among the others.
+fold_arrays(Goal, Xss, V0, Axis, Options, V) :-
+   scan_arrays(Goal, Xss, V0, Axis, Options, Vs),
+   option(batched_dims(Dims), Options, []),
+   length(Dims, NB),
+   include(>(Axis), Dims, Before),
+   length(Before, NBefore),
+   AxisVs is NB + Axis - NBefore,
+   length(Colons, AxisVs),
+   maplist(=(:), Colons),
+   append(Colons, [-1], Index),
+   V = Vs.index(Index).
 
 % batch_first(+Dims, +Axis, +M, -M1, -Axis1)
 % M1 is M with the axes Dims first, in their order, then the others in
@@ -2459,33 +2498,33 @@ test('a scan stacks its states along its axis', [timeout(30)]) :-
     context_module(M),
     matrix(A),
     zeros([4], Z4),
-    V0 = A.scanl(M:add, Z4, 0),
+    V0 = A.scan(M:add, Z4, 0),
     V0.shape() == [4, 4],
     array{dtype: D0} :< V0,
     D0 == integer,
     zeros([3], Z3),
-    V1 = A.scanl(M:add, Z3, 1),
+    V1 = A.scan(M:add, Z3, 1),
     V1.shape() == [3, 5].
 
 test('a state is cast to V0 when nothing is lost', [timeout(30)]) :-
     context_module(M),
     matrix(A),
     zeros([4], Z),
-    \+ _ = A.scanl(M:wide, Z, 0),
-    T = A.scanl(M:total, Z, 0),
+    \+ _ = A.scan(M:wide, Z, 0),
+    T = A.scan(M:total, Z, 0),
     T.shape() == [4, 4],
-    P = A.scanl(M:positive, Z, 0),
+    P = A.scan(M:positive, Z, 0),
     array{dtype: DP} :< P,
     DP == integer,
     zeros([], Z0),
-    \+ _ = A.scanl(M:add, Z0, 0).
+    \+ _ = A.scan(M:add, Z0, 0).
 
 test('each solution of the step is a scan', [timeout(30)]) :-
     context_module(M),
     matrix(A),
     zeros([4], Z),
     findall(Name,
-            (  Vs = A.scanl(M:add_or_times, Z, 0),
+            (  Vs = A.scan(M:add_or_times, Z, 0),
                scan_op(Vs, scan(Step, _, _, _, _, _, _)),
                array{op: view(Body)} :< Step,
                array{op: Op} :< Body,
@@ -2500,12 +2539,12 @@ test('what the step computes without its stand-ins is out of the loop',
     matrix(A),
     zeros([4], Z),
     W @= Z + 2,
-    Vs = A.scanl(M:add_weighted(W, _), Z, 0),
+    Vs = A.scan(M:add_weighted(W, _), Z, 0),
     scan_op(Vs, scan(Step, Externals, _, _, _, _, _)),
     once(( member(E, Externals), reads(E, W) )),
     once(( member(E1, Externals), reads(E1, A) )),
     \+ ( member(E2, Externals), reads(E2, Step) ),
-    Ws = A.scanl(M:add_iota(Iota), Z, 0),
+    Ws = A.scan(M:add_iota(Iota), Z, 0),
     scan_op(Ws, scan(_, Externals2, _, _, _, _, _)),
     once(( member(E3, Externals2), reads(E3, Iota) )).
 
@@ -2513,7 +2552,7 @@ test('the states are in the range of the scan', [timeout(30)]) :-
     context_module(M),
     matrix(A),
     zeros([4], Z),
-    Vs = A.scanl(M:add_weighted(1, State), Z, 0),
+    Vs = A.scan(M:add_weighted(1, State), Z, 0),
     array:range_min_max(A.range, Min0, Max0),
     R = Vs.range,
     { R =< 5 },
@@ -2527,7 +2566,7 @@ test('a loop index is never bound, a reference names its scan',
     context_module(M),
     matrix(A),
     zeros([4], Z),
-    Vs = A.scanl(M:add, Z, 0),
+    Vs = A.scan(M:add, Z, 0),
     scan_op(Vs, scan(_, _, _, _, _, K, Ref)),
     \+ K = 0,
     get_attr(Ref, array_ref, Named),
@@ -2540,7 +2579,7 @@ test('a scan of an unknown length', [timeout(30)]) :-
     N in 2..5,
     A = array{}.empty([N, 4]),
     Z = array{}.zeros([4], [dtype(float)]),
-    Vs = A.scanl(M:add, Z, 0),
+    Vs = A.scan(M:add, Z, 0),
     N = 3,
     Vs.shape() == [4, 4].
 
@@ -2548,7 +2587,7 @@ test('an unqualified step is looked up in array',
      [throws(error(existence_error(procedure, array:add/3), _)), timeout(30)]) :-
     matrix(A),
     zeros([4], Z),
-    _ = A.scanl(add, Z, 0).
+    _ = A.scan(add, Z, 0).
 
 devices(D) :-
     member(D, [prolog, c]).
@@ -2570,15 +2609,15 @@ test('a scan computes its states in order', [forall(devices(D)), timeout(60)]) :
     context_module(M),
     A = array{}.fromlist([[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]], [device(D)]),
     Z4 = array{}.zeros([4], [dtype(integer), device(D)]),
-    V0 = A.scanl(M:add, Z4, 0),
+    V0 = A.scan(M:add, Z4, 0),
     V0.tolist() == [[0, 0, 0, 0], [1, 2, 3, 4], [6, 8, 10, 12], [15, 18, 21, 24]],
     V0.shrink([1-4, 0-4]).tolist() == A.cumsum(0).tolist(),
     Z3 = array{}.zeros([3], [dtype(integer), device(D)]),
-    V1 = A.scanl(M:add, Z3, 1),
+    V1 = A.scan(M:add, Z3, 1),
     V1.tolist() == [[0, 1, 3, 6, 10], [0, 5, 11, 18, 26], [0, 9, 19, 30, 42]],
-    S = A.scanl(M:sum_step, array{}.zeros([], [dtype(integer), device(D)]), 0),
+    S = A.scan(M:sum_step, array{}.zeros([], [dtype(integer), device(D)]), 0),
     S.tolist() == [0, 10, 36, 78],
-    Q = A.scanl(M:square_step, array{}.zeros([2, 2], [dtype(integer), device(D)]), 0),
+    Q = A.scan(M:square_step, array{}.zeros([2, 2], [dtype(integer), device(D)]), 0),
     Q.index([3]).tolist() == [[15, 18], [21, 24]].
 
 test('a state of a vector updated by a matrix', [forall(devices(D)), timeout(60)]) :-
@@ -2586,7 +2625,7 @@ test('a state of a vector updated by a matrix', [forall(devices(D)), timeout(60)
     Mat = array{}.fromlist([[0.5, 0.25], [0.0, 2.0]], [device(D)]),
     X = array{}.fromlist([[1.0, 0.0], [0.0, 1.0], [2.0, 3.0]], [device(D)]),
     Z = array{}.zeros([2], [dtype(float), device(D)]),
-    Vs = X.scanl(M:affine_step(Mat), Z, 0),
+    Vs = X.scan(M:affine_step(Mat), Z, 0),
     Vs.tolist() == [[0.0, 0.0], [1.0, 0.0], [0.5, 1.0], [2.5, 5.0]].
 
 test('what a step computes out of the loop is computed once', [timeout(60)]) :-
@@ -2594,9 +2633,9 @@ test('what a step computes out of the loop is computed once', [timeout(60)]) :-
     A = array{}.fromlist([[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]]),
     Z = array{}.zeros([4], [dtype(integer)]),
     W @= Z + 2,
-    Vs = A.scanl(M:add_weighted(W, _), Z, 0),
+    Vs = A.scan(M:add_weighted(W, _), Z, 0),
     Vs.tolist() == [[0, 0, 0, 0], [2, 4, 6, 8], [12, 16, 20, 24], [30, 36, 42, 48]],
-    Rs = A.scanl(M:random_step(_), array{}.zeros([4], [dtype(float)]), 0),
+    Rs = A.scan(M:random_step(_), array{}.zeros([4], [dtype(float)]), 0),
     Rs.tolist() = [_, R1, R2, _],
     maplist([X1, X2]>>(abs(X2 - 2*X1) =< 1.0e-12), R1, R2).
 
@@ -2605,7 +2644,7 @@ test('a stand-in read out of its scan fails loudly',
     context_module(M),
     A = array{}.fromlist([[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]]),
     Z = array{}.zeros([4], [dtype(integer)]),
-    _ = A.scanl(M:add_weighted(1, State), Z, 0),
+    _ = A.scan(M:add_weighted(1, State), Z, 0),
     _ = State.tolist().
 
 test('a scan of a length known after it is built', [timeout(60)]) :-
@@ -2613,7 +2652,7 @@ test('a scan of a length known after it is built', [timeout(60)]) :-
     N in 2..5,
     A0 = array{}.fromlist([[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]]),
     A1 = A0.reshape([N, 4]),
-    Vs = A1.scanl(M:add, array{}.zeros([4], [dtype(integer)]), 0),
+    Vs = A1.scan(M:add, array{}.zeros([4], [dtype(integer)]), 0),
     N = 3,
     Vs.index([3]).tolist() == [15, 18, 21, 24].
 
@@ -2622,11 +2661,11 @@ test('a batch of scans is a scan of each element',
     context_module(M),
     A = array{}.arange(24, [device(D)]).reshape([2, 3, 4]),
     Z = array{}.zeros([2, 4], [dtype(integer), device(D)]),
-    Vs = A.scanl(M:add, Z, 1, [batched_dims([0])]),
+    Vs = A.scan(M:add, Z, 1, [batched_dims([0])]),
     Vs.shape() == [2, 4, 4],
     Z1 = array{}.zeros([4], [dtype(integer), device(D)]),
     findall(L, ( between(0, 1, B),
-                 Vs1 = A.index([B]).scanl(M:add, Z1, 0),
+                 Vs1 = A.index([B]).scan(M:add, Z1, 0),
                  L = Vs1.tolist() ), Expected),
     Vs.tolist() == Expected.
 
@@ -2634,14 +2673,14 @@ test('batched dims come first', [forall(devices(D)), timeout(60)]) :-
     context_module(M),
     A = array{}.fromlist([[1, 2], [3, 4], [5, 6]], [device(D)]),
     Z = array{}.zeros([2], [dtype(integer), device(D)]),
-    Vs = A.scanl(M:add, Z, 0, [batched_dims([1])]),
+    Vs = A.scan(M:add, Z, 0, [batched_dims([1])]),
     Vs.tolist() == [[0, 1, 4, 9], [0, 2, 6, 12]].
 
 test('a scan runs a work item per element of its batch', [timeout(60)]) :-
     context_module(M),
     A = array{}.arange(24).reshape([2, 3, 4]),
     Z = array{}.zeros([2, 4], [dtype(integer)]),
-    Vs = A.scanl(M:add, Z, 1, [batched_dims([0])]),
+    Vs = A.scan(M:add, Z, 1, [batched_dims([0])]),
     array:graph_schedule([Vs], Schedule0),
     fusion:fuse([Vs], Schedule0, Schedule),
     precision:choose_formats(Schedule, [Vs], inf),
@@ -2658,7 +2697,7 @@ test('batched dims are distinct axes of the scanned array, not its axis',
     context_module(M),
     A = array{}.arange(24).reshape([2, 3, 4]),
     Z = array{}.zeros([2, 4], [dtype(integer)]),
-    _ = A.scanl(M:add, Z, 1, [batched_dims(Dims)]).
+    _ = A.scan(M:add, Z, 1, [batched_dims(Dims)]).
 
 % A step of a Cholesky factorization, right-looking: X is the row k of the
 % identity, U the upper triangle of ones. The column k of the factor is the
@@ -2706,7 +2745,7 @@ test('a batch of Cholesky factorizations', [forall(devices(D)), timeout(60)]) :-
     U = array{}.fromlist([[1.0, 1.0, 1.0], [0.0, 1.0, 1.0], [0.0, 0.0, 1.0]],
                          [device(D)]),
     Xs = Eye.reshape([1, 3, 3]).expand([2, 3, 3]),
-    Vs = Xs.scanl(M:cholesky_step(U), As, 1, [batched_dims([0])]),
+    Vs = Xs.scan(M:cholesky_step(U), As, 1, [batched_dims([0])]),
     Vs.tolist() = [States1, States2],
     cholesky_factor(States1, L1),
     cholesky_factor(States2, L2),
@@ -2734,7 +2773,7 @@ test('a scan of two arrays steps through both', [forall(devices(D)), timeout(60)
     A = array{}.fromlist([[1, 2], [3, 4], [5, 6]], [device(D)]),
     B = array{}.fromlist([[1, 0], [2, 1], [0, 3]], [device(D)]),
     Z = array{}.zeros([2], [dtype(integer), device(D)]),
-    Vs = A.scanl(M:add_product, B, Z, 0, []),
+    Vs = A.scan(M:add_product, B, Z, 0, []),
     Vs.tolist() == [[0, 0], [1, 0], [7, 4], [7, 22]].
 
 test('scanned arrays of different shapes', [forall(devices(D)), timeout(60)]) :-
@@ -2744,7 +2783,7 @@ test('scanned arrays of different shapes', [forall(devices(D)), timeout(60)]) :-
                              [[0.5, 0.25], [0.0, 2.0]],
                              [[2.0, 0.0], [1.0, 1.0]]], [device(D)]),
     Z = array{}.zeros([2], [dtype(float), device(D)]),
-    Vs = X.scanl(M:time_affine, Mats, Z, 0, []),
+    Vs = X.scan(M:time_affine, Mats, Z, 0, []),
     Vs.tolist() == [[0.0, 0.0], [1.0, 0.0], [0.5, 1.0], [3.0, 4.5]].
 
 test('a batch of scans of two arrays', [forall(devices(D)), timeout(60)]) :-
@@ -2752,12 +2791,12 @@ test('a batch of scans of two arrays', [forall(devices(D)), timeout(60)]) :-
     A = array{}.arange(12, [device(D)]).reshape([3, 2, 2]),
     B @= 12 - A,
     Z = array{}.zeros([2, 2], [dtype(integer), device(D)]),
-    Vs = A.scanl(M:add_product, B, Z, 0, [batched_dims([1])]),
+    Vs = A.scan(M:add_product, B, Z, 0, [batched_dims([1])]),
     Z1 = array{}.zeros([2], [dtype(integer), device(D)]),
     findall(L, ( between(0, 1, I),
                  A1 = A.index([:, I]),
                  B1 = B.index([:, I]),
-                 Vs1 = A1.scanl(M:add_product, B1, Z1, 0, []),
+                 Vs1 = A1.scan(M:add_product, B1, Z1, 0, []),
                  L = Vs1.tolist() ), Expected),
     Vs.tolist() == Expected.
 
@@ -2766,19 +2805,61 @@ test('a scan of more arrays, values among them', [timeout(60)]) :-
     A = array{}.fromlist([1, 2, 3]),
     B = array{}.fromlist([10, 20, 30]),
     zeros([], Z),
-    Vs3 = A.scanl(M:add_weighted3, B, [2, 0, 1], Z, 0, []),
+    Vs3 = A.scan(M:add_weighted3, B, [2, 0, 1], Z, 0, []),
     Vs3.tolist() == [0, 21, 23, 56],
-    Vs4 = A.scanl(M:add_weighted4, B, [2, 0, 1], A, Z, 0, []),
+    Vs4 = A.scan(M:add_weighted4, B, [2, 0, 1], A, Z, 0, []),
     Vs4.tolist() == [0, 20, 20, 50].
 
 test('scanned arrays have the same length and batch', [timeout(60)]) :-
     context_module(M),
     A = array{}.fromlist([[1, 2], [3, 4], [5, 6]]),
     Z = array{}.zeros([2], [dtype(integer)]),
-    \+ _ = A.scanl(M:add_product, A.shrink([0-2, 0-2]), Z, 0, []),
+    \+ _ = A.scan(M:add_product, A.shrink([0-2, 0-2]), Z, 0, []),
     Z3 = array{}.zeros([3], [dtype(integer)]),
-    \+ _ = A.scanl(M:add_product, A.shrink([0-2, 0-2]), Z3, 1,
+    \+ _ = A.scan(M:add_product, A.shrink([0-2, 0-2]), Z3, 1,
                     [batched_dims([0])]).
+
+test('a fold is the last state of its scan', [forall(devices(D)), timeout(60)]) :-
+    context_module(M),
+    A = array{}.arange(24, [device(D)]).reshape([2, 3, 4]),
+    Z = array{}.zeros([2, 4], [dtype(integer), device(D)]),
+    V = A.fold(M:add, Z, 1, [batched_dims([0])]),
+    V.shape() == [2, 4],
+    Vs = A.scan(M:add, Z, 1, [batched_dims([0])]),
+    V.tolist() == Vs.index([:, 3]).tolist(),
+    Z3 = array{}.zeros([3], [dtype(integer), device(D)]),
+    V1 = A.index([1]).fold(M:add, Z3, 1),
+    V1.tolist() == [54, 70, 86].
+
+% A step of a left-looking Cholesky factorization: X is the row k of the
+% identity, U the upper triangle of ones. The column k of the factor is the
+% column k of A less what the columns of L before k give, from row k, over
+% the square root of its pivot; the columns from k of L are still 0.
+cholesky_left_step(U, X, A, L, L1) :-
+    V @= A @ X - L @ (X @ L),
+    Pivot @= X @ V,
+    Col @= V * (X @ U) / sqrt(Pivot),
+    L.shape() = [Dim, Dim],
+    L1 @= L + Col.reshape([Dim, 1]) * X.reshape([1, Dim]).
+
+test('a batch of left-looking Cholesky factorizations',
+     [forall(devices(D)), timeout(60)]) :-
+    context_module(M),
+    As = array{}.fromlist([[[4.0, 2.0, 2.0], [2.0, 5.0, 3.0], [2.0, 3.0, 6.0]],
+                           [[9.0, 3.0, 0.0], [3.0, 5.0, 2.0], [0.0, 2.0, 2.0]]],
+                          [device(D)]),
+    Eye = array{}.fromlist([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                           [device(D)]),
+    U = array{}.fromlist([[1.0, 1.0, 1.0], [0.0, 1.0, 1.0], [0.0, 0.0, 1.0]],
+                         [device(D)]),
+    Xs = Eye.reshape([1, 3, 3]).expand([2, 3, 3]),
+    % each step reads the matrix of its element of the batch
+    Ass = As.reshape([2, 1, 3, 3]).expand([2, 3, 3, 3]),
+    L0 = array{}.zeros([2, 3, 3], [dtype(float), device(D)]),
+    L = Xs.fold(M:cholesky_left_step(U), Ass, L0, 1, [batched_dims([0])]),
+    L.tolist() = [L1, L2],
+    close_matrices(L1, [[2, 0, 0], [1, 2, 0], [1, 1, 2]]),
+    close_matrices(L2, [[3, 0, 0], [1, 2, 0], [0, 1, 1]]).
 
 :- end_tests(array_scan).
 
@@ -3040,6 +3121,12 @@ test('derived comparison op returns boolean dtype') :-
 :- end_tests(array_comparison).
 
 :- begin_tests(c_dtype).
+
+test('integer bounds given as floats bound their integers', [timeout(5)]) :-
+    kernel_c:c_dtype(integer, -1.0e16, 1.0e16, D),
+    D == int64,
+    kernel_c:c_dtype(integer, 0.0, 200.5, D1),
+    D1 == uint8.
 
 test('cast integer to float') :-
     A = array{}.fromlist([1, 2, 3], [device(c)]),
