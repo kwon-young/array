@@ -71,8 +71,8 @@ inherited(A<B, _, I) => I = (A.precision + B.precision > 0).
 inherited(where(C, A, B), _, I) =>
    I = max(A.precision, B.precision) + (C.precision > 0)*abs(A.range - B.range).
 inherited(sin(A), _, I) => I = A.precision.
-% |sqrt(x) - sqrt(y)| =< sqrt(|x - y|)
-inherited(sqrt(A), _, I) => I = sqrt(A.precision).
+inherited(A**B, _, I) =>
+   power_error(A, B, I).
 % |log(x + e) - log(x)| =< e / (x - e), unbounded when the range reaches e
 inherited(log(A), _, I) => I = A.precision / (A.range - A.precision).
 inherited(float(A), _, I) => I = A.precision.
@@ -83,6 +83,38 @@ inherited(reduce(+, Axes, A), _, I) =>
    I = N*A.precision.
 % max is 1-Lipschitz
 inherited(reduce(<, _, A), _, I) => I = A.precision.
+
+% power_error(+A, +B, -I): I bounds the error of A**B from the errors of A
+% and B. With an exact exponent or base, by the mean value theorem between
+% the computed and the exact operand, which differ by its precision; a
+% constant is taken as exact. The base of a
+% real power is >= 0, as in its range.
+% An integer exponent N: |N|*|x|**(N-1) grows with |x| when N > 1, and
+% shrinks with |x| when N < 0, unbounded when the range reaches the error.
+power_error(A, B, I), array:constant_value(B, Y), Y =:= truncate(Y) =>
+   N is truncate(Y),
+   integer_power_error(N, A, I).
+% 0 < y < 1: |x**y - x'**y| =< |x - x'|**y
+power_error(A, B, I), array:constant_value(B, Y), Y > 0, Y < 1 =>
+   I = A.precision**Y.
+power_error(A, B, I), array:constant_value(B, Y), Y > 1 =>
+   I = Y*(max(A.range, 0) + A.precision)**(Y - 1)*A.precision.
+power_error(A, B, I), array:constant_value(B, Y), Y < 0 =>
+   I = abs(Y)*max(A.range - A.precision, 0)**(Y - 1)*A.precision.
+% A base b > 0: |b**y - b**y'| =< |log(b)|*max(b**y, b**y')*|y - y'|
+power_error(A, B, I), array:constant_value(A, Base), Base > 0 =>
+   I = abs(log(Base))*max(Base**(B.range + B.precision),
+                          Base**(B.range - B.precision))*B.precision.
+% no error model for a power of two inexact operands: unknown
+power_error(_, _, I) =>
+   I::real(0, inf).
+
+integer_power_error(0, _, I) =>
+   I = 0.
+integer_power_error(N, A, I), N > 0 =>
+   I = N*(abs(A.range) + A.precision)**(N - 1)*A.precision.
+integer_power_error(N, A, I) =>
+   I = abs(N)*max(abs(A.range) - A.precision, 0)**(N - 1)*A.precision.
 
 % Rounding error added by storing an op's result.
 rounding(_, M, _, R), \+ get_dict(dtype, M, float) => R = 0.
@@ -328,6 +360,40 @@ test('comparison of inexact values may flip') :-
     sup_precision(D, SD),
     SC =:= 1,
     SD =:= 0.
+
+test('a division is unbounded where the divisor reaches its error',
+     [timeout(60)]) :-
+    A = array{}.fromlist([-1.0, 1.0], [precision(0.01)]),
+    B = array{}.fromlist([1.0, 2.0], [precision(0.01)]),
+    C @= 1 / A,
+    D @= 1 / B,
+    sup_precision(C, SC),
+    sup_precision(D, SD),
+    SC =:= inf,
+    % 0.01 / (1 - 0.01)**2
+    SD > 0.0102,
+    SD < 0.01021.
+
+test('a square root has the error of its root', [timeout(60)]) :-
+    A = array{}.fromlist([0.0, 4.0], [precision(0.01)]),
+    C @= sqrt(A),
+    sup_precision(C, S),
+    S >= 0.1,
+    S < 0.1001.
+
+test('the error of exp grows with its exponent', [timeout(60)]) :-
+    A = array{}.fromlist([0.0, 1.0], [precision(0.01)]),
+    C @= exp(A),
+    sup_precision(C, S),
+    % e**1.01 * 0.01
+    S > 0.02745,
+    S < 0.02746.
+
+test('a power of two inexact operands has an unknown error', [timeout(60)]) :-
+    A = array{}.fromlist([1.0, 2.0], [precision(0.01)]),
+    C @= A ** A,
+    sup_precision(C, S),
+    S =:= inf.
 
 test('log reaching the error is unbounded') :-
     A = array{}.fromlist([0.0, 1.0], [precision(0.01)]),

@@ -91,8 +91,9 @@ reference:
   and pushing one over a zero-size axis fails. `aggregate_all(max(...))`
   failing on an empty domain is then never observed.
 
-Value expressions use `+`, `-`, `*`, `/` (of floats only: C truncates a
-division of integers), `sin`, `log`, `sqrt`, constants, `float`,
+Value expressions use `+`, `-`, `*`, `/` and `**` (of floats only: C
+truncates a division of integers, and a power of integers may be a rational
+in Prolog), `sin`, `log`, `sqrt`, constants, `float`,
 `integer` and `random_float`. They appear in `is`, and in every other value
 position: a `cast`'s input, a `store`'s value and an aggregate's template, as
 in `cast(float32, VA*VB, P)` or `aggregate_all(sum(VA*VB), …)`. A variable

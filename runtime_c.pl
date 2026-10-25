@@ -34,7 +34,7 @@ array:expression_op(c, _*_).
 array:expression_op(c, _<_).
 array:expression_op(c, sin(_)).
 array:expression_op(c, log(_)).
-array:expression_op(c, sqrt(_)).
+array:expression_op(c, _**_).
 array:expression_op(c, where(_, _, _)).
 array:expression_op(c, float(_)).
 array:expression_op(c, integer(_)).

@@ -955,8 +955,8 @@ push(sin(A), C) :-
    push(elementwise(sin, [A.as(float)]), C).
 push(log(A), C) :-
    push(elementwise(log, [A.as(float)]), C).
-push(sqrt(A), C) :-
-   push(elementwise(sqrt, [A.as(float)]), C).
+push(A**B, C) :-
+   push(elementwise(**, [A.as(float), B.as(float)]), C).
 push(elementwise(Op, Args), C) :-
    (  dicts_same_value_for_key(Args, device, _Device)
    -> true
@@ -971,19 +971,11 @@ push(elementwise(Op, Args), C) :-
    ;  maplist(get_dict(dtype), Args, DTypes),
       foldl(broadcast_dtype, DTypes, integer, FinalDType)
    ),
-   maplist(get_dict(range), Args, Ranges),
-   (  (Op == float ; Op == integer)
-   -> Args = [M],
-      range_min_max(M.range, Min, Max),
-      cast(FinalDType, Min, Min1),
-      cast(FinalDType, Max, Max1),
-      Range::real(Min1, Max1)
-   ;  Expr =.. [Op | Ranges],
-      {Range is Expr}
-   ),
+   elementwise_range(Op, Args, FinalDType, Range),
    broadcast(Args, [H | T]),
    Term =.. [Op, H | T],
    C = H.empty(H.shape(), [range(Range), dtype(FinalDType)]).push_op(Term).
+
 % where(C, A, B) is A where C holds, else B: C is read as a boolean.
 push(where(C0, A, B), D) :-
    C = C0.as(boolean),
@@ -1010,6 +1002,62 @@ push(solve(A, B), X) :-
    ;  domain_error(square, A.shape())
    ),
    X = A.empty(B.shape(), [range(Range), dtype(float)]).push_op(solve(A, B)).
+% elementwise_range(+Op, +Args, +DType, -Range)
+% Range encloses the values of Op over the ranges of Args, of DType.
+elementwise_range(Op, [M], DType, Range), memberchk(Op, [float, integer]) =>
+   range_min_max(M.range, Min, Max),
+   cast(DType, Min, Min1),
+   cast(DType, Max, Max1),
+   Range::real(Min1, Max1).
+% A power of an integer exponent N, known when it is pushed, is of any base.
+elementwise_range(**, [A, B], _, Range), integer_exponent(B, N) =>
+   {Range is A.range**N}.
+% A real power of a base >= 0: a negative base to a constant that is no
+% integer has none, as sqrt.
+elementwise_range(**, [A, B], _, Range), real_power(A, B) =>
+   {Range is max(A.range, 0)**B.range}.
+% Otherwise, a negative base to an integer in float is a power too, of
+% either sign: the range is the hull of +-|A|**B. clpBNR only keeps a
+% negative base for an integer literal, so the hull is computed apart and
+% narrows the range only.
+elementwise_range(**, [A, B], _, Range) =>
+   Magnitude::real,
+   {Magnitude is abs(A.range)**B.range},
+   Sign::real(-1, 1),
+   Range::real,
+   {Range <= Sign*Magnitude}.
+elementwise_range(Op, Args, _, Range) =>
+   maplist(get_dict(range), Args, Ranges),
+   Expr =.. [Op | Ranges],
+   {Range is Expr}.
+
+% integer_exponent(+B, -N): every element of B is the integer N.
+integer_exponent(B, N) :-
+   range_min_max(B.range, Min, Max),
+   Min =:= Max,
+   Min =:= truncate(Min),
+   N is truncate(Min).
+
+real_power(A, _) :-
+   range_min_max(A.range, Min, _),
+   Min >= 0,
+   !.
+real_power(_, B) :-
+   constant_value(B, Y),
+   Y =\= truncate(Y).
+
+% constant_value(+A, -Value): A is a constant Value, or a view or a float
+% of one.
+constant_value(A, Value), get_dict(op, A, constant(Value0)) =>
+   Value = Value0.
+constant_value(A, Value), get_dict(op, A, view(P)) =>
+   constant_value(P, Value).
+constant_value(A, Value), get_dict(op, A, float(P)) =>
+   constant_value(P, Value0),
+   Value is float(Value0).
+constant_value(_, _) =>
+   fail.
+
 dicts_same_value_for_key(List, Key, Value) :-
    maplist({Value, Key}/[Dict]>>get_dict(Key, Dict, Value), List).
 
@@ -1181,9 +1229,17 @@ eval_(cos(A), C) =>
 eval_(log(A), C) =>
    eval_(A, A1),
    push(log(A1), C).
-eval_(sqrt(A), C) =>
+eval_(A**B, C) =>
    eval_(A, A1),
-   push(sqrt(A1), C).
+   eval_(B, B1),
+   push(A1**B1, C).
+eval_(A/B, C) =>
+   eval_(A * B ** -1, C).
+eval_(sqrt(A), C) =>
+   eval_(A ** 0.5, C).
+eval_(exp(A), C) =>
+   E is e,
+   eval_(E ** A, C).
 eval_(where(Cond, A, B), C) =>
    eval_(Cond, Cond1),
    eval_(A, A1),
@@ -2762,6 +2818,48 @@ test('sqrt of float and integer arrays') :-
     D @= sqrt(B),
     C.tolist() == [1.0, 2.0],
     D.tolist() == [1.0, 2.0].
+
+test('a division is a product by a power -1, of floats',
+     [forall(member(D, [prolog, c])), timeout(60)]) :-
+    A = array{}.fromlist([1, 2, 3], [device(D)]),
+    B = array{}.fromlist([2, 4, -8], [device(D)]),
+    C @= A / B,
+    array{dtype: float} :< C,
+    C.tolist() == [0.5, 0.5, -0.375].
+
+test('an integer power is of any base', [forall(member(D, [prolog, c])), timeout(60)]) :-
+    A = array{}.fromlist([-2.0, 3.0], [device(D)]),
+    C @= A ** 3,
+    C.tolist() == [-8.0, 27.0],
+    % outward rounded
+    range_min_max(C.range, Min, Max),
+    abs(Min + 8) < 1.0e-12,
+    abs(Max - 27) < 1.0e-12,
+    I @= A ** -1,
+    range_min_max(I.range, IMin, IMax),
+    IMin =:= -inf,
+    IMax =:= inf.
+
+test('a negative base to integers in float keeps its sign',
+     [forall(member(D, [prolog, c])), timeout(60)]) :-
+    A = array{}.fromlist([-2.0, 3.0], [device(D)]),
+    B = array{}.fromlist([3.0, 2.0], [device(D)]),
+    I = array{}.fromlist([3, 2], [device(D)]),
+    C @= A ** B,
+    E @= A ** I,
+    C.tolist() == [-8.0, 9.0],
+    E.tolist() == [-8.0, 9.0],
+    range_min_max(C.range, Min, _),
+    Min =< -8,
+    range_min_max(A.range, AMin, _),
+    AMin =:= -2.
+
+test('exp is a power of e', [forall(member(D, [prolog, c])), timeout(60)]) :-
+    A = array{}.fromlist([0.0, 1.0], [device(D)]),
+    C @= exp(A),
+    C.tolist() = [One, E],
+    One =:= 1,
+    abs(E - e) =< 1.0e-15.
 
 test('derived comparisons are boolean') :-
     A = array{}.fromlist([1, 2, 3], [device(c)]),

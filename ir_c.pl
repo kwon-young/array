@@ -256,6 +256,10 @@ expr(Number, _, C), number(Number) =>
    C = Number.
 expr(random_float, _, C) =>
    C = cast(rand(), double) / 'RAND_MAX'.
+expr(A ** B, Ctx, C) =>
+   expr(A, Ctx, CA),
+   expr(B, Ctx, CB),
+   C = pow(CA, CB).
 expr(Expr, Ctx, C), compound(Expr) =>
    compound_name_arguments(Expr, Name, Args),
    maplist(expr_of(Ctx), Args, CArgs),

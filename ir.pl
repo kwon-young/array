@@ -266,16 +266,20 @@ iteration(K, env(_, Indices, _)), var(K), member(iteration(K0), Indices), K0 == 
 iteration(K, _) =>
    ir_error(not_an_iteration, K).
 
-% A division is of floats: C truncates integers, Prolog would not.
-division_format(Expr, Format), division(Expr), \+ float_format(Format) =>
+% A division or a power is of floats: C truncates a division of integers,
+% Prolog would not, and a power of integers may be a rational in Prolog.
+division_format(Expr, Format), float_op(Expr, /), \+ float_format(Format) =>
    ir_error(integer_division, Expr).
+division_format(Expr, Format), float_op(Expr, **), \+ float_format(Format) =>
+   ir_error(integer_power, Expr).
 division_format(_, _) =>
    true.
 
-division(Expr) :-
+% Expr has a sub-expression of the binary operator Op.
+float_op(Expr, Op) :-
    sub_term(T, Expr),
    compound(T),
-   compound_name_arity(T, /, 2),
+   compound_name_arity(T, Op, 2),
    !.
 
 known_buffer(B-F, env(Buffers, _, _)), member(B0-F0, Buffers), B0 == B =>
@@ -387,6 +391,7 @@ value_op(_ + _).
 value_op(_ - _).
 value_op(_ * _).
 value_op(_ / _).
+value_op(_ ** _).
 value_op(- _).
 value_op(sin(_)).
 value_op(log(_)).
@@ -786,6 +791,8 @@ broken(not_a_binder, (kernel(O-int32) :-
    iterate((between(0, 1, I), between(0, 1, J)), store(O-int32, I*2 + J, 1)))).
 broken(integer_division, (kernel(O-int32, A-int32) :-
    forall(between(0, 1, I), (load(A-int32, I, V), W is V / 2, store(O-int32, I, W))))).
+broken(integer_power, (kernel(O-int32, A-int32) :-
+   forall(between(0, 1, I), (load(A-int32, I, V), W is V ** 2, store(O-int32, I, W))))).
 
 test('a broken kernel is rejected', [forall(broken(Reason, Kernel))]) :-
    catch(ir_verify(Kernel), error(ir_error(Got, _), _), true),
