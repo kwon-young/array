@@ -388,6 +388,9 @@ case(index_put_arrays, [[[1.5, 2.5, 3.5], [4.5, 5.5, 6.5], [7.5, 8.5, 9.5]], [0.
 case(power, [[-2.0, 0.5, 3.0], [4, -1, 2]]).
 case(batched_scan, [[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]], [[0.5, 0.25], [0.0, 2.0]]]).
 case(scan, [[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]], [[0.5, 0.25], [0.0, 2.0]]]).
+case(scan2, [[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]],
+             [[[0.5, 0.25], [0.0, 2.0]], [[1.0, 0.0], [1.0, 1.0]],
+              [[0.0, 1.0], [2.0, 0.5]]]]).
 
 graph(chain, [A], C) :-
    C @= sin(A + A) * A.
@@ -440,6 +443,13 @@ graph(batched_scan, [A, Mat], C) :-
    context_module(M),
    C = A.scanl(M:affine_sqrt(Mat), [[0.0, 0.0], [1.0, 1.0]], 0,
                [batched_dims([1])]).
+
+graph(scan2, [A, Mats], C) :-
+   context_module(M),
+   C = A.scanl(M:time_affine_sqrt, Mats, [0.0, 0.0], 0, []).
+
+time_affine_sqrt(X, Mat, V0, V1) :-
+   affine_sqrt(Mat, X, V0, V1).
 
 affine_sqrt(Mat, X, V0, V1) :-
    V1 @= Mat @ V0 + sqrt(X).

@@ -189,66 +189,92 @@ M.randn(Shape, Options) := Dict :-
 % Vs = Xs.scanl(Mod:Goal, V0, Axis): as scanl/4 of library(apply) along the
 % axis Axis of Xs, Vs stacks the states [V0, V1, ..., Vn] along Axis, with
 % call(Mod:Goal, X, V0, V1) for each slice X of Xs along Axis.
+% Vs = Xs.scanl(Mod:Goal, Ys, V0, Axis, Options), up to
+% Xs.scanl(Mod:Goal, Ys, Zs, Ws, V0, Axis, Options): as scanl/5 to scanl/7,
+% with call(Mod:Goal, X, Y, V0, V1) and so on for the slices at the same
+% index of each scanned array. They all have the same length along Axis.
 % V0 is the initial state, and gives every state its shape and dtype: a
 % state V1 is cast to them when nothing is lost (as by index_put/2), else
-% the scan fails.
-% Goal is called once, on stand-ins: X, the slice of Xs at the step of the
-% scan, and V0, the state before the step. Its solutions are the
-% solutions of the scan. What it computes from the stand-ins is the step,
-% run at each index of the loop; what it computes without them is
-% computed once, out of the loop.
+% the scan fails. V0 and the scanned arrays after Xs may be values, on the
+% device of Xs.
+% Goal is called once, on stand-ins: the slices at the step of the scan,
+% and V0, the state before the step. Its solutions are the solutions of the
+% scan. What it computes from the stand-ins is the step, run at each index
+% of the loop; what it computes without them is computed once, out of the
+% loop.
 % Goal must be module qualified: the functional notation calls this method
 % through '.'/3, which would qualify it with array.
 %
 % Options:
-%   * batched_dims(Dims): the axes Dims of Xs are a batch of independent
-%     scans, run in parallel. They come first in V0 and in Vs, in the
-%     order of Dims; Goal sees an element of the batch, without them.
+%   * batched_dims(Dims): the axes Dims of the scanned arrays are a batch
+%     of independent scans, run in parallel. They come first in V0 and in
+%     Vs, in the order of Dims; Goal sees an element of the batch, without
+%     them. The scanned arrays have the same batch.
 :- meta_predicate scanl(3, +, +, +, -).
-M.scanl(Mod:Goal, V00, Axis) := Vs :-
-   Vs = M.scanl(Mod:Goal, V00, Axis, []).
+M.scanl(Goal, V0, Axis) := Vs :-
+   scan(Goal, [M], V0, Axis, [], Vs).
 
 :- meta_predicate scanl(3, +, +, +, +, -).
-M.scanl(Mod:Goal, V00, Axis, Options) := Vs :-
-   option(batched_dims(Dims), Options, []),
-   batch_first(M, Dims, Axis, M1, Axis1),
+M.scanl(Goal, V0, Axis, Options) := Vs :-
+   scan(Goal, [M], V0, Axis, Options, Vs).
+
+:- meta_predicate scanl(4, +, +, +, +, +, -).
+M.scanl(Goal, Ys, V0, Axis, Options) := Vs :-
+   scan(Goal, [M, Ys], V0, Axis, Options, Vs).
+
+:- meta_predicate scanl(5, +, +, +, +, +, +, -).
+M.scanl(Goal, Ys, Zs, V0, Axis, Options) := Vs :-
+   scan(Goal, [M, Ys, Zs], V0, Axis, Options, Vs).
+
+:- meta_predicate scanl(6, +, +, +, +, +, +, +, -).
+M.scanl(Goal, Ys, Zs, Ws, V0, Axis, Options) := Vs :-
+   scan(Goal, [M, Ys, Zs, Ws], V0, Axis, Options, Vs).
+
+% scan(+Goal, +Xss, +V0, +Axis, +Options, -Vs): Vs scans the arrays Xss,
+% the first giving the device of the others and of V0.
+scan(Mod:Goal, [M | Ys0], V00, Axis, Options, Vs) :-
+   maplist([Y0, Y]>>value_array(Y0, M, Y), Ys0, Ys),
    value_array(V00, M, V0),
+   option(batched_dims(Dims), Options, []),
+   maplist(batch_first(Dims, Axis), [M | Ys], Ms, Axes1),
+   % the axis is where the batch moved it, in each scanned array
+   Axes1 = [Axis1 | _],
    length(Dims, NB),
    length(BatchShape, NB),
-   append(BatchShape, Rest, M1.shape()),
    append(BatchShape, StateShape, V0.shape()),
    % the axis of an element of the batch
    AxisE is Axis1 - NB,
-   nth0(AxisE, Rest, N, SliceShape),
    loop_index(K),
    length(Batch, NB),
    maplist(loop_index, Batch),
    % the range and precision of Vs, which the state at a step shares
    Range::real(-inf, inf),
    Precision::real(0, inf),
-   index_items(Batch, AxisE, K, Rest, SliceItems),
-   stand_in_slice(M1, SliceItems, SliceShape, X),
+   maplist(stand_in_slice(Batch, BatchShape, AxisE, K, N), Ms, Xs),
    N1 #= N + 1,
    nth0(AxisE, ElementShape, N1, StateShape),
    index_items(Batch, AxisE, K, ElementShape, StateItems),
    stand_in_state(V0, StateShape, StateItems, Ref, Range, Precision, State),
-   call(Mod:Goal, X, State, V1),
+   append(Xs, [State, V1], StepArgs),
+   Step =.. [call, Mod:Goal | StepArgs],
+   call(Step),
    upcast(V1, V0.dtype, V2),
    V3 = V2.expand(StateShape),
-   independent_nodes(V3, [X, State], Independent),
-   distinct_nodes([M1, V0 | Independent], Externals),
+   independent_nodes(V3, [State | Xs], Independent),
+   append(Ms, [V0 | Independent], Externals0),
+   distinct_nodes(Externals0, Externals),
    append(BatchShape, ElementShape, Shape),
    Vs0 = V0.empty(Shape, [range(Range), dtype(V0.dtype), precision(Precision)]),
    Vs = Vs0.push_op(scan(V3, Externals, V0, AxisE, Batch, K, Ref)),
    array_ref(Ref, Vs).
 
-% batch_first(+M, +Dims, +Axis, -M1, -Axis1)
+% batch_first(+Dims, +Axis, +M, -M1, -Axis1)
 % M1 is M with the axes Dims first, in their order, then the others in
 % theirs; Axis of M is Axis1 of M1.
-batch_first(M, [], Axis, M1, Axis1) =>
+batch_first([], Axis, M, M1, Axis1) =>
    M1 = M,
    Axis1 = Axis.
-batch_first(M, Dims, Axis, M1, Axis1) =>
+batch_first(Dims, Axis, M, M1, Axis1) =>
    length(M.shape(), NDim),
    NDim0 is NDim - 1,
    numlist(0, NDim0, Axes),
@@ -272,9 +298,13 @@ index_items(Batch, Axis, K, Shape, Items) :-
    replace_nth0(K, Axis, Colons, Items0),
    append(Batch, Items0, Items).
 
-% X is the slice of M at Items, holding loop indices: an index of M that
-% only a kernel looping over them computes.
-stand_in_slice(M, Items, Shape, X) :-
+% X is the slice of M, of length N along Axis of an element of its batch
+% of BatchShape, at the loop indices Batch and K: an index of M that only a
+% kernel looping over them computes.
+stand_in_slice(Batch, BatchShape, Axis, K, N, M, X) :-
+   append(BatchShape, Rest, M.shape()),
+   nth0(Axis, Rest, N, Shape),
+   index_items(Batch, Axis, K, Rest, Items),
    Range::real(-inf, inf),
    { Range <= M.range },
    X0 = M.empty(Shape, [range(Range), dtype(M.dtype), precision(M.precision)]),
@@ -2686,6 +2716,69 @@ test('a batch of Cholesky factorizations', [forall(devices(D)), timeout(60)]) :-
     last(States2, Rest2),
     close_matrices(Rest1, [[0, 0, 0], [0, 0, 0], [0, 0, 0]]),
     close_matrices(Rest2, [[0, 0, 0], [0, 0, 0], [0, 0, 0]]).
+
+add_product(X, Y, V0, V1) :-
+    V1 @= V0 + X * Y.
+
+time_affine(X, Mat, V0, V1) :-
+    V1 @= Mat @ V0 + X.
+
+add_weighted3(X, Y, W, V0, V1) :-
+    V1 @= V0 + X + Y * W.
+
+add_weighted4(X, Y, W, Z, V0, V1) :-
+    V1 @= V0 + X + Y * W - Z.
+
+test('a scan of two arrays steps through both', [forall(devices(D)), timeout(60)]) :-
+    context_module(M),
+    A = array{}.fromlist([[1, 2], [3, 4], [5, 6]], [device(D)]),
+    B = array{}.fromlist([[1, 0], [2, 1], [0, 3]], [device(D)]),
+    Z = array{}.zeros([2], [dtype(integer), device(D)]),
+    Vs = A.scanl(M:add_product, B, Z, 0, []),
+    Vs.tolist() == [[0, 0], [1, 0], [7, 4], [7, 22]].
+
+test('scanned arrays of different shapes', [forall(devices(D)), timeout(60)]) :-
+    context_module(M),
+    X = array{}.fromlist([[1.0, 0.0], [0.0, 1.0], [2.0, 3.0]], [device(D)]),
+    Mats = array{}.fromlist([[[1.0, 0.0], [0.0, 1.0]],
+                             [[0.5, 0.25], [0.0, 2.0]],
+                             [[2.0, 0.0], [1.0, 1.0]]], [device(D)]),
+    Z = array{}.zeros([2], [dtype(float), device(D)]),
+    Vs = X.scanl(M:time_affine, Mats, Z, 0, []),
+    Vs.tolist() == [[0.0, 0.0], [1.0, 0.0], [0.5, 1.0], [3.0, 4.5]].
+
+test('a batch of scans of two arrays', [forall(devices(D)), timeout(60)]) :-
+    context_module(M),
+    A = array{}.arange(12, [device(D)]).reshape([3, 2, 2]),
+    B @= 12 - A,
+    Z = array{}.zeros([2, 2], [dtype(integer), device(D)]),
+    Vs = A.scanl(M:add_product, B, Z, 0, [batched_dims([1])]),
+    Z1 = array{}.zeros([2], [dtype(integer), device(D)]),
+    findall(L, ( between(0, 1, I),
+                 A1 = A.index([:, I]),
+                 B1 = B.index([:, I]),
+                 Vs1 = A1.scanl(M:add_product, B1, Z1, 0, []),
+                 L = Vs1.tolist() ), Expected),
+    Vs.tolist() == Expected.
+
+test('a scan of more arrays, values among them', [timeout(60)]) :-
+    context_module(M),
+    A = array{}.fromlist([1, 2, 3]),
+    B = array{}.fromlist([10, 20, 30]),
+    zeros([], Z),
+    Vs3 = A.scanl(M:add_weighted3, B, [2, 0, 1], Z, 0, []),
+    Vs3.tolist() == [0, 21, 23, 56],
+    Vs4 = A.scanl(M:add_weighted4, B, [2, 0, 1], A, Z, 0, []),
+    Vs4.tolist() == [0, 20, 20, 50].
+
+test('scanned arrays have the same length and batch', [timeout(60)]) :-
+    context_module(M),
+    A = array{}.fromlist([[1, 2], [3, 4], [5, 6]]),
+    Z = array{}.zeros([2], [dtype(integer)]),
+    \+ _ = A.scanl(M:add_product, A.shrink([0-2, 0-2]), Z, 0, []),
+    Z3 = array{}.zeros([3], [dtype(integer)]),
+    \+ _ = A.scanl(M:add_product, A.shrink([0-2, 0-2]), Z3, 1,
+                    [batched_dims([0])]).
 
 :- end_tests(array_scan).
 
