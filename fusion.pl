@@ -197,15 +197,15 @@ broadcast(Via) :-
    Dim > 1.
 
 buffer_op(solve(_, _)).
-buffer_op(scan(_, _, _, _, _, _)).
+buffer_op(scan(_, _, _, _, _, _, _)).
 
 % Inlining
 % ========
 
 fuse_kernel(_, Node, Kernel), computed(Node),
-      get_dict(op, Node, scan(Step, Externals, V0, Axis, K, Ref)) =>
+      get_dict(op, Node, scan(Step, Externals, V0, Axis, Batch, K, Ref)) =>
    expr(body(Externals), Step, Fused),
-   Kernel = Node.put(op, scan(Fused, Externals, V0, Axis, K, Ref)),
+   Kernel = Node.put(op, scan(Fused, Externals, V0, Axis, Batch, K, Ref)),
    bind_inlined_formats(Kernel).
 fuse_kernel(Graph, Node, Kernel), computed(Node) =>
    expr(Graph, Node.op, Op),

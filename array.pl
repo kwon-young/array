@@ -199,47 +199,95 @@ M.randn(Shape, Options) := Dict :-
 % computed once, out of the loop.
 % Goal must be module qualified: the functional notation calls this method
 % through '.'/3, which would qualify it with array.
+%
+% Options:
+%   * batched_dims(Dims): the axes Dims of Xs are a batch of independent
+%     scans, run in parallel. They come first in V0 and in Vs, in the
+%     order of Dims; Goal sees an element of the batch, without them.
 :- meta_predicate scanl(3, +, +, +, -).
 M.scanl(Mod:Goal, V00, Axis) := Vs :-
+   Vs = M.scanl(Mod:Goal, V00, Axis, []).
+
+:- meta_predicate scanl(3, +, +, +, +, -).
+M.scanl(Mod:Goal, V00, Axis, Options) := Vs :-
+   option(batched_dims(Dims), Options, []),
+   batch_first(M, Dims, Axis, M1, Axis1),
    value_array(V00, M, V0),
-   nth0(Axis, M.shape(), N, SliceShape),
+   length(Dims, NB),
+   length(BatchShape, NB),
+   append(BatchShape, Rest, M1.shape()),
+   append(BatchShape, StateShape, V0.shape()),
+   % the axis of an element of the batch
+   AxisE is Axis1 - NB,
+   nth0(AxisE, Rest, N, SliceShape),
    loop_index(K),
+   length(Batch, NB),
+   maplist(loop_index, Batch),
    % the range and precision of Vs, which the state at a step shares
    Range::real(-inf, inf),
    Precision::real(0, inf),
-   stand_in_slice(M, Axis, K, SliceShape, X),
-   stand_in_state(V0, K, Ref, Range, Precision, State),
+   index_items(Batch, AxisE, K, Rest, SliceItems),
+   stand_in_slice(M1, SliceItems, SliceShape, X),
+   N1 #= N + 1,
+   nth0(AxisE, ElementShape, N1, StateShape),
+   index_items(Batch, AxisE, K, ElementShape, StateItems),
+   stand_in_state(V0, StateShape, StateItems, Ref, Range, Precision, State),
    call(Mod:Goal, X, State, V1),
    upcast(V1, V0.dtype, V2),
-   V3 = V2.expand(V0.shape()),
+   V3 = V2.expand(StateShape),
    independent_nodes(V3, [X, State], Independent),
-   distinct_nodes([M, V0 | Independent], Externals),
-   N1 #= N + 1,
-   nth0(Axis, Shape, N1, V0.shape()),
+   distinct_nodes([M1, V0 | Independent], Externals),
+   append(BatchShape, ElementShape, Shape),
    Vs0 = V0.empty(Shape, [range(Range), dtype(V0.dtype), precision(Precision)]),
-   Vs = Vs0.push_op(scan(V3, Externals, V0, Axis, K, Ref)),
+   Vs = Vs0.push_op(scan(V3, Externals, V0, AxisE, Batch, K, Ref)),
    array_ref(Ref, Vs).
 
-% X is the slice of M along Axis at the loop index K: an index of M that
-% only a kernel looping over K computes.
-stand_in_slice(M, Axis, K, Shape, X) :-
+% batch_first(+M, +Dims, +Axis, -M1, -Axis1)
+% M1 is M with the axes Dims first, in their order, then the others in
+% theirs; Axis of M is Axis1 of M1.
+batch_first(M, [], Axis, M1, Axis1) =>
+   M1 = M,
+   Axis1 = Axis.
+batch_first(M, Dims, Axis, M1, Axis1) =>
    length(M.shape(), NDim),
-   length(Items0, NDim),
-   maplist(=(:), Items0),
-   replace_nth0(K, Axis, Items0, Items),
+   NDim0 is NDim - 1,
+   numlist(0, NDim0, Axes),
+   check_batched_dims(Dims, Axis, Axes),
+   subtract(Axes, Dims, Others),
+   append(Dims, Others, Permutation),
+   M1 = M.permute(Permutation),
+   once(nth0(Axis1, Permutation, Axis)).
+
+check_batched_dims(Dims, Axis, Axes),
+      is_set(Dims), subset(Dims, Axes), \+ memberchk(Axis, Dims) =>
+   true.
+check_batched_dims(Dims, _, _) =>
+   domain_error(batched_dims, Dims).
+
+% The items indexing an element of the batch, at the loop indices Batch, at
+% the loop index K along Axis of the element, of Shape.
+index_items(Batch, Axis, K, Shape, Items) :-
+   same_length(Colons, Shape),
+   maplist(=(:), Colons),
+   replace_nth0(K, Axis, Colons, Items0),
+   append(Batch, Items0, Items).
+
+% X is the slice of M at Items, holding loop indices: an index of M that
+% only a kernel looping over them computes.
+stand_in_slice(M, Items, Shape, X) :-
    Range::real(-inf, inf),
    { Range <= M.range },
    X0 = M.empty(Shape, [range(Range), dtype(M.dtype), precision(M.precision)]),
    X = X0.put([id: _, op: index(M, Items)]).
 
-% State is the state at the loop index K of the array Ref names, of V0's
-% shape and dtype, in its range and with its precision.
-stand_in_state(V0, K, Ref, Range, Precision, State) :-
+% State is the state at Items, holding loop indices, of the array Ref
+% names, of Shape and V0's dtype, in its range and with its precision.
+stand_in_state(V0, Shape, Items, Ref, Range, Precision, State) :-
    StateRange::real(-inf, inf),
    { StateRange <= Range },
-   State0 = V0.empty(V0.shape(), [range(StateRange), dtype(V0.dtype),
-                                  precision(Precision)]),
-   State = State0.put([id: _, op: index(Ref, [K])]).
+   State0 = V0.empty(Shape, [range(StateRange), dtype(V0.dtype),
+                             precision(Precision)]),
+   State = State0.put([id: _, op: index(Ref, Items)]).
 
 % independent_nodes(+Step, +StandIns, -Independent)
 % Independent are the nodes the step reads that depend on none of the
@@ -1100,7 +1148,7 @@ op_args(fused(_Node, Expr)) ==>
 op_args(reindex(_Via, Expr)) ==>
    op_args(Expr).
 % A scan reads what its step reads from out of its loop.
-op_args(scan(_, Externals, _, _, _, _)) ==>
+op_args(scan(_, Externals, _, _, _, _, _)) ==>
    sequence(op_args, Externals).
 % A stand-in of a scan reads what it indexes, unless that is its own scan.
 op_args(index(Base, _)), is_dict(Base, array) ==>
@@ -2408,7 +2456,7 @@ test('each solution of the step is a scan', [timeout(30)]) :-
     zeros([4], Z),
     findall(Name,
             (  Vs = A.scanl(M:add_or_times, Z, 0),
-               scan_op(Vs, scan(Step, _, _, _, _, _)),
+               scan_op(Vs, scan(Step, _, _, _, _, _, _)),
                array{op: view(Body)} :< Step,
                array{op: Op} :< Body,
                functor(Op, Name, _)
@@ -2423,12 +2471,12 @@ test('what the step computes without its stand-ins is out of the loop',
     zeros([4], Z),
     W @= Z + 2,
     Vs = A.scanl(M:add_weighted(W, _), Z, 0),
-    scan_op(Vs, scan(Step, Externals, _, _, _, _)),
+    scan_op(Vs, scan(Step, Externals, _, _, _, _, _)),
     once(( member(E, Externals), reads(E, W) )),
     once(( member(E1, Externals), reads(E1, A) )),
     \+ ( member(E2, Externals), reads(E2, Step) ),
     Ws = A.scanl(M:add_iota(Iota), Z, 0),
-    scan_op(Ws, scan(_, Externals2, _, _, _, _)),
+    scan_op(Ws, scan(_, Externals2, _, _, _, _, _)),
     once(( member(E3, Externals2), reads(E3, Iota) )).
 
 test('the states are in the range of the scan', [timeout(30)]) :-
@@ -2450,7 +2498,7 @@ test('a loop index is never bound, a reference names its scan',
     matrix(A),
     zeros([4], Z),
     Vs = A.scanl(M:add, Z, 0),
-    scan_op(Vs, scan(_, _, _, _, K, Ref)),
+    scan_op(Vs, scan(_, _, _, _, _, K, Ref)),
     \+ K = 0,
     get_attr(Ref, array_ref, Named),
     array{id: Id} :< Named,
@@ -2538,6 +2586,106 @@ test('a scan of a length known after it is built', [timeout(60)]) :-
     Vs = A1.scanl(M:add, array{}.zeros([4], [dtype(integer)]), 0),
     N = 3,
     Vs.index([3]).tolist() == [15, 18, 21, 24].
+
+test('a batch of scans is a scan of each element',
+     [forall(devices(D)), timeout(60)]) :-
+    context_module(M),
+    A = array{}.arange(24, [device(D)]).reshape([2, 3, 4]),
+    Z = array{}.zeros([2, 4], [dtype(integer), device(D)]),
+    Vs = A.scanl(M:add, Z, 1, [batched_dims([0])]),
+    Vs.shape() == [2, 4, 4],
+    Z1 = array{}.zeros([4], [dtype(integer), device(D)]),
+    findall(L, ( between(0, 1, B),
+                 Vs1 = A.index([B]).scanl(M:add, Z1, 0),
+                 L = Vs1.tolist() ), Expected),
+    Vs.tolist() == Expected.
+
+test('batched dims come first', [forall(devices(D)), timeout(60)]) :-
+    context_module(M),
+    A = array{}.fromlist([[1, 2], [3, 4], [5, 6]], [device(D)]),
+    Z = array{}.zeros([2], [dtype(integer), device(D)]),
+    Vs = A.scanl(M:add, Z, 0, [batched_dims([1])]),
+    Vs.tolist() == [[0, 1, 4, 9], [0, 2, 6, 12]].
+
+test('a scan runs a work item per element of its batch', [timeout(60)]) :-
+    context_module(M),
+    A = array{}.arange(24).reshape([2, 3, 4]),
+    Z = array{}.zeros([2, 4], [dtype(integer)]),
+    Vs = A.scanl(M:add, Z, 1, [batched_dims([0])]),
+    array:graph_schedule([Vs], Schedule0),
+    fusion:fuse([Vs], Schedule0, Schedule),
+    precision:choose_formats(Schedule, [Vs], inf),
+    member(Node, Schedule),
+    array{op: scan(_, _, _, _, _, _, _)} :< Node,
+    !,
+    array{op: Op} :< Node,
+    ir_lower:lower_kernel(prolog, Node, Op, (_ :- forall(Domain, _)), _),
+    Domain = between(0, 1, _).
+
+test('batched dims are distinct axes of the scanned array, not its axis',
+     [forall(member(Dims, [[0, 0], [3], [1]])),
+      throws(error(domain_error(batched_dims, _), _)), timeout(60)]) :-
+    context_module(M),
+    A = array{}.arange(24).reshape([2, 3, 4]),
+    Z = array{}.zeros([2, 4], [dtype(integer)]),
+    _ = A.scanl(M:add, Z, 1, [batched_dims(Dims)]).
+
+% A step of a Cholesky factorization, right-looking: X is the row k of the
+% identity, U the upper triangle of ones. The column k of the factor is the
+% column k of the state A from row k, over the square root of its pivot; the
+% next state takes its outer product out of A.
+cholesky_step(U, X, A, A1) :-
+    Col @= A @ X,
+    Pivot @= X @ Col,
+    Mask @= X @ U,
+    L @= Col * Mask / sqrt(Pivot),
+    N = A.shape(),
+    N = [Dim, Dim],
+    A1 @= A - L.reshape([Dim, 1]) * L.reshape([1, Dim]).
+
+% The factor out of the states of a factorization: its column k is the
+% column of the state k from row k, over the square root of its pivot.
+cholesky_factor(States, L) :-
+    length(States, N1),
+    N is N1 - 1,
+    N0 is N - 1,
+    findall(Row, ( between(0, N0, I),
+                   findall(V, ( between(0, N0, K),
+                                nth0(K, States, S),
+                                factor_element(S, I, K, V) ), Row) ), L).
+
+factor_element(_, I, K, V), I < K =>
+    V = 0.0.
+factor_element(S, I, K, V) =>
+    nth0(I, S, RowI),
+    nth0(K, RowI, SIK),
+    nth0(K, S, RowK),
+    nth0(K, RowK, SKK),
+    V is SIK / sqrt(SKK).
+
+close_matrices(A, B) :-
+    maplist(maplist([X, Y]>>(abs(X - Y) =< 1.0e-12)), A, B).
+
+test('a batch of Cholesky factorizations', [forall(devices(D)), timeout(60)]) :-
+    context_module(M),
+    As = array{}.fromlist([[[4.0, 2.0, 2.0], [2.0, 5.0, 3.0], [2.0, 3.0, 6.0]],
+                           [[9.0, 3.0, 0.0], [3.0, 5.0, 2.0], [0.0, 2.0, 2.0]]],
+                          [device(D)]),
+    Eye = array{}.fromlist([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                           [device(D)]),
+    U = array{}.fromlist([[1.0, 1.0, 1.0], [0.0, 1.0, 1.0], [0.0, 0.0, 1.0]],
+                         [device(D)]),
+    Xs = Eye.reshape([1, 3, 3]).expand([2, 3, 3]),
+    Vs = Xs.scanl(M:cholesky_step(U), As, 1, [batched_dims([0])]),
+    Vs.tolist() = [States1, States2],
+    cholesky_factor(States1, L1),
+    cholesky_factor(States2, L2),
+    close_matrices(L1, [[2, 0, 0], [1, 2, 0], [1, 1, 2]]),
+    close_matrices(L2, [[3, 0, 0], [1, 2, 0], [0, 1, 1]]),
+    last(States1, Rest1),
+    last(States2, Rest2),
+    close_matrices(Rest1, [[0, 0, 0], [0, 0, 0], [0, 0, 0]]),
+    close_matrices(Rest2, [[0, 0, 0], [0, 0, 0], [0, 0, 0]]).
 
 :- end_tests(array_scan).
 

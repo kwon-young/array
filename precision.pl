@@ -23,7 +23,7 @@
 post_precision(M0, M), get_dict(op, M0, view(Parent)) =>
    M = M0.put(precision, Parent.precision).
 % A scan has no error model either: the precision of its states, given.
-post_precision(M0, M), get_dict(op, M0, scan(_, _, _, _, _, _)) =>
+post_precision(M0, M), get_dict(op, M0, scan(_, _, _, _, _, _, _)) =>
    M = M0.
 post_precision(M0, M), get_dict(op, M0, solve(_, _)) =>
    % no error model: unknown
