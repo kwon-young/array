@@ -159,7 +159,8 @@ test(small_output_reduction_goes_to_groups_large_to_items, [timeout(30)]) :-
 test(matmul_staged_in_local_memory_and_vectorised, [timeout(60), forall(opencl_device(D, _))]) :-
    matmul(A, B, C, 64, 96, 64),
    kernels(C, [], Ks), source(Ks, Src),
-   once(sub_string(Src, _, _, _, "__local float s0[")),
+   once(sub_string(Src, _, _, _, "__local float s0_[")),
+   once(sub_string(Src, _, _, _, "__local float *s0 = (__local float *)(((uintptr_t)s0_ + 31) & ~(uintptr_t)31);")),
    once(sub_string(Src, _, _, _, "barrier(CLK_LOCAL_MEM_FENCE)")),
    once(sub_string(Src, _, _, _, "float4 *")),
    once(sub_string(Src, _, _, _, "#pragma unroll")),

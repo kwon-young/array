@@ -74,9 +74,20 @@ opencl_device(Name, Device) =>
    named_devices(Named),
    member(Name-Device, Named).
 
+% The devices are enumerated once, by one thread: a runtime initialises its devices on the
+% first clGetDeviceIDs, and reports none to a thread asking while it does (pocl), so threads
+% enumerating a cold process at once would see different tables.
+:- dynamic device_table/1.
+
 named_devices(Named) :-
+   with_mutex(opencl_devices, named_devices_(Named)).
+
+named_devices_(Named), device_table(Table) =>
+   Named = Table.
+named_devices_(Named) =>
    findall(Base-Device, platform_device(Base, Device), Pairs),
-   name_devices(Pairs, [], Named).
+   name_devices(Pairs, [], Named),
+   assertz(device_table(Named)).
 
 platform_device(Base, Device) :-
    cl_platforms(Platforms),

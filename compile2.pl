@@ -1043,8 +1043,17 @@ phase_write(spread(_, _, Eqs), Acc0, Acc) => core2:writes(over([], Eqs), Ws), ap
 phase_write(reduce(_, Reds), Acc0, Acc) => maplist(arg(1), Reds, Ws), append(Ws, Acc0, Acc).
 
 shared_decl(Ctx, N-_-Size) -->
-   { var_name(Ctx, N, Name) },
-   fmt("  __local float s_~w[~d] __attribute__((aligned(32)));\n", [Name, Size]).
+   { var_name(Ctx, N, Name), format(atom(SName), "s_~w", [Name]) },
+   local_array(SName, Size).
+
+% local_array(+Name, +Size): a local array of Size floats, aligned to 32 bytes at run time: a
+% vector access to it is a typed pointer, aligned loads, and a runtime may hand local memory
+% out aligned to 16 bytes only, whatever the attribute asks (pocl's OpenMP scheduler takes
+% it from malloc, and lays the first array at the raw base), which faults the loads.
+local_array(Name, Size) -->
+   { Padded is Size + 8 },
+   fmt("  __local float ~w_[~d] __attribute__((aligned(32)));\n", [Name, Padded]),
+   fmt("  __local float *~w = (__local float *)(((uintptr_t)~w_ + 31) & ~~(uintptr_t)31);\n", [Name, Name]).
 
 shared_fence(_, []) --> [].
 shared_fence(Ctx, [_ | _]) --> fence(Ctx).
@@ -1316,7 +1325,7 @@ pack_index(_, _, Kk, _, tile(R, none, none, T, M, Name), Tile) =>
 
 panel(KC, MCT, NS, tile(_, _, _, T, Major, Name, _)) -->
    { panel_tiles(Major, MCT, NS, Count), Size is Count*T*KC },
-   fmt("  __local float ~w[~d] __attribute__((aligned(32)));\n", [Name, Size]).
+   local_array(Name, Size).
 
 panel_tiles(k_last, MCT, _, Count) => Count = MCT.
 panel_tiles(k_first, _, NS, Count) => Count = NS.
@@ -1373,7 +1382,7 @@ layout(k_first, L, S, T, _, G, Kk, Index) => Width is G*T, Index = Kk*Width + (L
 
 local_tile(G, TK, tile(_, A, _, T, _, Name, _)) -->
    { tile_rows(A, G, T, Rows), Size is Rows*TK },
-   fmt("  __local float ~w[~d] __attribute__((aligned(32)));\n", [Name, Size]).
+   local_array(Name, Size).
 
 tile_rows(none, _, _, Rows) => Rows = 1.
 tile_rows(_, G, T, Rows) => Rows is G*T.
