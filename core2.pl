@@ -14,7 +14,7 @@
 % writes. The left-hand side of an equation is the only thing that creates a name.
 
 prim(+, 2).  prim(-, 2).  prim(-, 1).  prim(*, 2).  prim(/, 2).  prim(max, 2).  prim(min, 2).
-prim(exp, 1).  prim(sqrt, 1).  prim(<, 2).  prim(=<, 2).  prim(=:=, 2).
+prim(exp, 1).  prim(sqrt, 1).  prim(log, 1).  prim(<, 2).  prim(=<, 2).  prim(=:=, 2).
 
 arith(E, Args) :-
    compound(E),

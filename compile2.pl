@@ -1604,7 +1604,7 @@ vectorizable_eq(Ctx, V, copy(_, N, S)) :-
 lanes(_, _, X), var(X), \+ is_name(X) => true.
 lanes(Ctx, V, R), core2:place(R, N, Ts) => access(Ctx, N, Ts, _-Off), stride(V, Off, S), memberchk(S, [0, 1]).
 lanes(_, _, X), number(X) => true.
-lanes(Ctx, V, E), E =.. [Op | As], memberchk(Op-_, [(+)-2, (-)-2, (*)-2, (/)-2, (-)-1, max-2, min-2, exp-1, sqrt-1,
+lanes(Ctx, V, E), E =.. [Op | As], memberchk(Op-_, [(+)-2, (-)-2, (*)-2, (/)-2, (-)-1, max-2, min-2, exp-1, sqrt-1, log-1,
                                                     (<)-2, (=<)-2, (=:=)-2, where-3]) =>
    maplist(lanes(Ctx, V), As).
 lanes(_, _, _) => fail.
@@ -1736,7 +1736,7 @@ value(Ctx, A / B, C) =>
 value(Ctx, -A, C) => value(Ctx, A, CA), format(atom(C), "(-~w)", [CA]).
 value(Ctx, E, C), E =.. [F, A, B], memberchk(F, [max, min]) =>
    maplist(value(Ctx), [A, B], [CA, CB]), format(atom(C), "f~w(~w, ~w)", [F, CA, CB]).
-value(Ctx, E, C), E =.. [F, A], memberchk(F, [exp, sqrt]) =>
+value(Ctx, E, C), E =.. [F, A], memberchk(F, [exp, sqrt, log]) =>
    value(Ctx, A, CA), format(atom(C), "~w(~w)", [F, CA]).
 
 % has_read(+E): E reads a place, so it is a float and fma applies.
