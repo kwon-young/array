@@ -254,14 +254,52 @@ test(blocked_cholesky_stages_the_trailing_update, [timeout(300), forall(opencl_d
    near(Ref, Vals).
 
 test(batched_cholesky_is_a_group_per_matrix, [timeout(300), forall(opencl_device(D, _))]) :-
-   batched_cholesky(A, L, C, 4, 16),
+   batched_cholesky(A, L, C, 4, 32),
    kernels(L, [], [_, Sweep]),
-   kernel{kind: groups, rows: [B1:4], phases: [loop(_, 16, _)], shared: Shared} :< Sweep, var(B1),
-   member(L1-1-256, Shared), L1 == L, member(C1-1-16, Shared), C1 == C,
+   kernel{kind: groups, rows: [B1:4], phases: [loop(_, 32, _)], shared: Shared} :< Sweep, var(B1),
+   member(L1-1-1024, Shared), L1 == L, member(C1-1-32, Shared), C1 == C,
    source([Sweep], Src), once(sub_string(Src, _, _, _, "__local float s_")), \+ sub_string(Src, _, _, _, "GLOBAL_MEM_FENCE"),
-   findall(V, ( between(0, 3, _), between(0, 15, I), between(0, 15, J), V is min(I, J) + 1 ), As),
+   findall(V, ( between(0, 3, _), between(0, 31, I), between(0, 31, J), V is min(I, J) + 1 ), As),
    eval(L, [A-As], Ref), run(L, [A-As], Vals, [device(D)]),
    near(Ref, Vals).
+
+% A step of a 4x4 factor has 4 parallel points, under the lanes a group occupies: each matrix
+% is one work item, with no barrier; with lanes(1) it is a group, as before.
+test(tiny_batched_cholesky_is_an_item_per_matrix, [timeout(300), forall(opencl_device(D, _))]) :-
+   batched_cholesky(A, L, C, 64, 4),
+   kernels(L, [], [_, Sweep]),
+   kernel{kind: groups, rows: [_:64], phases: [loop(_, 4, _)], item: true, local: 1, shared: []} :< Sweep,
+   source([Sweep], Src), once(sub_string(Src, _, _, _, "get_global_id(0)")), \+ sub_string(Src, _, _, _, "barrier"),
+   kernels(L, [lanes(1)], [_, Group]), \+ get_dict(item, Group, _),
+   findall(V, ( between(0, 63, _), between(0, 3, I), between(0, 3, J), V is min(I, J) + 1 ), As),
+   eval(L, [A-As], Ref), run(L, [A-As], Vals, [device(D)]),
+   near(Ref, Vals), shape(C, _).
+
+% A chain of two reductions of length 2 cannot fill a warp: it goes to kernels of work items,
+% a group only when the lanes are 1.
+test(short_reductions_stay_items, [timeout(300), forall(opencl_device(D, _))]) :-
+   shape(X, [64, 2, 2]), shape(Y, [64, 2]), shape(G, [64, 2]), shape(H, [64, 2]),
+   over([B:64, I:2], [G[B, I] := 0]),
+   over([B:64, I:2, K:2], [G[B, I] := G[B, I] + X[B, I, K] * Y[B, K]]),
+   over([B:64, I:2], [H[B, I] := 0]),
+   over([B:64, I:2, K:2], [H[B, I] := H[B, I] + G[B, I] * Y[B, K]]),
+   kernels(H, [], Items), forall(member(K1, Items), get_dict(kind, K1, items)),
+   kernels(H, [lanes(1)], [Group]), kernel{kind: groups, local: 1} :< Group,
+   numlist(1, 256, Ns), maplist([N, V]>>(V is (N mod 5) - 2), Ns, Xs), length(Ys, 128), maplist([V]>>(V = 1), Ys),
+   eval(H, [X-Xs, Y-Ys], Ref), run(H, [X-Xs, Y-Ys], Vals, [device(D)]), near(Ref, Vals),
+   run(H, [X-Xs, Y-Ys], Vals1, [device(D), lanes(1)]), near(Ref, Vals1).
+
+% A box reading what the chain wrote outside its own row ends the chain: the second product
+% reads G at every K of its row, which other groups write. Grouped, it read them unfinished.
+test(chain_reads_its_own_row_only, [timeout(300), forall(opencl_device(D, _))]) :-
+   shape(X, [64, 2, 2]), shape(Y, [64, 2, 2]), shape(G, [64, 2, 2]), shape(H, [64, 2, 2]),
+   over([B:64, I:2, J:2], [G[B, I, J] := 0]),
+   over([B:64, I:2, J:2, K:2], [G[B, I, J] := G[B, I, J] + X[B, I, K] * Y[B, K, J]]),
+   over([B:64, I:2, J:2], [H[B, I, J] := 0]),
+   over([B:64, I:2, J:2, K:2], [H[B, I, J] := H[B, I, J] + G[B, I, K] * Y[B, K, J]]),
+   kernels(H, [lanes(1)], Ks), length(Ks, 2), forall(member(K1, Ks), get_dict(kind, K1, items)),
+   numlist(1, 256, Ns), maplist([N, V]>>(V is (N mod 5) - 2), Ns, Xs), maplist([N, V]>>(V is (N mod 3) - 1), Ns, Ys),
+   eval(H, [X-Xs, Y-Ys], Ref), run(H, [X-Xs, Y-Ys], Vals, [device(D), lanes(1)]), near(Ref, Vals).
 
 :- end_tests(compile2_cholesky).
 
@@ -331,7 +369,7 @@ test(recurrence_with_a_local_name, [timeout(30), forall(opencl_device(D, _))]) :
 % chains, the six matmuls with their initialisations and epilogues fused, bias, residual,
 % gelu, the head's scale folded into the softmax.
 test(vit_block_is_nine_kernels, [timeout(120), forall(opencl_device(D, _))]) :-
-   S = 16, Dm = 32, H = 2, F = 64, Opts = [tile([8, 8]), group(2), stage(8), local(32), items(8)],
+   S = 16, Dm = 32, H = 2, F = 64, Opts = [tile([8, 8]), group(2), stage(8), local(32), items(8), lanes(2)],
    vit_block(X, Y, S, Dm, H, F),
    kernels(Y, Opts, Ks), length(Ks, 9),
    include([K]>>get_dict(kind, K, groups), Ks, Gs), length(Gs, 3),

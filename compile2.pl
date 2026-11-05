@@ -128,8 +128,10 @@ subst(_, T0, T) => T = T0.
 
 % kernels(+Out, +Options, -Kernels): the kernels computing Out, after fusion, from the options
 % tile(T), the strip of a work item, local(L), the items of a work-group, a power of two, and
-% items(Min), the parallelism under which a reduction goes to a work-group; epilogue(false)
-% keeps a reduction's initialisation and epilogue as kernels of their own.
+% items(Min), the parallelism under which a reduction goes to a work-group; lanes(U), the
+% items a work-group occupies at the least, the warp: a row narrower than U runs in one work
+% item; epilogue(false) keeps a reduction's initialisation and epilogue as kernels of their
+% own.
 kernels(Out, Options, Kernels) :-
    option(tile(Tile), Options, 4),
    option(local(L), Options, 64),
@@ -143,12 +145,13 @@ kernels(Out, Options, Kernels) :-
    option(lds(LDS), Options, 16384),
    option(sweep(SW), Options, L),
    option(epilogue(Epi), Options, true),
+   option(lanes(U), Options, 32),
    must_be(positive_integer, L),
    L /\ (L-1) =:= 0,
    program(Out, Boxes0),
    fuse(Out, Boxes0, Boxes1),
    splits(Boxes1, L, Min, Boxes),
-   chains(Boxes, Out, Boxes, opts(Tile, G, TK, W, Major, Threads, KC, MC, Min, L, Epi, LDS), L-LDS-SW, Min, [], Plan),
+   chains(Boxes, Out, Boxes, opts(Tile, G, TK, W, Major, Threads, KC, MC, Min, L, Epi, LDS, U), L-LDS-SW, Min, [], Plan),
    number_plan(Plan, 0, _, Kernels).
 
 % number_plan(+Plan0, +I0, -I, -Plan): each kernel of the plan, a tree of kernels and host
@@ -231,30 +234,35 @@ chunks(N, NRows, L, Min, C) :-
 % kernel of work items. Free holds the indices of the host loops around.
 chains([], _, _, _, _, _, _, Plan) =>
    Plan = [].
-chains([B | Bs], Out, All, Opts, L, Min, Free, Plan), sweep(B, L, Min, Free, K) =>
+chains([B | Bs], Out, All, Opts, L, Min, Free, Plan), sweep(B, Opts, L, Min, Free, K) =>
    Plan = [K | Ps],
    chains(Bs, Out, All, Opts, L, Min, Free, Ps).
 chains([B | Bs], Out, All, Opts, L, Min, Free, Plan), host_loop(B, Min, T, E, Inner) =>
    chains(Inner, Out, All, Opts, L, Min, [T | Free], Ks0),
    Plan = [loop(T, E, Ks0) | Ps],
    chains(Bs, Out, All, Opts, L, Min, Free, Ps).
-chains([B | Bs], Out, All, Opts, L, Min, Free, Plan), chain([B | Bs], Rows, Phases, Rest), worth(Rows, Phases, Min, Free) =>
+chains([B | Bs], Out, All, Opts, L, Min, Free, Plan), chain([B | Bs], Rows, Phases, Rest), worth(Rows, Phases, Min, Free),
+      L = Items-_-_, group_local(Opts, Phases, Items, Rows, Min, Free, Local) =>
    names(Phases, Names),
-   L = Items-_-_,
-   group_local(Opts, Phases, Items, Local),
    Plan = [kernel{kind: groups, rows: Rows, phases: Phases, local: Local, names: Names, free: Free, shared: []} | Ps],
    chains(Rest, Out, All, Opts, L, Min, Free, Ps).
 
-% group_local(+Opts, +Phases, +Items, -Local): the work-group of a chain holds Items work
-% items at most, and as many as leave 8 elements of its longest reduction to each, a power
-% of two; 32 at least on a GPU, a warp, 8 on a CPU, where every item costs a fibre.
-group_local(Opts, Phases, Items, Local) :-
+% group_local(+Opts, +Phases, +Items, +Rows, +Min, +Free, -Local): the work-group of a chain
+% holds Items work items at most, and as many as leave 8 elements of its longest reduction
+% to each, a power of two, and the lanes a group occupies at the least. Fails, so that the
+% chain goes to kernels of work items, when the reduction cannot fill those lanes while the
+% rows alone fill the device: a group would idle its lanes and pay its barriers for nothing.
+% With fewer rows the lanes are the only parallelism left, and inside a host loop the
+% launches saved are worth it.
+group_local(Opts, Phases, Items, Rows, Min, Free, Local) :-
    aggregate_all(max(N), ( member(reduce(_:D, _), Phases), extent(D, N) ), Row),
    !,
-   ( arg(6, Opts, Threads), Threads > 0 -> Least = 8 ; Least = 32 ),
+   arg(13, Opts, Lanes),
    Share is max(1, Row // 8), Fit is 1 << msb(Share),
-   Local is max(Least, min(Items, Fit)).
-group_local(_, _, Items, Items).
+   maplist(arg(2), Rows, Es), size(Es, NRows),
+   ( Fit >= Lanes -> true ; Free = [_ | _] -> true ; NRows < Min ),
+   Local is max(Lanes, min(Items, Fit)).
+group_local(_, _, Items, _, _, _, Items).
 chains([B | Bs], Out, All, Opts, L, Min, Free, Plan), arg(11, Opts, true),
       epilogue(Out, All, [B | Bs], Before, Init0, Red, Post0, Temps, Rest),
       schedule(Out, All, Opts, Red, K0), get_dict(atomics, K0, []) =>  % not an atomic reduction
@@ -357,7 +365,7 @@ match_arg(IsA, X, Y, P0, P) :- match(X, Y, IsA, P0, P).
 live(C, Out, _, _) :- C == Out, !.
 live(C, _, All, Used) :- member(B, All), \+ in_list(Used, B), names(B, Ns), in_list(Ns, C), !.
 
-% sweep(+Box, +L-LDS, +Min, +Free, -Kernel): Box has parallel axes, its rows, then one
+% sweep(+Box, +Opts, +L-LDS, +Min, +Free, -Kernel): Box has parallel axes, its rows, then one
 % sequential axis, and its equations are boxes, each a phase over its own axes: one work-group
 % kernel per row point, the sequential axis a loop inside it with a fence between the phases.
 % One launch for the whole sweep, which is what a small factorisation, or a batch of them,
@@ -365,7 +373,10 @@ live(C, _, All, Used) :- member(B, All), \+ in_list(Used, B), names(B, Ns), in_l
 % are a few passes of a group, or the sweep is a step of a host loop, where launches are
 % the cost. A name the sweep writes whose slice of a row point fits half
 % the local memory lives there for the whole sweep, copied in before and out after.
-sweep(over(Axes, Eqs), L-LDS-SW, Min, Free, Kernel) :-
+% When a step's points cannot fill the lanes a group occupies while the rows alone fill the
+% device, each row point is one work item instead, its phases plain loops: no barrier, no
+% idle lane.
+sweep(over(Axes, Eqs), Opts, L-LDS-SW, Min, Free, Kernel) :-
    Eqs = [_ | _],
    forall(member(Q, Eqs), is_box(Q)),
    append(Rows, [T:E], Axes),
@@ -376,15 +387,21 @@ sweep(over(Axes, Eqs), L-LDS-SW, Min, Free, Kernel) :-
    maplist(arg(2), Rows, REs), size(REs, NRows),
    aggregate_all(max(P), ( member(over(As, _), Eqs), include(parallel(over(As, []), []), As, Par),
                            maplist(arg(2), Par, PEs), size(PEs, P) ), Points),
-   ( Free = [_ | _] ; NRows >= Min // 8 ; Points =< L*Min ), !,
+   arg(13, Opts, Lanes),
+   ( Points < Lanes, NRows >= Min -> Item = true ; Item = false ),
+   ( Item == true ; Free = [_ | _] ; NRows >= Min // 8 ; Points =< L*Min ), !,
    names(Eqs, Names),
-   core2:writes(Box, Written),
-   maplist(arg(1), Rows, RowIs),
-   length(RowIs, Drop),
-   Budget is LDS // 8,
-   convlist(shared_name(Box, RowIs, Drop, Budget), Written, Shared),
-   Kernel = kernel{kind: groups, rows: Rows, phases: [loop(T, E, Phases)], local: SW, names: Names, free: Free,
-                   shared: Shared}.
+   (  Item == true
+   -> Kernel = kernel{kind: groups, rows: Rows, phases: [loop(T, E, Phases)], local: 1, item: true, names: Names,
+                      free: Free, shared: []}
+   ;  core2:writes(Box, Written),
+      maplist(arg(1), Rows, RowIs),
+      length(RowIs, Drop),
+      Budget is LDS // 8,
+      convlist(shared_name(Box, RowIs, Drop, Budget), Written, Shared),
+      Kernel = kernel{kind: groups, rows: Rows, phases: [loop(T, E, Phases)], local: SW, names: Names, free: Free,
+                      shared: Shared}
+   ).
 
 % shared_name(+Box, +RowIs, +Drop, +Budget, +N, -N-Drop-Size): every access of N starts with
 % the row indices, and its slice of Size floats fits Budget.
@@ -429,19 +446,29 @@ grouped(_, _, _) => fail.
 % chain(+Boxes, -Rows, -Phases, -Rest): the longest prefix of Boxes that is one chain. Its rows
 % are the parallel axes of the first box; each later box has its parallel axes renamed to the
 % rows through the names they share. Each box is a phase over the rest of its axes: serial,
-% a reduction by monoids, or spread over one more parallel axis.
+% a reduction by monoids, or spread over one more parallel axis. A box reads what the chain
+% wrote at its own row only: a group sees the writes of its row, not of the others.
 chain([B | Bs], Rows, [P | Ps], Rest) :-
    B = over(Axes, _),
    include(parallel(B, []), Axes, Rows),
    phase(Rows, B, P),
    extend(Rows, [B], Bs, Ps, Rest).
 
-extend(Rows, Prev, [B0 | Bs], Phases, Rest), align(Rows, Prev, B0, B), phase(Rows, B, P) =>
+extend(Rows, Prev, [B0 | Bs], Phases, Rest), align(Rows, Prev, B0, B), own_row(Rows, Prev, B), phase(Rows, B, P) =>
    Phases = [P | Ps],
    extend(Rows, [B | Prev], Bs, Ps, Rest).
 extend(_, _, Bs, Phases, Rest) =>
    Phases = [],
    Rest = Bs.
+
+% own_row(+Rows, +Prev, +Box): every access in Box of a name Prev writes has, where an access
+% of Prev has a row index, that same index.
+own_row(Rows, Prev, Box) :-
+   maplist(arg(1), Rows, RowIs),
+   core2:writes(over([], Prev), Written),
+   forall(( member(N, Written), accesses(Box, N, Ss), member(S, Ss),
+            accesses(Prev, N, Ps), member(P, Ps), nth0(K, P, R), var(R), in_list(RowIs, R) ),
+          ( nth0(K, S, R1), R1 == R )).
 
 phase(Rows, over(Axes, Eqs), Phase) :-
    \+ ( member(E, Eqs), is_box(E) ),
@@ -553,7 +580,7 @@ pair_vars(Vars, Dn-Rn, D-R) :-
 %          tile of the first strip laid out K first or K last as Major says, or, with threads,
 %          the packed panels of a thread per core, see staging/14,
 %   vector the width of the vector the last tile loop may become.
-schedule(Out, Boxes, opts(Tile, G, TK, W, Major, Threads, KC, MC, Min, L, _, LDS), Box0, Kernel) :-
+schedule(Out, Boxes, opts(Tile, G, TK, W, Major, Threads, KC, MC, Min, L, _, LDS, _), Box0, Kernel) :-
    locals(Out, Boxes, Box0, Locals),
    Box0 = over(Axes0, _),
    include(parallel(Box0, Locals), Axes0, Strict),
@@ -998,7 +1025,8 @@ kernel_source(I, K, Source), get_dict(kind, K, groups) =>
    phase_writes(Phases, Written),
    ( forall(member(N, Written), ( member(N1-_-_, Shared), N1 == N )) -> Fence = local ; Fence = global ),
    Ctx = Ctx0.put(_{shared: Shared, fence: Fence, items: L}),
-   phrase(( work_groups(Ctx, Rows, L), sequence(shared_decl(Ctx), Shared),
+   ( get_dict(item, K, true) -> Items = item ; Items = L ),
+   phrase(( work_groups(Ctx, Rows, Items), sequence(shared_decl(Ctx), Shared),
             sequence(shared_copy(Ctx, L, Rows, in), Shared), shared_fence(Ctx, Shared),
             sequence(phase_code(Ctx, L), Phases),
             sequence(shared_copy(Ctx, L, Rows, out), Shared) ), Codes),
@@ -1379,14 +1407,19 @@ param(Ctx, N, Param) :-
    var_name(Ctx, N, Name),
    format(atom(Param), "__global float *~w", [Name]).
 
-% A kernel of work-groups: a group per point of the rows, its items l of L sharing lm.
+% A kernel of work-groups: a group per point of the rows, its items l of L sharing lm; or a
+% work item per point, the only item of its row.
+work_groups(Ctx, Rows, item) -->
+   !,
+   "  int l = 0;\n",
+   group_rows(Ctx, Rows, "get_global_id(0)").
 work_groups(Ctx, Rows, L) -->
    fmt("  int l = get_local_id(0);\n  __local float lm[~d];\n", [L]),
-   group_rows(Ctx, Rows).
+   group_rows(Ctx, Rows, "get_group_id(0)").
 
-group_rows(_, []) --> !.
-group_rows(Ctx, Rows) -->
-   "  int g = get_group_id(0);\n",
+group_rows(_, [], _) --> !.
+group_rows(Ctx, Rows, Id) -->
+   fmt("  int g = ~w;\n", [Id]),
    { reverse(Rows, Rev) },
    unravel(Ctx, Rev, "g").
 
@@ -1443,6 +1476,10 @@ accumulate(Ctx, red(G, _, Op, E)) -->
    { var_name(Ctx, G, Name), format(atom(P), "p_~w", [Name]), value(Ctx, E, CE), fold(Op, P, CE, C) },
    fmt("  ~w = ~w;\n", [P, C]).
 
+combine(Ctx, 1, red(G, Ts, Op, _)) -->
+   !,
+   { var_name(Ctx, G, Name), place(Ctx, G, Ts, Place), format(atom(P), "p_~w", [Name]), fold(Op, Place, P, Final) },
+   fmt("  ~w = ~w;\n", [Place, Final]).
 combine(Ctx, L, red(G, Ts, Op, _)) -->
    { var_name(Ctx, G, Name), place(Ctx, G, Ts, Place), Half is L // 2,
      fold(Op, 'lm[l]', 'lm[l + s]', Tree), fold(Op, Place, 'lm[0]', Final) },
@@ -1786,9 +1823,11 @@ fmt(Format, Args) --> { format(codes(Codes), Format, Args) }, Codes.
 %           slower, as a step's points outnumber it;
 %   panel   the K block whose micro-panel of a vector pair stays in a 32 KB L1, and the row
 %           block whose panel takes a quarter of the cache the runtime reports, capped at
-%           256 and 128.
+%           256 and 128;
+%   lanes   the items a work-group occupies at the least: the warp or wavefront of a GPU, the
+%           vector of a CPU, whose runtime runs a group's items as lanes of one thread.
 device_options(Device, [vector(W), major(Major), group(G), tile([TI, TJ]), stage(TK), local(L), items(Min),
-                        threads(Threads), panel(KC, MC), lds(LocalBytes), sweep(SW)]) :-
+                        threads(Threads), panel(KC, MC), lds(LocalBytes), sweep(SW), lanes(U)]) :-
    cl_device_info(Device, type, Type),
    rows(Type, TI),
    cl_device_info(Device, preferred_vector_width_float, PW),
@@ -1809,7 +1848,11 @@ device_options(Device, [vector(W), major(Major), group(G), tile([TI, TJ]), stage
    threads(LocalType, CUs, Threads),
    sweep_items(LocalType, L, SW),
    KC is min(256, 16384 // (TJ*4)),
-   MC is min(128, max(TI, CacheBytes // (4*KC*4))).
+   MC is min(128, max(TI, CacheBytes // (4*KC*4))),
+   group_lanes(LocalType, Device, L, W, U).
+
+group_lanes(local, Device, L, _, U) => warp(Device, L, U).
+group_lanes(global, _, _, W, U) => U = W.
 
 sweep_items(global, _, SW) => SW = 1.
 sweep_items(local, L, SW) => SW = L.
@@ -1949,6 +1992,11 @@ work(Kernel, Values, Global, Local), get_dict(kind, Kernel, items) =>
    size(Ns, Global),
    group_size(Stage, Local).
 
+work(Kernel, _, Global, Local), get_dict(kind, Kernel, groups), get_dict(item, Kernel, true) =>
+   kernel{rows: Rows} :< Kernel,
+   maplist(arg(2), Rows, Es),
+   size(Es, Global),
+   Local = 0.
 work(Kernel, _, Global, Local), get_dict(kind, Kernel, groups) =>
    kernel{rows: Rows, local: Local} :< Kernel,
    maplist(arg(2), Rows, Es),
