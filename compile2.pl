@@ -27,7 +27,11 @@
 %   allocate: the inputs and the output each a buffer; the intermediates offsets into one
 %             arena, laid out by minimalloc from their lifetimes over the kernel sequence;
 %             a kernel takes each buffer as a pointer and an element offset into it;
-%   run:      the buffers on the device, kernels in program order, the output read back.
+%   run:      the extents bound by the data, in a scope undone after the run, the buffers on
+%             the device, kernels in program order, the output read back.
+% An extent may stay unknown through the pipeline: a kernel takes it as an int parameter, a
+% decision on parallelism takes its least value, one on fit its most, and one on divisibility
+% asks for it to be known; so one source, compiled once, serves every size.
 % eval/3 is the reference: the boxes run in Prolog, in their order, on data(...) terms.
 
 % program(+Out, -Boxes): the boxes Out depends on, in an order where each box comes after the
@@ -194,7 +198,8 @@ number_plan([], I, I1, Plan) => I1 = I, Plan = [].
 number_plan([loop(T, E, Inner0) | Ps0], I0, I, Plan) =>
    number_plan(Inner0, I0, I1, Inner), Plan = [loop(T, E, Inner) | Ps], number_plan(Ps0, I1, I, Ps).
 number_plan([K0 | Ps0], I0, I, Plan) =>
-   K = K0.put(id, I0), I1 is I0+1, Plan = [K | Ps], number_plan(Ps0, I1, I, Ps).
+   kernel_extents(K0, Extents),
+   K = K0.put(_{id: I0, extents: Extents}), I1 is I0+1, Plan = [K | Ps], number_plan(Ps0, I1, I, Ps).
 
 % flat_plan(+Plan, -Kernels): the kernels of the plan in source order.
 flat_plan(Plan, Kernels) :-
@@ -237,6 +242,7 @@ splittable(over(Axes, [P := V]), L, Min, [Init, Partial, Combine]) :-
    maplist(arg(2), Rows, Es),
    size(Es, NRows),
    NRows < Min,
+   ground(D),
    extent(D, N),
    chunks(N, NRows, L, Min, C),
    C >= 2,
@@ -300,7 +306,8 @@ group_local(Opts, Phases, Items, Rows, Min, Free, Local) :-
 group_local(_, _, Items, _, _, _, Items).
 chains([B | Bs], Out, All, Opts, L, Min, Free, Plan), arg(11, Opts, true),
       epilogue(Out, All, [B | Bs], Before, Init0, Red, Post0, Temps, Rest),
-      schedule(Out, All, Opts, Red, K0), get_dict(atomics, K0, []) =>  % not an atomic reduction
+      schedule(Out, All, Opts, Red, K0), get_dict(atomics, K0, []),  % not an atomic reduction
+      rows_are_items(K0) =>
    chains(Before, Out, All, Opts, L, Min, Free, PsB),
    restrip(K0, Init0, Init), restrip(K0, Post0, Post),
    get_dict(names, K0, Names0), names(Init-Post, Names1), append(Names0, Names1, Names2), sort(Names2, Names3),
@@ -313,6 +320,14 @@ chains([B | Bs], Out, All, Opts, L, Min, Free, Plan) =>
    K = K0.put(free, Free),
    Plan = [K | Ps],
    chains(Bs, Out, All, Opts, L, Min, Free, Ps).
+
+% rows_are_items(+K): every row of the reduction K is a work item or a tile, so that its one
+% loop is the reduction's axis, the initialisation runs before it and the epilogue after it;
+% a sequential row would have to carry them inside its loop.
+rows_are_items(K) :-
+   kernel{seq: Seq, tiles: TilePairs} :< K,
+   pairs_values(TilePairs, TileIs),
+   exclude(axis_in(TileIs), Seq, [_]).
 
 % epilogue(+Out, +All, +Boxes, -Before, -Init, -Red, -Post, -Temps, -Rest): the first boxes are a
 % chain over one point set: a box initialising a name C, a reduction into C over one more axis,
@@ -443,7 +458,7 @@ sweep(over(Axes, Eqs), Opts, L-LDS-SW, Min, Free, Kernel) :-
 shared_name(Box, RowIs, Drop, Budget, N, N-Drop-Size) :-
    shape(N, Shape),
    length(Prefix, Drop), append(Prefix, Rest, Shape),
-   size(Rest, Size), Size =< Budget,
+   size_max(Rest, Size), Size =< Budget,
    accesses(Box, N, Ss),
    forall(member(S, Ss), ( length(P, Drop), append(P, _, S), maplist([X, Y]>>(X == Y), P, RowIs) )).
 
@@ -582,8 +597,10 @@ distinct(Vars) :-
 same_extent(D, Par, R, Rows) :-
    core2:extent(Par, D, Ed),
    core2:extent(Rows, R, Er),
-   extent(Ed, N),
-   extent(Er, N).
+   (  ground(Ed-Er)
+   -> extent(Ed, N), extent(Er, N)
+   ;  Ed == Er
+   ).
 
 % partners(+ParIs, +RowIs, +Prev, +Box0, -Pairs): D-R for each parallel axis D of Box0 found at
 % the subscript position where Prev has the row R, in an access of the same name. The pairs
@@ -764,7 +781,7 @@ fold_term(T0, T) => T = T0.
 staging(Box, Par, [K:D], TilePairs, Written, Priv, [], _, _, _, Threads0, KC0, MC0, LDS, Stage),
       Threads0 > 0, append(Batch, [I:PI, J:PJ], Par), maplist(arg(1), Batch, BatchIs),
       \+ ( member(B, BatchIs), member(B1-_, TilePairs), B1 == B ),
-      extent(PI, NI), extent(PJ, NJ), extent(D, N),
+      ground(PI-PJ-D), extent(PI, NI), extent(PJ, NJ), extent(D, N),
       member(I1-Ii, TilePairs), I1 == I, member(J1-Jj, TilePairs), J1 == J,
       length(Written, NW), length(Priv, NW),
       Box = over(Axes, Eqs), \+ ( member(E, Eqs), is_box(E) ),
@@ -781,7 +798,7 @@ staging(Box, Par, [K:D], TilePairs, Written, Priv, [], _, _, _, Threads0, KC0, M
 staging(Box, Par, [K:D], TilePairs, Written, Priv, [], G, TK0, Major, _, _, _, _, Stage),
       TK0 > 0, append(Batch, [I:PI, J:PJ], Par), maplist(arg(1), Batch, BatchIs),
       \+ ( member(B, BatchIs), member(B1-_, TilePairs), B1 == B ),
-      extent(PI, NI), extent(PJ, NJ), extent(D, N), NI mod G =:= 0, NJ mod G =:= 0, block(N, TK0, TK),
+      ground(PI-PJ-D), extent(PI, NI), extent(PJ, NJ), extent(D, N), NI mod G =:= 0, NJ mod G =:= 0, block(N, TK0, TK),
       member(I1-Ii, TilePairs), I1 == I, member(J1-Jj, TilePairs), J1 == J,
       length(Written, NW), length(Priv, NW),
       Box = over(Axes, Eqs), \+ ( member(E, Eqs), is_box(E) ),
@@ -956,18 +973,25 @@ covers(Axes, S, D) :-
    \+ ( member(Key-_, Pairs), nonvar(Key) ),      % a remainder covers nothing
    keysort(Pairs, Sorted),
    group_pairs_by_key(Sorted, Groups),
-   convlist(radix(Axes), Groups, Radix),
+   maplist(radix(Axes), Groups, Radix0),
+   exclude(==(none), Radix0, Radix),
    member(I-_-_, Radix), I == D,
    maplist([J-K-N, A-(J-K-N)]>>(A is abs(K)), Radix, Keyed),
    keysort(Keyed, ByCoef),
    pairs_values(ByCoef, Ordered),
    foldl(mixed, Ordered, 0, _).
 
-radix(Axes, I-Ks, I-K-N) :-
+% radix(+Axes, +Group, -Term): I-K-N for an index term, N the most its extent can be, inf
+% without an upper bound, which reaches past every later term; none for a term that sums to 0.
+radix(_, _-Ks, Term), sum_list(Ks, 0) => Term = none.
+radix(Axes, I-Ks, Term) =>
    sum_list(Ks, K),
-   K =\= 0,
    core2:extent(Axes, I, E),
-   extent(E, N).
+   (  extent_max(E, N)
+   -> true
+   ;  N = inf
+   ),
+   Term = I-K-N.
 
 mixed(_-K-N, Reach0, Reach) :-
    Reach0 < abs(K),
@@ -982,7 +1006,7 @@ tiles_of(Tiles, Axes, Widths) =>
 
 % strip(+Tile-Axis, +Box0-Tiles0, -Box-Tiles): the axis I:N, when Tile divides N, is split
 % into I:N/Tile, a work item, and Ii:Tile, a loop: the old I is I*Tile + Ii.
-strip(Tile-(I:E), over(Axes0, Eqs0)-Tiles0, BT), extent(E, N), Tile > 1, N > Tile, N mod Tile =:= 0 =>
+strip(Tile-(I:E), over(Axes0, Eqs0)-Tiles0, BT), ground(E), extent(E, N), Tile > 1, N > Tile, N mod Tile =:= 0 =>
    No is N // Tile,
    subst([I-(I*Tile + Ii)], Eqs0, Eqs),
    replace_axis(Axes0, I, I:No, Axes1),
@@ -1142,11 +1166,82 @@ row_id([], G) => G = '0'.
 row_id(_, G) => G = g.
 
 context(K, Box, Priv, Local, Ctx) :-
-   term_variables(K, Vars),
+   kernel_variables(K, Vars),
    foldl([V, J-Ns0, J1-[V-Name | Ns0]]>>(format(atom(Name), "v~d", [J]), J1 is J+1), Vars, 0-[], _-Env),
    get_dict(free, K, Free),
+   get_dict(extents, K, Extents),
+   item_indices(K, Items),
    Ctx = ctx{env: Env, box: Box, priv: Priv, local: Local, stage: [], vector: 1, vec: none, unroll: [], free: Free,
-             ranges: [], shared: [], fence: global, items: 0, temps: [], atomics: [], pre: [], post: [], inits: []}.
+             extents: Extents, pars: Items, ranges: [], shared: [], fence: global, items: 0, temps: [], atomics: [],
+             pre: [], post: [], inits: []}.
+
+% item_indices(+K, -Is): the indices a work item of K fixes: its parallel axes, or its row.
+item_indices(K, Is), get_dict(par, K, Par) => maplist(arg(1), Par, Is).
+item_indices(K, Is), get_dict(rows, K, Rows) => maplist(arg(1), Rows, Is).
+item_indices(_, Is) => Is = [].
+
+% fixed_indices(+Ctx, -Is): the indices fixed in a kernel: the work item's and the host loops'.
+fixed_indices(Ctx, Is) :-
+   get_dict(pars, Ctx, Pars),
+   get_dict(free, Ctx, Free),
+   append(Pars, Free, Is).
+
+% private_extents(+Ctx, +N, -Es): the extents of the private array of the local name N, the
+% slice a work item touches: at each position, one more than the most its subscripts reach
+% over the kernel's loops with the fixed indices at 0; 1 where the item alone subscripts.
+private_extents(Ctx, N, Es) :-
+   get_dict(box, Ctx, Box),
+   all_axes(Box, Axes),
+   fixed_indices(Ctx, Fixed),
+   exclude(axis_in(Fixed), Axes, Scope),
+   accesses(Box, N, Ss),
+   maplist(private_coords(Ctx), Ss, Cs),
+   shape(N, Shape),
+   length(Shape, Rank),
+   findall(P, between(1, Rank, P), Ps),
+   maplist(private_extent(Scope, Cs), Ps, Es).
+
+private_extent(Scope, Cs, P, E) :-
+   maplist(nth1(P), Cs, Cps),
+   maplist(reach(Scope), Cps, Reaches),
+   max_list(Reaches, Most),
+   E is Most + 1.
+
+% reach(+Scope, +C, -R): the most the coordinate C is over Scope, a number: a private array has a
+% size.
+reach(Scope, C, R) :-
+   core2:hull(Scope, C, _, Hi),
+   (  extent_max(Hi, R)
+   -> true
+   ;  existence_error(upper_bound, C)
+   ).
+
+% all_axes(+Box, -Axes): the axes of Box and of the boxes inside it.
+all_axes(over(Axes0, Eqs), Axes) :-
+   include(is_box, Eqs, Inner),
+   maplist(all_axes, Inner, Axess),
+   append([Axes0 | Axess], Axes).
+
+% private_coords(+Ctx, +Ts, -Cs): the subscripts Ts with the fixed indices at 0.
+private_coords(Ctx, Ts, Cs) :-
+   fixed_indices(Ctx, Fixed),
+   maplist([V, V-0]>>true, Fixed, Pairs),
+   subst(Pairs, Ts, Cs).
+
+% kernel_variables(+K, -Vars): the variables of the kernel K and of the shapes of its names.
+kernel_variables(K, Vars) :-
+   get_dict(names, K, Names),
+   maplist(shape, Names, Shapes),
+   term_variables(K-Shapes, Vars).
+
+% kernel_extents(+K, -Extents): the unknown extents the kernel K mentions, its int parameters,
+% recorded on the kernel when the plan is numbered, before a run binds them.
+kernel_extents(K, Extents) :-
+   kernel_variables(K, Vars),
+   include(is_extent, Vars, Extents).
+
+is_extent(V) :-
+   get_attr(V, clpBNR, _).
 
 % items_code(+Ctx, +Par, +Seq, +Eqs, +Stage, -Codes): without staging, the work item unravels
 % its id and runs the loops. With it, the work-group is a G*G block of items over the two
@@ -1372,8 +1467,8 @@ group_ids(Ctx, Batch, I, J, G, GI, GJ, C) :-
 % batch_id(+Ctx, +Axis, +C0-Rest0, -C-Rest): the last batch axis takes Rest0 modulo its
 % extent, the earlier ones the quotient.
 batch_id(Ctx, B:E, C0-Rest0, C-Rest) :-
-   extent(E, N), var_name(Ctx, B, Name),
-   format(atom(C), "~w  int ~w = (~w) % ~d;\n", [C0, Name, Rest0, N]),
+   count(Ctx, E, N), var_name(Ctx, B, Name),
+   format(atom(C), "~w  int ~w = (~w) % ~w;\n", [C0, Name, Rest0, N]),
    Rest = (Rest0 / N).
 
 group_axis(Ctx, Ranges, I, G, _, Start, Count), member(I1-range(_, _), Ranges), I1 == I =>
@@ -1384,6 +1479,9 @@ group_axis(_, _, _, _, GJ, Start, Count) =>
 
 unroll_pragma(TK, Pragma), TK =< 16 => Pragma = '#pragma unroll'.
 unroll_pragma(_, Pragma) => Pragma = '#pragma unroll 8'.
+
+pragma_of(E, Pragma), ground(E) => extent(E, N), unroll_pragma(N, Pragma).
+pragma_of(_, Pragma) => Pragma = '#pragma unroll 8'.
 
 % pack_index(+Ip, +Jp, +Kk, +KC, +Tile0, -Tile): the element of a panel the micro-kernel reads.
 pack_index(Ip, _, Kk, KC, tile(R, A, Ii, T, k_last, Name), Tile), A \== none =>
@@ -1471,7 +1569,9 @@ kernel_text(I, Ctx, Names, Codes, Source) :-
    maplist(index_param(Ctx), Free, Params1),
    get_dict(ranges, Ctx, Ranges),
    maplist(range_params(Ctx), Ranges, Params2),
-   append([Params0, Params1, Params2], Params),
+   get_dict(extents, Ctx, Extents),
+   maplist(index_param(Ctx), Extents, Params3),
+   append([Params0, Params1, Params2, Params3], Params),
    atomic_list_concat(Params, ", ", ParamList),
    maplist(offset_prologue(Ctx), Names, Prologue0),
    atomic_list_concat(Prologue0, Prologue),
@@ -1520,9 +1620,9 @@ phase_code(Ctx, _, serial(Eqs)) -->
    "  }\n",
    fence(Ctx).
 phase_code(Ctx, L, reduce(K:D, Reds)) -->
-   { var_name(Ctx, K, Name), extent(D, N) },
+   { var_name(Ctx, K, Name), count(Ctx, D, N) },
    sequence(register(Ctx), Reds),
-   fmt("  for (int ~w = l; ~w < ~d; ~w += ~d) {\n", [Name, Name, N, Name, L]),
+   fmt("  for (int ~w = l; ~w < ~w; ~w += ~d) {\n", [Name, Name, N, Name, L]),
    sequence(accumulate(Ctx), Reds),
    "  }\n",
    sequence(combine(Ctx, L), Reds).
@@ -1536,8 +1636,8 @@ phase_code(Ctx, L, spread(Axes, Ranges, Eqs)) -->
    "  }\n  }\n",
    fence(Ctx).
 phase_code(Ctx, L, loop(T, E, Phases)) -->
-   { var_name(Ctx, T, Name), extent(E, N) },
-   fmt("  for (int ~w = 0; ~w < ~d; ~w++) {\n", [Name, Name, N, Name]),
+   { var_name(Ctx, T, Name), count(Ctx, E, N) },
+   fmt("  for (int ~w = 0; ~w < ~w; ~w++) {\n", [Name, Name, N, Name]),
    sequence(phase_code(Ctx, L), Phases),
    "  }\n".
 
@@ -1545,8 +1645,8 @@ phase_code(Ctx, L, loop(T, E, Phases)) -->
 % its guard range when it has one, 0 items at least.
 spread_axis(Ctx, Ranges, I:_, Count, Start), member(I1-range(Lo, N), Ranges), I1 == I =>
    index(Ctx, Lo, Start), index(Ctx, N, CN), format(atom(Count), "max(~w, 0)", [CN]).
-spread_axis(_, _, _:E, Count, Start) =>
-   extent(E, Count), Start = 0.
+spread_axis(Ctx, _, _:E, Count, Start) =>
+   count(Ctx, E, Count), Start = 0.
 
 unravel_spread(_, [], _, _, _) --> [].
 unravel_spread(Ctx, [I:_ | Axes], [Count | Counts], [Start | Starts], V) -->
@@ -1615,8 +1715,8 @@ unravel(Ctx, [I:E | Par], G) -->
 
 count_of(Ctx, I, _, Name, Count, Start), get_dict(ranges, Ctx, Ranges), member(I1-range(_, _), Ranges), I1 == I =>
    format(atom(Count), "n_~w", [Name]), format(atom(Start), "lo_~w", [Name]).
-count_of(_, _, E, _, Count, Start) =>
-   extent(E, Count), Start = 0.
+count_of(Ctx, _, E, _, Count, Start) =>
+   count(Ctx, E, Count), Start = 0.
 
 privates(Ctx) -->
    { get_dict(local, Ctx, Local), get_dict(priv, Ctx, Priv) },
@@ -1624,11 +1724,11 @@ privates(Ctx) -->
    sequence(private_tile(Ctx), Priv).
 
 private_local(Ctx, N) -->
-   { shape(N, Shape), size(Shape, Size), var_name(Ctx, N, Name), ctype(N, T) },
+   { private_extents(Ctx, N, Es), private_size(Es, Size), var_name(Ctx, N, Name), ctype(N, T) },
    fmt("  ~w p_~w[~d] = {0};\n", [T, Name, Size]).   % pocl 7.1 breaks an uninitialised array
 
 private_tile(Ctx, N-Infos) -->
-   { maplist(info_width, Infos, Es), size(Es, Size), var_name(Ctx, N, Name), ctype(N, T) },
+   { maplist(info_width, Infos, Es), private_size(Es, Size), var_name(Ctx, N, Name), ctype(N, T) },
    fmt("  ~w r_~w[~d] = {0};\n", [T, Name, Size]).
 
 size(Es, Size) :-
@@ -1637,6 +1737,43 @@ size(Es, Size) :-
 times(E, S0, S) :-
    extent(E, N),
    S is S0*N.
+
+% count(+Ctx, +E, -C): the extent E as C: its value, or its expression in the kernel's int
+% parameters while unknown.
+count(_, E, C), ground(E) => C is E.
+count(Ctx, E, C) => index(Ctx, E, C).
+
+% extent_term(+E, -T): the extent E folded to its value when known, else itself, for a term.
+extent_term(E, T), ground(E) => T is E.
+extent_term(E, T) => T = E.
+
+% extent_max(+E, -N): the most the extent E can be; fails while it has no upper bound.
+extent_max(E, N), ground(E) => N is E.
+extent_max(E, N) =>
+   term_variables(E, Vs),
+   maplist(upper_bound, Vs, His),
+   pairs_keys_values(Pairs, Vs, His),
+   subst(Pairs, E, E1),
+   N is E1.
+
+upper_bound(V, Hi) :-
+   range(V, [_, Hi]),
+   Hi < inf.
+
+% size_max(+Es, -Size): the most elements the extents Es span; fails while one has no upper
+% bound. private_size/2 is the same for an array a kernel declares, which must have one.
+size_max(Es, Size) :-
+   foldl(times_max, Es, 1, Size).
+
+times_max(E, S0, S) :-
+   extent_max(E, N),
+   S is S0*N.
+
+private_size(Es, Size) :-
+   (  size_max(Es, Size)
+   -> true
+   ;  existence_error(upper_bound, Es)
+   ).
 
 % extent(+E, -N): the value of the extent E, the least one while it is unknown.
 extent(E, N), ground(E) => N is E.
@@ -1678,17 +1815,17 @@ copy(Ctx, Way, N-Infos) -->
 % one vector statement each.
 loops(Ctx, [], Eqs) --> sequence(statement(Ctx), Eqs).
 loops(Ctx, [V:E], Eqs) -->
-   { get_dict(vector, Ctx, W), W > 1, extent(E, N), N mod W =:= 0, vectorizable(Ctx, V, Eqs),
+   { get_dict(vector, Ctx, W), W > 1, ground(E), extent(E, N), N mod W =:= 0, vectorizable(Ctx, V, Eqs),
      Vec = Ctx.put(vec, V), Last is N - W, numlist(0, Last, Offs), include([O]>>(O mod W =:= 0), Offs, Starts) },
    !,
    sequence(vector_chunk(Vec, V, Eqs), Starts).
 loops(Ctx, [I:E | Axes], Eqs) -->
-   { get_dict(unroll, Ctx, Unroll), in_list(Unroll, I), extent(E, N), N =< 16, Last is N - 1, numlist(0, Last, Vs) },
+   { get_dict(unroll, Ctx, Unroll), in_list(Unroll, I), ground(E), extent(E, N), N =< 16, Last is N - 1, numlist(0, Last, Vs) },
    !,
    sequence(unrolled(Ctx, I, Axes, Eqs), Vs).
 loops(Ctx, [I:E | Axes], Eqs) -->
-   { var_name(Ctx, I, Name), extent(E, N), unroll_pragma(N, Pragma) },
-   fmt("  ~w\n  for (int ~w = 0; ~w < ~d; ~w++) {\n", [Pragma, Name, Name, N, Name]),
+   { var_name(Ctx, I, Name), count(Ctx, E, N), pragma_of(E, Pragma) },
+   fmt("  ~w\n  for (int ~w = 0; ~w < ~w; ~w++) {\n", [Pragma, Name, Name, N, Name]),
    loops(Ctx, Axes, Eqs),
    "  }\n".
 
@@ -1781,7 +1918,7 @@ access(Ctx, N, Ts, Access), get_dict(priv, Ctx, Priv), member(N1-Infos, Priv), N
    offset(Cs, Es, Off), format(atom(Private), "r_~w", [Name]), Access = Private-Off.
 
 access(Ctx, N, Ts, Access), get_dict(local, Ctx, Local), in_list(Local, N) =>
-   var_name(Ctx, N, Name), shape(N, Shape), offset(Ts, Shape, Off),
+   var_name(Ctx, N, Name), private_extents(Ctx, N, Es), private_coords(Ctx, Ts, Cs), offset(Cs, Es, Off),
    format(atom(Private), "p_~w", [Name]), Access = Private-Off.
 access(Ctx, N, Ts, Access), get_dict(shared, Ctx, Shared), member(N1-Drop-_, Shared), N1 == N =>
    var_name(Ctx, N, Name), shape(N, Shape),
@@ -1830,7 +1967,7 @@ way(copy_out, Global, Private, From, To) => From = Private, To = Global.
 
 % offset(+Ts, +Shape, -Off): the row-major offset of Ts in Shape, a term.
 offset(Ts, Shape, Off) :-
-   foldl([T, E, Off0, (Off0*N + T)]>>extent(E, N), Ts, Shape, 0, Off).
+   foldl([T, E, Off0, (Off0*N + T)]>>extent_term(E, N), Ts, Shape, 0, Off).
 
 % index(+Ctx, +E, -C) and value(+Ctx, +E, -C): E as a C int, or a C float.
 index(Ctx, V, C), var(V) => var_name(Ctx, V, C).
@@ -2007,11 +2144,50 @@ run(Out, Data, Values, Options0) :-
    kernels(Out, Options, Plan),
    source(Plan, Source),
    built(Context, Device, Source, Program),
-   allocate(Context, Queue, Device, Plan, Out, Data, Options, Alloc),
-   get_dict(buffers, Alloc, Buffers),
-   run_plan(Queue, Program, Buffers, [], Plan),
-   cl_finish(Queue),
-   read_back(Queue, Buffers, Out, Values).
+   findall(Vs, ( bind_extents(Plan, Data),
+                 allocate(Context, Queue, Device, Plan, Out, Data, Options, Alloc),
+                 get_dict(buffers, Alloc, Buffers),
+                 run_plan(Queue, Program, Buffers, [], Plan),
+                 cl_finish(Queue),
+                 read_back(Queue, Buffers, Out, Vs) ),
+           [Values]).
+
+% bind_extents(+Term, +Data): the extents of the plan or boxes Term bound by the data: the
+% length of each list given is the product of its name's shape, a relation clpBNR solves, and
+% must leave the shape known; every other extent, of an output or an intermediate, takes the
+% least value the program allows. Undone by the findall around the run, so that the program
+% stays symbolic for the next.
+bind_extents(Term, Data) :-
+   maplist(bind_length, Data),
+   maplist(given_known, Data),
+   names(Term, Names),
+   maplist(shape, Names, Shapes),
+   term_variables(Term-Shapes, Vs),
+   include(is_extent, Vs, Extents),
+   maplist(least, Extents).
+
+given_known(Name-_) :-
+   shape(Name, Shape),
+   (  term_variables(Shape, [V | _])
+   -> existence_error(extent_value, V)
+   ;  true
+   ).
+
+least(V) :-
+   range(V, [Lo, _]),
+   (  Lo < inf
+   -> V = Lo
+   ;  existence_error(extent_value, V)
+   ).
+
+bind_length(Name-List) :-
+   length(List, Len),
+   shape(Name, Shape),
+   foldl([E, P0, P0*E]>>true, Shape, 1, P),
+   (  {Len == P}
+   -> true
+   ;  domain_error(data_length(P), Name)
+   ).
 
 % run_plan(+Queue, +Program, +Buffers, +Env, +Plan): the kernels launched in order, a host
 % loop's for each value of its index, Env holding the values of the indices around.
@@ -2079,7 +2255,9 @@ launch(Queue, Program, Buffers, Env, Kernel) :-
       foldl(buffer_args(Buffers), Names, [], Args0),
       maplist(index_arg(Env), Free, Args1),
       foldl([_-(Lo, Count), A0, A]>>append(A0, [int(Lo), int(Count)], A), Values, [], Args2),
-      append([Args0, Args1, Args2], Args),
+      get_dict(extents, Kernel, Extents),
+      maplist(extent_arg, Extents, Args3),
+      append([Args0, Args1, Args2, Args3], Args),
       work(Kernel, Values, Global, Local),
       cl_enqueue(Queue, K, Args, Global, Local, [], _)
    ).
@@ -2097,6 +2275,9 @@ value_in(Env, T, V) :-
 
 index_arg(Env, V, int(X)) :-
    member(V1-X, Env), V1 == V, !.
+
+extent_arg(E, int(X)) :-
+   extent(E, X).
 
 % work(+Kernel, +Ranges, -Global, -Local): the work items of Kernel, those of the ranged axes
 % from their counts, and the items of a group, 0 for any.
@@ -2319,11 +2500,13 @@ eval(Out, Data, Values) :-
    program(Out, Boxes),
    label_program(Out, Boxes),
    names(Boxes, Names0), sort([Out | Names0], Names),
-   maplist(host_buffer(Data), Names, Terms),
-   pairs_keys_values(Env, Names, Terms),
-   maplist(step(Env, []), Boxes),
-   member(Out1-Term, Env), Out1 == Out, !,
-   Term =.. [_ | Values].
+   findall(Vs, ( bind_extents(Boxes, Data),
+                 maplist(host_buffer(Data), Names, Terms),
+                 pairs_keys_values(Env, Names, Terms),
+                 maplist(step(Env, []), Boxes),
+                 member(Out1-Term, Env), Out1 == Out, !,
+                 Term =.. [_ | Vs] ),
+           [Values]).
 
 host_buffer(Data, Name, Term), member(Name1-List, Data), Name1 == Name =>
    ctype(Name, T), maplist(coerce(T), List, Elements),

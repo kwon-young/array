@@ -473,6 +473,72 @@ test(non_affine_read_in_a_staged_matmul, [timeout(120), forall(opencl_device(D, 
 
 :- end_tests(compile2_hull).
 
+:- begin_tests(compile2_symbolic).
+
+% An unknown extent is a kernel parameter: one source and one program for every size, and a
+% run binds the extents from its data in a scope undone after it.
+test(one_program_for_every_size, [timeout(120), forall(opencl_device(D, _))]) :-
+   shape(X, [N]), shape(Y, [N]),
+   over([I:N], [Y[I] := X[I] * 2]),
+   kernels(Y, [], Ks), source(Ks, Src), once(sub_string(Src, _, _, _, "int v")),
+   aggregate_all(count, compile2:program_state(_, _, _), C0),
+   forall(member(Size, [16, 40]),
+          ( numlist(1, Size, Xs), eval(Y, [X-Xs], Ref), run(Y, [X-Xs], V, [device(D)]), near(Ref, V) )),
+   aggregate_all(count, compile2:program_state(_, _, _), C1),
+   C1 =< C0 + 1,
+   var(N).
+
+% A reduction in groups over an unknown row length, the rows counted by another input.
+test(groups_reduction_at_two_sizes, [timeout(120), forall(opencl_device(D, _))]) :-
+   shape(X, [R, C]), shape(B, [R]), shape(S, [R]),
+   over([I:R], [S[I] := B[I]]),
+   over([I:R, K:C], [S[I] := S[I] + X[I, K]]),
+   forall(member(R0-C0, [8-64, 3-100]),
+          ( N is R0*C0, numlist(1, N, Xs), numlist(1, R0, Bs), Data = [X-Xs, B-Bs],
+            eval(S, Data, Ref), run(S, Data, V, [device(D), local(32)]), near(Ref, V) )).
+
+% A recurrence over an unknown number of steps.
+test(recurrence_at_two_sizes, [timeout(120), forall(opencl_device(D, _))]) :-
+   shape(X, [N, M]), shape(W, [M]),
+   over([I:M], [Y[0, I] := X[0, I]]),
+   over([T:N-1], [over([I:M], [Y[T+1, I] := Y[T, I] + X[T+1, I] * W[I]])]),
+   forall(member(N0-M0, [4-8, 7-3]),
+          ( L is N0*M0, numlist(1, L, Xs), numlist(1, M0, Ws), Data = [X-Xs, W-Ws],
+            eval(Y, Data, Ref), run(Y, Data, V, [device(D)]), near(Ref, V) )).
+
+% A local name is private to a work item: its array holds the slice the item touches, not the
+% whole name, so an unknown batch costs it nothing.
+test(private_local_holds_the_items_slice, [timeout(120), forall(opencl_device(D, _))]) :-
+   shape(F, [2, 2]), shape(X, [B, 5, 2]),
+   over([Bi:B, T:4], [over([I:2], [P[Bi, I] := 0]),
+                      over([I:2, J:2], [P[Bi, I] := P[Bi, I] + F[I, J] * X[Bi, T, J]]),
+                      over([I:2], [X[Bi, T+1, I] := P[Bi, I]])]),
+   kernels(X, [tile(1)], [K]), kernel{local: [P1]} :< K, P1 == P,
+   source([K], Src), once(sub_string(Src, _, _, _, "[2] = {0}")),
+   Fs = [0, -1, 1, 0],
+   forall(member(B0, [3, 64]),
+          ( L is B0*10, numlist(1, L, Ns), maplist([I, V]>>(V is (I mod 7) / 7 - 0.5), Ns, Xs),
+            eval(X, [F-Fs, X-Xs], Ref), run(X, [F-Fs, X-Xs], V, [device(D), tile(1)]), near(Ref, V) )),
+   var(B).
+
+% A reduction whose rows are not work items keeps its initialisation and epilogue as kernels of
+% their own: fused, the initialisation would run outside the row loop.
+test(sequential_rows_are_not_fused, [timeout(120), forall(opencl_device(D, _))]) :-
+   shape(X, [16, 4]), shape(C, [8]), shape(Y, [8]),
+   over([I:16], [C[I mod 8] := 0]),
+   over([I:16, K:4], [C[I mod 8] := C[I mod 8] + X[I, K]]),
+   over([I:16], [Y[I mod 8] := C[I mod 8] * 2]),
+   kernels(Y, [], Ks), length(Ks, 3),
+   numlist(1, 64, Xs), eval(Y, [X-Xs], Ref), run(Y, [X-Xs], V, [device(D)]), near(Ref, V).
+
+% An extent the data leaves unknown is an error.
+test(undetermined_extent, [timeout(120), throws(error(existence_error(extent_value, _), _))]) :-
+   shape(X, [N, M]), shape(Y, [N]),
+   over([I:N], [Y[I] := X[I, 0]]),
+   numlist(1, 12, Xs), run(Y, [X-Xs], _, []).
+
+:- end_tests(compile2_symbolic).
+
 :- begin_tests(compile2_alloc).
 
 % A name lives from the first kernel mentioning it to the last, and across the whole of a

@@ -93,6 +93,14 @@ expected(Field, Refs, Flat) :-
 
 fields([1-mu_pred, 2-p_pred, 3-mu_z, 4-szz, 5-score, 6-mu_post, 7-p_post, 8-mu_sel]).
 
+% more_detections(+Zdet, +Pair, -Pair1): the data of Zdet with two detections appended, the
+% near one of the second track and the far one again.
+more_detections(Zdet, N-L, N-L1) :-
+   (  N == Zdet
+   -> append(L, [8.4, 8.0, 30, 30], L1)
+   ;  L1 = L
+   ).
+
 :- begin_tests(ukf2).
 
 test(eval_matches_reference, [timeout(60), forall((fields(Fs), member(I-Name, Fs)))]) :-
@@ -139,6 +147,17 @@ test(symbolic_batch_and_detections, [timeout(60)]) :-
    B = B0, D = D0,
    forall(member(I, [5, 7, 8]),
           ( arg(I, Out, Name), expected(I, Refs, Expected), eval(Name, Data, V), near(Expected, V) )).
+
+% One step for every number of detections: built with D unknown, run at three and at five.
+test(one_step_for_every_detection_count, [timeout(300), forall(opencl_device(D, _))]) :-
+   case(dims(B0, N, M, _), Crit, Data3, in(Mu, P, R, Zdet, Sel), Refs),
+   ukf_step(cv_range_model, dims(B, N, M, Dn), Crit, in(Mu, P, R, Zdet, Sel), Out),
+   arg(5, Out, Score),
+   expected(5, Refs, Expected3), run(Score, Data3, V3, [device(D)]), near(Expected3, V3),
+   maplist(more_detections(Zdet), Data3, Data5),
+   eval(Score, Data5, Ref5), run(Score, Data5, V5, [device(D)]), near(Ref5, V5),
+   length(V3, L3), length(V5, L5), L3 =:= B0*3, L5 =:= B0*5,
+   var(B), var(Dn).
 
 % The step compiles to a bounded number of kernels per output.
 test(kernel_count, [timeout(60), true(Ns == [13, 15, 15])]) :-
