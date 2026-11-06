@@ -101,13 +101,17 @@ bench_stats(Label, Out, Data, Device, Options0, Reps, Stats) :-
    compile2:kernels(Out, Options, Kernels),
    compile2:source(Kernels, Source),
    compile2:built(Context, Dev, Source, Program),
-   compile2:allocate(Context, Queue, Dev, Kernels, Out, Data, Options, Alloc),
-   alloc{how: How, buffers: Buffers, bytes: B, apart: Ap, peak: Pk, setup: Setup} :< Alloc,
-   once_run(Queue, Program, Buffers, Kernels),           % warm up
-   findall(T, ( between(1, Reps, _), once_run(Queue, Program, Buffers, Kernels, T) ), Ts),
-   min_list(Ts, Best), compile2:flat_plan(Kernels, Flat), length(Flat, NK),
-   Stats = stats{label: Label, device: Device, kernels: NK, best: Best, alloc: How, bytes: B, apart: Ap, peak: Pk,
-                 setup: Setup}.
+   compile2:flat_plan(Kernels, Flat), length(Flat, NK),
+   findall(Stats0,                                       % the extents bound by the data, as run/4 does
+           ( compile2:bind_extents(Kernels, Data),
+             compile2:allocate(Context, Queue, Dev, Kernels, Out, Data, Options, Alloc),
+             alloc{how: How, buffers: Buffers, bytes: B, apart: Ap, peak: Pk, setup: Setup} :< Alloc,
+             once_run(Queue, Program, Buffers, Kernels),           % warm up
+             findall(T, ( between(1, Reps, _), once_run(Queue, Program, Buffers, Kernels, T) ), Ts),
+             min_list(Ts, Best),
+             Stats0 = stats{label: Label, device: Device, kernels: NK, best: Best, alloc: How, bytes: B, apart: Ap,
+                            peak: Pk, setup: Setup} ),
+           [Stats]).
 
 % scatter(+Idx, +W, -H, +M, +N): H[Idx[k]] += W[k], M sources into N bins: a histogram when N is
 % small, an index_add when N is large.

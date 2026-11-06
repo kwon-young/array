@@ -1,6 +1,7 @@
 :- use_module(core2).
 :- use_module(compile2).
 :- use_module(ukf2).
+:- use_module(sort2).
 :- use_module(opencl, [opencl_device/2]).
 :- use_module(library(clpfd), [transpose/2]).
 
@@ -161,6 +162,23 @@ test(one_step_for_every_detection_count, [timeout(300), forall(opencl_device(D, 
    maplist(more_detections(Zdet), Data3, Data5),
    eval(Score, Data5, Ref5), run(Score, Data5, V5, [device(D)]), near(Ref5, V5),
    length(V3, L3), length(V5, L5), L3 =:= B0*3, L5 =:= B0*5,
+   var(B), var(Dn).
+
+% The pairs in score order: the two gated-in pairs first, by score, then the infinite ones.
+test(pairs_in_score_order, [timeout(300), forall(opencl_device(D, _))]) :-
+   case(dims(B0, N, M, D0), Crit, Data0, in(Mu, P, R, Zdet, Sel), Refs),
+   ukf_step(cv_range_model, dims(B, N, M, Dn), Crit, in(Mu, P, R, Zdet, Sel), Out),
+   arg(5, Out, Score),
+   ukf_order(Score, dims(B, Dn), Keys, Vals, Ks, Ss),
+   Np = 8, pass_table(Np, KL, SL), length(Zeros, Np), maplist(=(0), Zeros),
+   Data = [Keys-Zeros, Vals-Zeros, Ks-KL, Ss-SL | Data0],
+   run(Vals, Data, Order, [device(D)]), run(Keys, Data, Sorted, [device(D)]),
+   expected(5, Refs, Scores), Pairs is B0*D0,
+   findall(S-I, ( nth0(I, Scores, S), S < inf ), Finite0), msort(Finite0, Finite),
+   pairs_values(Finite, Lead), length(Lead, NL), length(Lead1, NL), append(Lead1, Rest, Order), Lead1 == Lead,
+   pairs_keys(Finite, LeadScores), length(Sorted1, NL), append(Sorted1, Tail, Sorted), near(LeadScores, Sorted1),
+   forall(member(T, Tail), T =:= inf),
+   NPad is Np - Pairs, aggregate_all(count, member(-1, Rest), NPad),
    var(B), var(Dn).
 
 % The step compiles to a bounded number of kernels per output.

@@ -1,5 +1,7 @@
-:- module(ukf2, [ukf_step/5, chol/4, cv_range_model/3]).
+:- module(ukf2, [ukf_step/5, ukf_order/6, chol/4, cv_range_model/3]).
 :- use_module(core2).
+:- use_module(sort2).
+:- use_module(library(clpBNR)).
 
 /** <module> One step of an unscented Kalman filter, as boxes
 
@@ -21,6 +23,13 @@ for each state. N and M are the model's, ground; B and D may stay extent variabl
         Out = out(MuPred, PPred, MuZ, Szz, Score, MuPost, PPost, MuSel)
         MuPred[B, N], PPred[B, N, N], MuZ[B, M], Szz[B, M, M], Score[B, D],
         MuPost[B, D, N], PPost[B, N, N], MuSel[B, N]
+
+    ukf_order(+Score, +dims(B, D), +Keys, +Vals, +Ks, +Ss)
+        the state and detection pairs by ascending score: Vals[N] the pair indices b*D + d
+        and Keys[N] their scores, in that order, the pairs beyond the gate last by their
+        infinite score, after them -1 under inf for the padding. Keys and Vals are names of
+        N elements given to the run and overwritten, N a power of two at least B*D; Ks and
+        Ss the pass table of N, see sort2:pass_table/3.
 */
 
 ukf_step(Model, dims(B, N, M, D), Crit, in(Mu, P, R, Zdet, Sel),
@@ -87,6 +96,14 @@ ukf_step(Model, dims(B, N, M, D), Crit, in(Mu, P, R, Zdet, Sel),
    over([Bi:B, I:N, J:N], [PPost[Bi, I, J] := PPred[Bi, I, J]]),
    over([Bi:B, I:N, J:N, Kk:M], [PPost[Bi, I, J] := PPost[Bi, I, J] - GS[Bi, I, Kk] * G[Bi, J, Kk]]),
    over([Bi:B, I:N], [MuSel[Bi, I] := MuPost[Bi, Sel[Bi], I]]).
+
+ukf_order(Score, dims(B, D), Keys, Vals, Ks, Ss) :-
+   shape(Score, [B, D]), {B >= 1, D >= 1},
+   shape(Keys, [N]), shape(Vals, [N]), kind(Keys, float), kind(Vals, int),
+   Inf is inf,
+   over([I:N], [Keys[I] := where(I < B*D, Score[min(I // D, B-1), I mod D], Inf),
+                Vals[I] := where(I < B*D, I, -1)]),
+   bitonic(Keys, Vals, Ks, Ss, N).
 
 read_of(A, Bi, Ki, I, A[Bi, Ki, I]).
 write_of(A, Bi, Ki, I, V, A[Bi, Ki, I] := V).
