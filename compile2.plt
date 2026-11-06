@@ -1,6 +1,7 @@
 :- use_module(core2).
 :- use_module(compile2).
 :- use_module(opencl, [opencl_device/2, cl_device_info/3]).
+:- op(20, yf, []).
 :- use_module(bench2, [vit_block/6]).
 
 % The tests are several units, since plunit runs units concurrently: run_tests(all, [jobs(6)]).
@@ -383,3 +384,49 @@ test(vit_block_is_nine_kernels, [timeout(120), forall(opencl_device(D, _))]) :-
    near(Ref, V), shape(X, _).
 
 :- end_tests(compile2_fusion).
+
+:- begin_tests(compile2_alloc).
+
+% A name lives from the first kernel mentioning it to the last, and across the whole of a
+% host loop it is mentioned in.
+test(lifetimes_span_host_loops, [timeout(10), true(Spans == [a-(0-0), b-(1-2), c-(1-3)])]) :-
+   lifetimes([kernel{names: [a]}, loop(_, 2, [kernel{names: [b]}, kernel{names: [c]}]), kernel{names: [c]}], Spans).
+
+test(loop_names_live_across_the_loop, [timeout(60)]) :-
+   blocked_cholesky(A, L, 128, 32),
+   kernels(L, [], Plan), Plan = [_, loop(_, 4, Inner)], length(Inner, NI),
+   lifetimes(Plan, Spans),
+   forall(( member(N-(First-Last), Spans), N \== A, N \== L ), ( First =:= 1, Last =:= NI )),
+   shape(A, _).
+
+% The toy instance of minimalloc.pl: the packing reaches the peak, and buffers alive at once
+% are apart.
+test(packing_reaches_the_peak, [timeout(10), true(Bytes == 250)]) :-
+   Bufs = [buffer(1, 0, 2, 100, _), buffer(2, 1, 3, 100, _), buffer(3, 2, 4, 100, _), buffer(4, 0, 4, 50, _)],
+   compile2:packing(Bufs, 50, 250, Bytes),
+   forall(( member(buffer(I, S1, E1, Z1, O1), Bufs), member(buffer(J, S2, E2, Z2, O2), Bufs), I < J, S1 < E2, S2 < E1 ),
+          ( O1 + Z1 =< O2 ; O2 + Z2 =< O1 )).
+
+% The intermediates of a ViT block share an arena under their sum apart, and the values are
+% those of separate buffers.
+test(vit_intermediates_share_an_arena, [timeout(120), forall(opencl_device(D, Dev))]) :-
+   S = 16, Dm = 32, H = 2, F = 64, Opts = [tile([8, 8]), group(2), stage(8), local(32), items(8), lanes(2)],
+   vit_block(X, Y, S, Dm, H, F),
+   kernels(Y, Opts, Ks),
+   compile2:device(D, Dev, Context, Queue),
+   allocate(Context, Queue, Dev, Ks, Y, [], Opts, Alloc),
+   alloc{buffers: Buffers, arena: Arena, bytes: B, apart: Ap, peak: Pk} :< Alloc,
+   Arena \== none, Pk =< B, B < Ap,
+   length(Buffers, NB), compile2:flat_plan(Ks, Flat),
+   foldl([K, Ns0, Ns]>>(get_dict(names, K, N1), append(Ns0, N1, Ns)), Flat, [], Names0),
+   sort(Names0, Names), length(Names, NB),
+   compile2:program(Y, Boxes), bench2:names(Boxes, Names1),
+   include([N]>>(N \== Y, compile2:boxes_of(N, [])), Names1, Inputs),
+   maplist([N, N-Vs]>>( shape(N, Sh), compile2:size(Sh, Len), numlist(1, Len, Is),
+                        maplist([I, V]>>(V is ((I * 7) mod 23) / 23 - 0.5), Is, Vs) ), Inputs, Data),
+   eval(Y, Data, Ref),
+   run(Y, Data, V1, [device(D), alloc(arena) | Opts]), near(Ref, V1),
+   run(Y, Data, V2, [device(D), alloc(separate) | Opts]), near(Ref, V2),
+   shape(X, _).
+
+:- end_tests(compile2_alloc).

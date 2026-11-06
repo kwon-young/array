@@ -29,10 +29,34 @@ HANDLE_BLOB(cl_platform_id, NO_RELEASE)
 HANDLE_BLOB(cl_device_id, NO_RELEASE)
 HANDLE_BLOB(cl_context, clReleaseContext)
 HANDLE_BLOB(cl_command_queue, clReleaseCommandQueue)
-HANDLE_BLOB(cl_mem, clReleaseMemObject)
 HANDLE_BLOB(cl_program, clReleaseProgram)
 HANDLE_BLOB(cl_kernel, clReleaseKernel)
 HANDLE_BLOB(cl_event, clReleaseEvent)
+
+/* A buffer blob holds its cl_mem.  A sub-buffer's holds the atom of its parent's
+ * blob too, registered so that the collector keeps the parent as long as the
+ * sub-buffer lives, and releases it after: the NVIDIA runtime faults when the
+ * parent goes first, whatever order the collector finds them in. */
+typedef struct
+{
+  cl_mem mem;
+  atom_t parent;
+} cl_sub_buffer;
+
+static int release_cl_mem(atom_t a)
+{
+  size_t len;
+  cl_mem *h = PL_blob_data(a, &len, NULL);
+  if (h && h[0])
+    clReleaseMemObject(h[0]);
+  if (h && len == sizeof(cl_sub_buffer))
+    PL_unregister_atom(((cl_sub_buffer *)h)->parent);
+  return TRUE;
+}
+static PL_blob_t cl_mem_blob = {
+  PL_BLOB_MAGIC, PL_BLOB_UNIQUE, "cl_mem", release_cl_mem,
+  NULL, NULL, NULL, NULL, NULL
+};
 
 static int get_handle(term_t t, PL_blob_t *type, void *handle)
 {
@@ -94,6 +118,7 @@ static const char *error_name(cl_int code)
     case CL_INVALID_EVENT: return "CL_INVALID_EVENT";
     case CL_INVALID_OPERATION: return "CL_INVALID_OPERATION";
     case CL_INVALID_BUFFER_SIZE: return "CL_INVALID_BUFFER_SIZE";
+    case CL_MISALIGNED_SUB_BUFFER_OFFSET: return "CL_MISALIGNED_SUB_BUFFER_OFFSET";
     case CL_EXEC_STATUS_ERROR_FOR_EVENTS_IN_WAIT_LIST:
       return "CL_EXEC_STATUS_ERROR_FOR_EVENTS_IN_WAIT_LIST";
     default: return "CL_UNKNOWN_ERROR";
@@ -369,6 +394,29 @@ static foreign_t pl_cl_buffer(term_t context_t, term_t bytes_t, term_t mem_t)
   cl_mem mem = clCreateBuffer(context, CL_MEM_READ_WRITE, bytes, NULL, &err);
   return check(err, "clCreateBuffer")
     && unify_handle(mem_t, &cl_mem_blob, mem);
+}
+
+/* A sub-buffer: Bytes of Mem from Offset, a multiple of the device's
+ * mem_base_addr_align, as a buffer of its own, holding Mem. */
+static foreign_t pl_cl_sub_buffer(term_t mem_t, term_t offset_t, term_t bytes_t,
+                               term_t sub_t)
+{
+  cl_mem mem;
+  size_t offset, bytes;
+  cl_int err;
+
+  if (!get_handle(mem_t, &cl_mem_blob, &mem)
+      || !PL_get_size_ex(offset_t, &offset)
+      || !PL_get_size_ex(bytes_t, &bytes))
+    return FALSE;
+  cl_buffer_region region = { offset, bytes };
+  cl_sub_buffer sub;
+  sub.mem = clCreateSubBuffer(mem, CL_MEM_READ_WRITE,
+                              CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
+  if (!check(err, "clCreateSubBuffer") || !PL_get_atom(mem_t, &sub.parent))
+    return FALSE;
+  PL_register_atom(sub.parent);
+  return PL_unify_blob(sub_t, &sub, sizeof(sub), &cl_mem_blob);
 }
 
 /* Waits is a list of events: the command starts once they are complete. */
@@ -721,6 +769,7 @@ install_t install_opencl(void)
   PL_register_foreign("cl_context", 2, pl_cl_context, 0);
   PL_register_foreign("cl_queue", 4, pl_cl_queue, 0);
   PL_register_foreign("cl_buffer", 3, pl_cl_buffer, 0);
+  PL_register_foreign("cl_sub_buffer", 4, pl_cl_sub_buffer, 0);
   PL_register_foreign("cl_fill", 5, pl_cl_fill, 0);
   PL_register_foreign("cl_write", 5, pl_cl_write, 0);
   PL_register_foreign("cl_read", 5, pl_cl_read, 0);

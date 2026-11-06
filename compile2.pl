@@ -1,9 +1,10 @@
-:- module(compile2, [program/2, eval/3, kernels/3, source/2, run/4, device_options/2]).
+:- module(compile2, [program/2, eval/3, kernels/3, source/2, run/4, device_options/2, allocate/8, lifetimes/2]).
 :- use_module(library(clpBNR)).
 :- use_module(library(dcg/high_order)).
 :- use_module(core2).
 :- use_module(opencl).
 :- use_module(buffer).
+:- use_module(minimalloc).
 :- discontiguous items_code/6.
 
 % The pipeline, from the boxes of core2 to OpenCL:
@@ -20,7 +21,9 @@
 %             A box over one sequential axis whose equations are boxes with parallel work
 %             is a host loop: its boxes are kernels taking the index as a parameter;
 %   print:    one OpenCL C kernel per box or chain, elements float, indices int;
-%   run:      buffers on the device, kernels in program order, the output read back.
+%   allocate: the inputs and the output each a buffer; the intermediates slices of one arena,
+%             laid out by minimalloc from their lifetimes over the kernel sequence;
+%   run:      the buffers on the device, kernels in program order, the output read back.
 % eval/3 is the reference: the boxes run in Prolog, in their order, on data(...) terms.
 
 % program(+Out, -Boxes): the boxes Out depends on, in an order where each box comes after the
@@ -1805,7 +1808,8 @@ fmt(Format, Args) --> { format(codes(Codes), Format, Args) }, Codes.
 
 % run(+Out, +Data, -Values, +Options): the elements of Out, row-major, computed on the device of
 % device(Name), pocl by default, from Data, Name-List pairs, with the options of kernels/3,
-% those not given derived from the device.
+% those not given derived from the device, and alloc(arena), the default, or alloc(separate),
+% see allocate/8.
 
 % device_options(+Device, -Options): the schedule parameters a device's properties call for.
 %   vector  the native float vector of a CPU, its SIMD unit, whatever width its runtime
@@ -1900,11 +1904,8 @@ run(Out, Data, Values, Options0) :-
    kernels(Out, Options, Plan),
    source(Plan, Source),
    built(Context, Device, Source, Program),
-   flat_plan(Plan, Kernels),
-   foldl([K, Ns0, Ns]>>(get_dict(names, K, N1), append(Ns0, N1, Ns)), Kernels, [], Names0),
-   sort(Names0, Names),
-   maplist(device_buffer(Context, Queue, Data), Names, Mems),
-   pairs_keys_values(Buffers, Names, Mems),
+   allocate(Context, Queue, Device, Plan, Out, Data, Options, Alloc),
+   get_dict(buffers, Alloc, Buffers),
    run_plan(Queue, Program, Buffers, [], Plan),
    cl_finish(Queue),
    read_back(Queue, Buffers, Out, Values).
@@ -2032,6 +2033,161 @@ read_back(Queue, Buffers, Out, Values) :-
    cl_read(Queue, Mem, 0, Pointer, Bytes),
    buffer_to_data(Host, float32, N, Term),
    Term =.. [_ | Values].
+
+% Allocation
+% ==========
+
+% allocate(+Context, +Queue, +Device, +Plan, +Out, +Data, +Options, -Alloc): a device buffer for
+% every name of the plan. An input, a name no box writes or one given in Data, and Out have a
+% buffer of their own, uploaded from Data or zeroed. The intermediates, with alloc(arena), the
+% default, share one arena: each lives from the first kernel mentioning it to the last, and
+% minimalloc lays the lifetimes out, see arena/10; with alloc(separate) each has a buffer of
+% its own, zeroed. Alloc is a dict:
+%   how      arena or separate,
+%   buffers  Name-Mem pairs, every name of the plan,
+%   arena    the arena's buffer, or none,
+%   bytes    the bytes the intermediates take: the arena, or their buffers,
+%   apart    the bytes they take as buffers of their own,
+%   peak     the most bytes live at one kernel, the floor of any arena,
+%   setup    the seconds the intermediates took to allocate.
+allocate(Context, Queue, Device, Plan, Out, Data, Options, Alloc) :-
+   option(alloc(How), Options, arena),
+   flat_plan(Plan, Kernels),
+   foldl([K, Ns0, Ns]>>(get_dict(names, K, N1), append(Ns0, N1, Ns)), Kernels, [], Names0),
+   sort(Names0, Names),
+   partition(intermediate(Out, Data), Names, Inter, Own),
+   maplist(device_buffer(Context, Queue, Data), Own, OwnMems),
+   pairs_keys_values(OwnBuffers, Own, OwnMems),
+   cl_device_info(Device, mem_base_addr_align, Bits), Align is Bits // 8,
+   maplist(aligned_bytes(Align), Inter, Sizes),
+   sum_list(Sizes, Apart),
+   lifetimes(Plan, Spans),
+   length(Inter, N), ids(N, Ids),
+   maplist(buffer_of(Spans), Ids, Inter, Sizes, Bufs),
+   peak(Bufs, Peak),
+   get_time(T0),
+   arena(How, Context, Queue, Inter, Bufs, Align, Peak, InterBuffers, Arena, Bytes),
+   get_time(T1), Setup is T1 - T0,
+   append(OwnBuffers, InterBuffers, Buffers),
+   Alloc = alloc{how: How, buffers: Buffers, arena: Arena, bytes: Bytes, apart: Apart, peak: Peak, setup: Setup}.
+
+% intermediate(+Out, +Data, +N): N is written by a box, is not Out, and has no data.
+intermediate(Out, Data, N) :-
+   N \== Out,
+   boxes_of(N, [_ | _]),
+   \+ ( member(N1-_, Data), N1 == N ).
+
+ids(0, Ids) => Ids = [].
+ids(N, Ids) => numlist(1, N, Ids).
+
+% aligned_bytes(+Align, +Name, -Bytes): the bytes of Name's floats, rounded up to Align.
+aligned_bytes(Align, Name, Bytes) :-
+   shape(Name, Shape), size(Shape, N),
+   Bytes is ((4*max(N, 1) + Align - 1) // Align) * Align.
+
+% buffer_of(+Spans, +Id, +Name, +Size, -Buffer): the buffer term of minimalloc for Name: its
+% lifetime is the kernels First to Last, the interval [First, Last+1).
+buffer_of(Spans, Id, Name, Size, buffer(Id, First, End, Size, _)) :-
+   member(N1-(First-Last), Spans), N1 == Name, !,
+   End is Last + 1.
+
+% peak(+Bufs, -Peak): the most bytes live at once: at the start of some buffer.
+peak([], Peak) =>
+   Peak = 0.
+peak(Bufs, Peak) =>
+   aggregate_all(max(Live),
+                 ( member(buffer(_, T, _, _, _), Bufs),
+                   aggregate_all(sum(S), ( member(buffer(_, S0, E, S, _), Bufs), S0 =< T, T < E ), Live) ),
+                 Peak).
+
+% lifetimes(+Plan, -Spans): Name-(First-Last) for every name of the plan: the positions, in
+% source order, of the first and last kernel mentioning it. A name mentioned inside a host
+% loop lives across the whole loop: a step may read what the previous step wrote.
+lifetimes(Plan, Spans) :-
+   spans(Plan, 0, _, [], Pairs),
+   keysort(Pairs, Sorted),
+   group_pairs_by_key(Sorted, Groups),
+   maplist(span, Groups, Spans).
+
+span(N-Is, N-(First-Last)) :-
+   min_list(Is, First),
+   max_list(Is, Last).
+
+spans([], I, I1, Ps0, Ps) =>
+   I1 = I, Ps = Ps0.
+spans([loop(_, _, Inner) | Rest], I0, I, Ps0, Ps) =>
+   spans(Inner, I0, I1, [], Inside),
+   Last is I1 - 1,
+   foldl(across(I0, Last), Inside, Ps0, Ps1),
+   spans(Rest, I1, I, Ps1, Ps).
+spans([K | Rest], I0, I, Ps0, Ps) =>
+   get_dict(names, K, Names),
+   foldl(at(I0), Names, Ps0, Ps1),
+   I1 is I0 + 1,
+   spans(Rest, I1, I, Ps1, Ps).
+
+at(I, N, Ps, [N-I | Ps]).
+across(First, Last, N-I, Ps, [N-First, N-Last, N-I | Ps]).
+
+% arena(+How, +Context, +Queue, +Inter, +Bufs, +Align, +Peak, -Buffers, -Arena, -Bytes): the
+% buffers of the intermediates. With arena, one buffer of Bytes, zeroed once, and each a
+% sub-buffer of it at the offset minimalloc gives its lifetime, see packing/4: a name is
+% written before it is read, so that the first occupant of a byte reads the zero the
+% reference reads, and a later one what the previous left. With separate, a zeroed buffer each.
+arena(arena, _, _, [], _, _, _, Buffers, Arena, Bytes) =>
+   Buffers = [], Arena = none, Bytes = 0.
+arena(arena, Context, Queue, Inter, Bufs, Align, Peak, Buffers, Arena, Bytes) =>
+   packing(Bufs, Align, Peak, Bytes),
+   cl_buffer(Context, Bytes, Arena),
+   cl_fill(Queue, Arena, Bytes, [], Event),
+   cl_wait([Event]),
+   maplist(slice(Arena), Inter, Bufs, Buffers).
+arena(separate, Context, Queue, Inter, Bufs, _, _, Buffers, Arena, Bytes) =>
+   maplist(device_buffer(Context, Queue, []), Inter, Mems),
+   pairs_keys_values(Buffers, Inter, Mems),
+   Arena = none,
+   aggregate_all(sum(S), member(buffer(_, _, _, S, _), Bufs), Bytes).
+
+slice(Arena, Name, buffer(_, _, _, Size, Offset), Name-Mem) :-
+   cl_sub_buffer(Arena, Offset, Size, Mem).
+
+% packing(+Bufs, +Align, +Peak, -Bytes): the offsets of Bufs under the least capacity, in units
+% of Align, at which minimalloc finds a layout, by bisection between Peak, the most bytes live
+% at once, which no layout beats, and the height of the layout under no capacity at all;
+% Bytes that height.
+packing(Bufs, Align, Peak, Bytes) :-
+   arrange(Bufs, inf, Top, Offsets0),
+   Lo is Peak // Align - 1,
+   Hi is (Top + Align - 1) // Align,
+   bisect(Bufs, Align, Lo, Hi, Offsets0, Offsets),
+   maplist(offset_of, Bufs, Offsets),
+   aggregate_all(max(H), ( member(buffer(_, _, _, S, O), Bufs), H is O + S ), Bytes).
+
+offset_of(buffer(_, _, _, _, Offset), Offset).
+
+% bisect(+Bufs, +Align, +Lo, +Hi, +Best0, -Best): Hi units is a capacity with the layout Best0,
+% Lo one with none found; Best is the layout of the least capacity found between.
+bisect(_, _, Lo, Hi, Best0, Best), Hi - Lo =< 1 =>
+   Best = Best0.
+bisect(Bufs, Align, Lo, Hi, Best0, Best) =>
+   Mid is (Lo + Hi) // 2,
+   Capacity is Mid*Align,
+   (  arrange(Bufs, Capacity, _, Offsets)
+   -> bisect(Bufs, Align, Lo, Mid, Offsets, Best)
+   ;  bisect(Bufs, Align, Mid, Hi, Best0, Best)
+   ).
+
+% arrange(+Bufs, +Capacity, -Height, -Offsets): the offsets of a layout of Bufs under Capacity
+% by the first of minimalloc's heuristics that finds one within an inference limit, and its
+% height. Fails when none does. The search is on a copy, Bufs stay unbound.
+arrange(Bufs, Capacity, Height, Offsets) :-
+   member(Heuristic, [wat, taw, twa]),
+   copy_term(Bufs, Trial),
+   call_with_inference_limit(minimalloc(Trial, [capacity(Capacity), heuristics([Heuristic])]), 1_000_000, Result),
+   Result \== inference_limit_exceeded,
+   !,
+   maplist(offset_of, Trial, Offsets),
+   aggregate_all(max(H), ( member(buffer(_, _, _, S, O), Trial), H is O + S ), Height).
 
 % Reference
 % =========

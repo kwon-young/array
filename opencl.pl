@@ -7,6 +7,7 @@
    cl_context/2,
    cl_queue/4,
    cl_buffer/3,
+   cl_sub_buffer/4,
    cl_fill/5,
    cl_write/5,
    cl_read/5,
@@ -37,6 +38,9 @@ A thin binding of the OpenCL host API, from opencl.c:
   * cl_context(+Device, -Context)
   * cl_queue(+Context, +Device, +OutOfOrder, -Queue)
   * cl_buffer(+Context, +Bytes, -Buffer)
+  * cl_sub_buffer(+Buffer, +Offset, +Bytes, -Sub): Bytes of Buffer from Offset,
+    a multiple of the device's mem_base_addr_align in bytes, as a buffer of its
+    own, sharing the memory
   * cl_fill(+Queue, +Buffer, +Bytes, +Waits, -Event): zero Buffer
   * cl_write(+Queue, +Buffer, +Offset, +Pointer, +Bytes) and
     cl_read(+Queue, +Buffer, +Offset, +Pointer, +Bytes): blocking copies
@@ -209,6 +213,26 @@ test('events order kernels on an out-of-order queue',
    buffer_to_data(Host, int32, N, Result),
    Result =.. [data | Results],
    maplist([X, Y]>>(Y =:= 2*X + 1), Values, Results).
+
+test('a sub-buffer shares the memory of its buffer', [forall(opencl_device(_, Device))]) :-
+   device_queue(Device, Context, Queue),
+   cl_device_info(Device, mem_base_addr_align, Bits), Align is Bits // 8,
+   Bytes is 2*Align,
+   cl_buffer(Context, Bytes, Mem),
+   cl_sub_buffer(Mem, Align, 12, Sub),
+   buffer_from_data(Host, int32, 3, data(7, 8, 9)),
+   buffer_offset(Host, int32, 3, 0, Pointer),
+   cl_write(Queue, Sub, 0, Pointer, 12),
+   buffer_alloc(Out, int32, 3, true),
+   buffer_offset(Out, int32, 3, 0, OutPointer),
+   cl_read(Queue, Mem, Align, OutPointer, 12),
+   buffer_to_data(Out, int32, 3, Data),
+   Data == data(7, 8, 9),
+   catch(cl_sub_buffer(Mem, 1, 12, _), error(opencl_error(clCreateSubBuffer, _), _), true),
+   % arenas and their slices dropped in whatever order survive the collector
+   forall(between(1, 50, _), ( cl_buffer(Context, Bytes, Arena), cl_sub_buffer(Arena, 0, Align, _),
+                               cl_sub_buffer(Arena, Align, Align, _) )),
+   garbage_collect_atoms.
 
 test('fill zeroes a buffer', [forall(opencl_device(_, Device))]) :-
    device_queue(Device, Context, Queue),

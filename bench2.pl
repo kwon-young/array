@@ -1,7 +1,7 @@
 :- module(bench2, [go/1, go/2, go_chol/1, go_blocked/1, go_scatter/1, go_mlp/1, go_vit/1,
                    matmul/6, softmax/4, cholesky/3, blocked_cholesky/4, batched_cholesky/4, dot/4,
                    scatter/5, embedding_backward/6, mlp/5, layer_norm/6, vit_block/6,
-                   bench/6, bench_data/6, once_run/4, once_run/5, data/2, names/2]).
+                   bench/6, bench_data/6, bench_stats/7, once_run/4, once_run/5, data/2, names/2, inputs_data/2]).
 :- use_module(core2).
 :- use_module(compile2).
 :- use_module(opencl).
@@ -83,22 +83,31 @@ batched_cholesky(A, L, M, N) :-
                      over([I:N], [L[B, I, K] := where(K =< I, C[B, I], L[B, I, K])]),
                      over([I:N, J:N], [L[B, I, J] := where(K < J, where(J =< I, L[B, I, J] - C[B, I] * C[B, J], L[B, I, J]), L[B, I, J])])]).
 
+% bench_data(+Label, +Out, +Data, +Device, +Options, +Reps): the best kernel time of Reps runs,
+% and the memory of the intermediates: the bytes they take, under alloc(arena) the arena, as
+% separate buffers apart, the peak live at one kernel, and the time to allocate them.
 bench_data(Label, Out, Data, Device, Options0, Reps) :-
+   bench_stats(Label, Out, Data, Device, Options0, Reps, S),
+   stats{kernels: NK, best: Best, alloc: How, bytes: B, apart: Ap, peak: Pk, setup: Setup} :< S,
+   format("~w  ~w  kernels=~d  best=~3f ms  ~w: ~d KB (apart ~d KB, peak ~d KB) in ~3f ms~n",
+          [Label, Device, NK, Best*1000, How, B // 1024, Ap // 1024, Pk // 1024, Setup*1000]).
+
+% bench_stats(+Label, +Out, +Data, +Device, +Options, +Reps, -Stats): the figures bench_data/6
+% prints, as a dict.
+bench_stats(Label, Out, Data, Device, Options0, Reps, Stats) :-
    compile2:device(Device, Dev, Context, Queue),
    device_options(Dev, Derived),
    merge_options(Options0, Derived, Options),
    compile2:kernels(Out, Options, Kernels),
    compile2:source(Kernels, Source),
    compile2:built(Context, Dev, Source, Program),
-   compile2:flat_plan(Kernels, Flat),
-   foldl([K, Ns0, Ns]>>(get_dict(names, K, N1), append(Ns0, N1, Ns)), Flat, [], Names0),
-   sort(Names0, Names),
-   maplist(compile2:device_buffer(Context, Queue, Data), Names, Mems),
-   pairs_keys_values(Buffers, Names, Mems),
-   once_run(Queue, Program, Buffers, Kernels),
+   compile2:allocate(Context, Queue, Dev, Kernels, Out, Data, Options, Alloc),
+   alloc{how: How, buffers: Buffers, bytes: B, apart: Ap, peak: Pk, setup: Setup} :< Alloc,
+   once_run(Queue, Program, Buffers, Kernels),           % warm up
    findall(T, ( between(1, Reps, _), once_run(Queue, Program, Buffers, Kernels, T) ), Ts),
-   min_list(Ts, Best), length(Flat, NK),
-   format("~w  ~w  kernels=~d  best=~3f ms~n", [Label, Device, NK, Best*1000]).
+   min_list(Ts, Best), compile2:flat_plan(Kernels, Flat), length(Flat, NK),
+   Stats = stats{label: Label, device: Device, kernels: NK, best: Best, alloc: How, bytes: B, apart: Ap, peak: Pk,
+                 setup: Setup}.
 
 % scatter(+Idx, +W, -H, +M, +N): H[Idx[k]] += W[k], M sources into N bins: a histogram when N is
 % small, an index_add when N is large.
@@ -185,18 +194,20 @@ vit_block(X, Y, S, D, H, F) :-
 go_vit(Device) :-
    S = 256, D = 768, H = 12, F = 3072,
    vit_block(X, Y, S, D, H, F),
-   compile2:kernels(Y, [], Plan), compile2:flat_plan(Plan, Flat), length(Flat, NK), format("vit block kernels: ~d~n", [NK]),
-   compile2:program(Y, Boxes), names(Boxes, Names), exclude([N]>>(N == Y), Names, Ins),
-   include([N]>>(compile2:boxes_of(N, [])), Ins, Inputs),
-   bench(vit_block_256x768x12, Y, Inputs, Device, [], 3), shape(X, _).
+   inputs_data(Y, Data),
+   bench_data(vit_block_256x768x12, Y, Data, Device, [], 3), shape(X, _).
 
 go_mlp(Device) :-
    S = 256, D = 768, H = 3072,
    mlp(X, Y, S, D, H),
-   compile2:kernels(Y, [], Plan), compile2:flat_plan(Plan, Flat), length(Flat, NK), format("mlp kernels: ~d~n", [NK]),
-   compile2:program(Y, Boxes), names(Boxes, Names), exclude([N]>>(N == Y), Names, Ins),
-   include([N]>>(compile2:boxes_of(N, [])), Ins, Inputs),
-   bench(mlp_256x768x3072, Y, Inputs, Device, [], 3).
+   inputs_data(Y, Data),
+   bench_data(mlp_256x768x3072, Y, Data, Device, [], 3), shape(X, _).
+
+% inputs_data(+Out, -Data): Name-Values for every input of Out's program, from data/2.
+inputs_data(Out, Data) :-
+   compile2:program(Out, Boxes), names(Boxes, Names),
+   include([N]>>(N \== Out, compile2:boxes_of(N, [])), Names, Inputs),
+   maplist([In, In-Vals]>>data(In, Vals), Inputs, Data).
 
 dot(A, B, S, N) :-
    shape(A, [N]), shape(B, [N]), shape(S, []),
@@ -215,21 +226,7 @@ names(Term, Names) :- term_variables(Term, Vs), include([V]>>get_attr(V, core2, 
 
 bench(Label, Out, Inputs, Device, Options0, Reps) :-
    maplist([In, In-Vals]>>data(In, Vals), Inputs, Data),
-   compile2:device(Device, Dev, Context, Queue),
-   device_options(Dev, Derived),
-   merge_options(Options0, Derived, Options),
-   compile2:kernels(Out, Options, Kernels),
-   compile2:source(Kernels, Source),
-   compile2:built(Context, Dev, Source, Program),
-   compile2:flat_plan(Kernels, Flat),
-   foldl([K, Ns0, Ns]>>(get_dict(names, K, N1), append(Ns0, N1, Ns)), Flat, [], Names0),
-   sort(Names0, Names),
-   maplist(compile2:device_buffer(Context, Queue, Data), Names, Mems),
-   pairs_keys_values(Buffers, Names, Mems),
-   once_run(Queue, Program, Buffers, Kernels),           % warm up
-   findall(T, ( between(1, Reps, _), once_run(Queue, Program, Buffers, Kernels, T) ), Ts),
-   min_list(Ts, Best), length(Flat, NK),
-   format("~w  ~w  kernels=~d  best=~3f ms~n", [Label, Device, NK, Best*1000]).
+   bench_data(Label, Out, Data, Device, Options0, Reps).
 
 once_run(Queue, Program, Buffers, Kernels) :- once_run(Queue, Program, Buffers, Kernels, _).
 once_run(Queue, Program, Buffers, Kernels, T) :-
