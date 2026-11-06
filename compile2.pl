@@ -23,8 +23,9 @@
 %   print:    one OpenCL C kernel per box or chain, an element typed by its name's kind, int
 %             for bool and int, float for float, indices int; the staged and vectorised
 %             kernels take float elements;
-%   allocate: the inputs and the output each a buffer; the intermediates slices of one arena,
-%             laid out by minimalloc from their lifetimes over the kernel sequence;
+%   allocate: the inputs and the output each a buffer; the intermediates offsets into one
+%             arena, laid out by minimalloc from their lifetimes over the kernel sequence;
+%             a kernel takes each buffer as a pointer and an element offset into it;
 %   run:      the buffers on the device, kernels in program order, the output read back.
 % eval/3 is the reference: the boxes run in Prolog, in their order, on data(...) terms.
 
@@ -1460,6 +1461,8 @@ group_of(_, _, _, _, _, GP) => GP = none.
 
 
 
+% kernel_text(+I, +Ctx, +Names, +Codes, -Source): the kernel k<I>: a pointer and an element
+% offset per name, the name's buffer and its place in it, the pointer moved to the place first.
 kernel_text(I, Ctx, Names, Codes, Source) :-
    maplist(param(Ctx), Names, Params0),
    get_dict(free, Ctx, Free),
@@ -1468,8 +1471,14 @@ kernel_text(I, Ctx, Names, Codes, Source) :-
    maplist(range_params(Ctx), Ranges, Params2),
    append([Params0, Params1, Params2], Params),
    atomic_list_concat(Params, ", ", ParamList),
+   maplist(offset_prologue(Ctx), Names, Prologue0),
+   atomic_list_concat(Prologue0, Prologue),
    string_codes(Body, Codes),
-   format(string(Source), "__kernel void k~d(~w) {~n~w}~n~n", [I, ParamList, Body]).
+   format(string(Source), "__kernel void k~d(~w) {~n~w~w}~n~n", [I, ParamList, Prologue, Body]).
+
+offset_prologue(Ctx, N, Line) :-
+   var_name(Ctx, N, Name),
+   format(atom(Line), "  ~w += o_~w;~n", [Name, Name]).
 
 index_param(Ctx, V, Param) :-
    var_name(Ctx, V, Name),
@@ -1481,7 +1490,7 @@ range_params(Ctx, I-range(_, _), Param) :-
 
 param(Ctx, N, Param) :-
    var_name(Ctx, N, Name), ctype(N, T),
-   format(atom(Param), "__global ~w *~w", [T, Name]).
+   format(atom(Param), "__global ~w *~w, int o_~w", [T, Name, Name]).
 
 % A kernel of work-groups: a group per point of the rows, its items l of L sharing lm; or a
 % work item per point, the only item of its row.
@@ -2046,7 +2055,7 @@ launch(Queue, Program, Buffers, Env, Kernel) :-
    -> true                                            % nothing active at this step
    ;  format(atom(KName), "k~d", [I]),
       cl_kernel(Program, KName, K),
-      maplist(buffer_arg(Buffers), Names, Args0),
+      foldl(buffer_args(Buffers), Names, [], Args0),
       maplist(index_arg(Env), Free, Args1),
       foldl([_-(Lo, Count), A0, A]>>append(A0, [int(Lo), int(Count)], A), Values, [], Args2),
       append([Args0, Args1, Args2], Args),
@@ -2099,18 +2108,24 @@ group_size(none, Local) => Local = 0.
 group_size(stage(G, _, _), Local) => Local is G*G.
 group_size(pack(_, _, _, _, _, _), Local) => Local = 1.
 
-buffer_arg(Buffers, N, mem(M)) :-
-   member(N1-M, Buffers),
+% buffer_args(+Buffers, +N, +Args0, -Args): Args0 with N's buffer and offset as kernel arguments.
+buffer_args(Buffers, N, Args0, Args) :-
+   buffer_arg(Buffers, N, Mem, Off),
+   append(Args0, [mem(Mem), int(Off)], Args).
+
+% buffer_arg(+Buffers, +N, -Mem, -Off): the buffer holding N and N's element offset in it.
+buffer_arg(Buffers, N, Mem, Off) :-
+   member(N1-buf(Mem, Off), Buffers),
    N1 == N,
    !.
 
 read_back(Queue, Buffers, Out, Values) :-
-   buffer_arg(Buffers, Out, mem(Mem)),
-   shape(Out, Shape), size(Shape, N), Bytes is 4*N,
+   buffer_arg(Buffers, Out, Mem, Off),
+   shape(Out, Shape), size(Shape, N), Bytes is 4*N, ByteOff is 4*Off,
    ctype(Out, T), host_type(T, HT),
    buffer_alloc(Host, HT, N, true),
    buffer_offset(Host, HT, N, 0, Pointer),
-   cl_read(Queue, Mem, 0, Pointer, Bytes),
+   cl_read(Queue, Mem, ByteOff, Pointer, Bytes),
    buffer_to_data(Host, HT, N, Term),
    Term =.. [_ | Values].
 
@@ -2122,9 +2137,12 @@ read_back(Queue, Buffers, Out, Values) :-
 % buffer of their own, uploaded from Data or zeroed. The intermediates, with alloc(arena), the
 % default, share one arena: each lives from the first kernel mentioning it to the last, and
 % minimalloc lays the lifetimes out, see arena/10; with alloc(separate) each has a buffer of
-% its own, zeroed. Alloc is a dict:
+% its own, zeroed. A name's place is its buffer and an element offset into it, which the
+% kernels take as a pointer and an int: never a sub-buffer, which the NVIDIA runtime cannot
+% release in either order once two overlapping ones have been kernel arguments. Alloc is a
+% dict:
 %   how      arena or separate,
-%   buffers  Name-Mem pairs, every name of the plan,
+%   buffers  Name-buf(Mem, Offset) pairs, every name of the plan, Offset in elements,
 %   arena    the arena's buffer, or none,
 %   bytes    the bytes the intermediates take: the arena, or their buffers,
 %   apart    the bytes they take as buffers of their own,
@@ -2136,8 +2154,7 @@ allocate(Context, Queue, Device, Plan, Out, Data, Options, Alloc) :-
    foldl([K, Ns0, Ns]>>(get_dict(names, K, N1), append(Ns0, N1, Ns)), Kernels, [], Names0),
    sort(Names0, Names),
    partition(intermediate(Out, Data), Names, Inter, Own),
-   maplist(device_buffer(Context, Queue, Data), Own, OwnMems),
-   pairs_keys_values(OwnBuffers, Own, OwnMems),
+   maplist(own_buffer(Context, Queue, Data), Own, OwnBuffers),
    cl_device_info(Device, mem_base_addr_align, Bits), Align is Bits // 8,
    maplist(aligned_bytes(Align), Inter, Sizes),
    sum_list(Sizes, Apart),
@@ -2150,6 +2167,10 @@ allocate(Context, Queue, Device, Plan, Out, Data, Options, Alloc) :-
    get_time(T1), Setup is T1 - T0,
    append(OwnBuffers, InterBuffers, Buffers),
    Alloc = alloc{how: How, buffers: Buffers, arena: Arena, bytes: Bytes, apart: Apart, peak: Peak, setup: Setup}.
+
+% own_buffer(+Context, +Queue, +Data, +Name, -Pair): Name's own buffer, at offset 0.
+own_buffer(Context, Queue, Data, Name, Name-buf(Mem, 0)) :-
+   device_buffer(Context, Queue, Data, Name, Mem).
 
 % intermediate(+Out, +Data, +N): N is written by a box, is not Out, and has no data.
 intermediate(Out, Data, N) :-
@@ -2223,13 +2244,13 @@ arena(arena, Context, Queue, Inter, Bufs, Align, Peak, Buffers, Arena, Bytes) =>
    cl_wait([Event]),
    maplist(slice(Arena), Inter, Bufs, Buffers).
 arena(separate, Context, Queue, Inter, Bufs, _, _, Buffers, Arena, Bytes) =>
-   maplist(device_buffer(Context, Queue, []), Inter, Mems),
-   pairs_keys_values(Buffers, Inter, Mems),
+   maplist(own_buffer(Context, Queue, []), Inter, Buffers),
    Arena = none,
    aggregate_all(sum(S), member(buffer(_, _, _, S, _), Bufs), Bytes).
 
-slice(Arena, Name, buffer(_, _, _, Size, Offset), Name-Mem) :-
-   cl_sub_buffer(Arena, Offset, Size, Mem).
+% slice(+Arena, +Name, +Buffer, -Pair): Name's place in the arena, its byte offset in elements.
+slice(Arena, Name, buffer(_, _, _, _, Offset), Name-buf(Arena, Elements)) :-
+   Elements is Offset // 4.
 
 % packing(+Bufs, +Align, +Peak, -Bytes): the offsets of Bufs under the least capacity, in units
 % of Align, at which minimalloc finds a layout, by bisection between Peak, the most bytes live

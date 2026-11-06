@@ -397,7 +397,10 @@ static foreign_t pl_cl_buffer(term_t context_t, term_t bytes_t, term_t mem_t)
 }
 
 /* A sub-buffer: Bytes of Mem from Offset, a multiple of the device's
- * mem_base_addr_align, as a buffer of its own, holding Mem. */
+ * mem_base_addr_align, as a buffer of its own, holding Mem.  The NVIDIA
+ * runtime faults on releasing a sub-buffer before a smaller one overlapping
+ * it, once both have been kernel arguments, an order a collector cannot
+ * promise: compile2 passes offsets into the arena instead. */
 static foreign_t pl_cl_sub_buffer(term_t mem_t, term_t offset_t, term_t bytes_t,
                                term_t sub_t)
 {
