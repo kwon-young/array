@@ -240,7 +240,7 @@ chains([], _, _, _, _, _, _, Plan) =>
 chains([B | Bs], Out, All, Opts, L, Min, Free, Plan), sweep(B, Opts, L, Min, Free, K) =>
    Plan = [K | Ps],
    chains(Bs, Out, All, Opts, L, Min, Free, Ps).
-chains([B | Bs], Out, All, Opts, L, Min, Free, Plan), host_loop(B, Min, T, E, Inner) =>
+chains([B | Bs], Out, All, Opts, L, Min, Free, Plan), host_loop(Out, All, B, Min, T, E, Inner) =>
    chains(Inner, Out, All, Opts, L, Min, [T | Free], Ks0),
    Plan = [loop(T, E, Ks0) | Ps],
    chains(Bs, Out, All, Opts, L, Min, Free, Ps).
@@ -418,12 +418,16 @@ shared_name(Box, RowIs, Drop, Budget, N, N-Drop-Size) :-
 sweep_phase(Box, Phase) :-
    phase([], Box, Phase).
 
-% host_loop(+Box, +Min, -T, -E, -Inner): Box runs its axis T in order and its equations are
-% boxes, one of which has Min parallel points at least: worth a launch per step.
-host_loop(over([T:E], Inner), Min, T, E, Inner) :-
+% host_loop(+Out, +All, +Box, +Min, -T, -E, -Inner): Box runs its axis T in order, given the
+% names local to it, which each step has for itself, and its equations are boxes, one of which
+% has Min parallel points at least: worth a launch per step. A box whose axis is parallel but
+% for a local accumulator is a kernel of work items with the accumulator private, see
+% schedule/5, not a launch per point.
+host_loop(Out, All, over([T:E], Inner), Min, T, E, Inner) :-
    Inner = [_ | _],
    forall(member(Q, Inner), is_box(Q)),
-   \+ parallel(over([T:E], Inner), [], T:E),
+   locals(Out, All, over([T:E], Inner), Locals),
+   \+ parallel(over([T:E], Inner), Locals, T:E),
    member(over(Axes, _), Inner),
    include(parallel(over(Axes, []), []), Axes, Par),
    maplist(arg(2), Par, Es), size(Es, N), N >= Min, !.

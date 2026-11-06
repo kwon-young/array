@@ -255,6 +255,14 @@ test(blocked_cholesky_stages_the_trailing_update, [timeout(300), forall(opencl_d
    eval(L, [A-As], Ref), run(L, [A-As], Vals, [device(D)]),
    near(Ref, Vals).
 
+% The row solve's axis is parallel but for its accumulator, a local: a kernel of work items
+% whatever the items threshold against the panel width, never a launch per row.
+test(row_solve_is_never_a_host_loop, [timeout(60), forall(member(Min, [8, 40, 64, 128]))]) :-
+   blocked_cholesky(A, L, 256, 64),
+   kernels(L, [items(Min)], [_, loop(_, 4, [_, _, Solve, _, _])]),
+   kernel{kind: items, par: [_:256], local: [S]} :< Solve, var(S),
+   shape(A, _).
+
 test(batched_cholesky_is_a_group_per_matrix, [timeout(300), forall(opencl_device(D, _))]) :-
    batched_cholesky(A, L, C, 4, 32),
    kernels(L, [], [_, Sweep]),
