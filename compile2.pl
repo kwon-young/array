@@ -20,7 +20,10 @@
 %             work-groups: a group per row, its items sharing each reduction through local
 %             memory, a barrier between the boxes;
 %             A box over one sequential axis whose equations are boxes with parallel work
-%             is a host loop: its boxes are kernels taking the index as a parameter;
+%             is a host loop: its boxes are kernels taking the index as a parameter; a box
+%             of parallel axes alone whose equations are boxes with a warp of points is a
+%             sweep of one step, a group per point with the point's slices in local memory;
+%             a loop nest folding one place by a monoid accumulates it in a register;
 %   print:    one OpenCL C kernel per box or chain, an element typed by its name's kind, int
 %             for bool and int, float for float, indices int, the integer operations of a
 %             subscript or an int value as C's; the staged and vectorised kernels take float
@@ -422,6 +425,8 @@ live(C, _, All, Used) :- member(B, All), \+ in_list(Used, B), names(B, Ns), in_l
 % sweep(+Box, +Opts, +L-LDS, +Min, +Free, -Kernel): Box has parallel axes, its rows, then one
 % sequential axis, and its equations are boxes, each a phase over its own axes: one work-group
 % kernel per row point, the sequential axis a loop inside it with a fence between the phases.
+% A box of parallel axes alone, its phases a warp of points at least, is a sweep of one step:
+% a group per row point, its phases sharing the row's slices in local memory.
 % One launch for the whole sweep, which is what a small factorisation, or a batch of them,
 % wants: so when the rows are a compute unit's worth of groups, or a step's parallel points
 % are a few passes of a group, or the sweep is a step of a host loop, where launches are
@@ -433,15 +438,17 @@ live(C, _, All, Used) :- member(B, All), \+ in_list(Used, B), names(B, Ns), in_l
 sweep(over(Axes, Eqs), Opts, L-LDS-SW, Min, Free, Kernel) :-
    Eqs = [_ | _],
    forall(member(Q, Eqs), is_box(Q)),
-   append(Rows, [T:E], Axes),
    Box = over(Axes, Eqs),
-   forall(member(R, Rows), parallel(Box, [], R)),
-   \+ parallel(Box, [], T:E),
-   maplist(sweep_phase, Eqs, Phases),
-   maplist(arg(2), Rows, REs), size(REs, NRows),
    aggregate_all(max(P), ( member(over(As, _), Eqs), include(parallel(over(As, []), []), As, Par),
                            maplist(arg(2), Par, PEs), size(PEs, P) ), Points),
    arg(13, Opts, Lanes),
+   (  append(Rows, [T:E], Axes), \+ parallel(Box, [], T:E)
+   -> true
+   ;  Points >= Lanes, Rows = Axes, E = 1
+   ),
+   forall(member(R, Rows), parallel(Box, [], R)),
+   maplist(sweep_phase, Eqs, Phases),
+   maplist(arg(2), Rows, REs), size(REs, NRows),
    ( Points < Lanes, NRows >= Min -> Item = true ; Item = false ),
    ( Item == true ; Free = [_ | _] ; NRows >= Min // 8 ; Points =< L*Min ), !,
    names(Eqs, Names),
@@ -530,8 +537,8 @@ own_row(Rows, Prev, Box) :-
             accesses(Prev, N, Ps), member(P, Ps), nth0(K, P, R), var(R), in_list(RowIs, R) ),
           ( nth0(K, S, R1), R1 == R )).
 
+% A phase may hold boxes: loops of the item, see statement//2.
 phase(Rows, over(Axes, Eqs), Phase) :-
-   \+ ( member(E, Eqs), is_box(E) ),
    maplist(arg(1), Rows, RowIs),
    exclude(axis_in(RowIs), Axes, Rest),
    phase(Rest, RowIs, over(Axes, Eqs), Eqs, Phase).
@@ -1836,6 +1843,13 @@ copy(Ctx, Way, N-Infos) -->
 % vector width whose statements all read and write along it contiguously, or not at all, is
 % one vector statement each.
 loops(Ctx, [], Eqs) --> sequence(statement(Ctx), Eqs).
+loops(Ctx, Axes, [P := V]) -->
+   { Axes = [_ | _], register_fold(Axes, P, V, N, Ts, Op, X), !,
+     access(Ctx, N, Ts, Access), load(Ctx, Access, R0), ctype(N, T), var_name(Ctx, N, Name),
+     format(atom(Reg), "a_~w", [Name]), store(Ctx, Access, Reg, Store) },
+   fmt("  { ~w ~w = ~w;\n", [T, Reg, R0]),
+   loops(Ctx, Axes, [fold(Reg, T, Op, X)]),
+   fmt("  ~w }\n", [Store]).
 loops(Ctx, [V:E], Eqs) -->
    { get_dict(vector, Ctx, W), W > 1, ground(E), extent(E, N), N mod W =:= 0, vectorizable(Ctx, V, Eqs),
      Vec = Ctx.put(vec, V), Last is N - W, numlist(0, Last, Offs), include([O]>>(O mod W =:= 0), Offs, Starts) },
@@ -1850,6 +1864,19 @@ loops(Ctx, [I:E | Axes], Eqs) -->
    fmt("  ~w\n  for (int ~w = 0; ~w < ~w; ~w++) {\n", [Pragma, Name, Name, N, Name]),
    loops(Ctx, Axes, Eqs),
    "  }\n".
+
+% register_fold(+Axes, +P, +V, -N, -Ts, -Op, -X): the one equation of a loop nest over Axes
+% folds the place P = N[Ts] by the monoid Op with X, the place free of the loop indices and X
+% not reading N: the loops accumulate in a register, the place loaded before and stored after.
+register_fold(Axes, P, V, N, Ts, Op, X) :-
+   core2:place(P, N, Ts),
+   V =.. [Op, R, X],
+   monoid(Op, _),
+   core2:place(R, N1, Ts1), N1 == N, Ts1 == Ts,
+   maplist(arg(1), Axes, Is),
+   \+ ( member(I, Is), mentions(Ts, I) ),
+   names(X, Ns),
+   \+ in_list(Ns, N).
 
 % A chunk of the vector loop starts at Off: the lane index is V + Off.
 vector_chunk(Vec, V, Eqs, Off) -->
@@ -1911,6 +1938,9 @@ coef(V, X-K, S0, S), X == V => S is S0 + K.
 coef(_, _, S0, S) => S = S0.
 
 statement(Ctx, over(Axes, Eqs)) --> loops(Ctx, Axes, Eqs).
+statement(Ctx, fold(Reg, T, Op, X)) -->
+   { value(Ctx, X, CX), fold(Op, T, Reg, CX, C) },
+   fmt("  ~w = ~w;\n", [Reg, C]).
 statement(Ctx, copy(Way, N, S)) -->
    { access(Ctx, N, S, Private), global_access(Ctx, N, S, Global),
      way(Way, Global, Private, From, To), load(Ctx, From, R), store(Ctx, To, R, C) },

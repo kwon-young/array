@@ -33,7 +33,8 @@ keys; sums the counts per digit over the blocks, and the digits below each, the 
 digit; sums the blocks before each within its super-block of 128 and the super-blocks before
 each, the offset of a block within its digit; ranks every key among the keys of its digit
 before it in its block; and scatters each key to the sum of the three, a permutation, which
-the compiler takes as such and keeps the scatter parallel. The passes are a host loop over a
+the compiler takes as such and keeps the scatter parallel. The digits, counts and ranks of a
+block are one work-group's, the block's slices in local memory, a sweep of one step. The passes are a host loop over a
 table of shifts and top-digit masks, radix_table/2, two passes a step as the bitonic sort, so
 one program serves every N, a multiple of 8192.
 
@@ -94,9 +95,13 @@ pass_boxes(KIn, VIn, KOut, VOut, ShE, XmE, N, NB, NS, Bk, S, Bins, Boxes) :-
    shape(Dest, [N]), kind(Dest, int), elements(Dest, 0-(N-1)), permutation(Dest),
    BS is Bk*S,
    Boxes = [
-      over([Bl:NB, E:Bk], [Dg[Bl, E] := ((KIn[Bl*Bk + E] >> ShE) /\ 15) xor XmE]),
-      over([Bl:NB, D:Bins], [H[Bl, D] := 0]),
-      over([Bl:NB, D:Bins, E:Bk], [H[Bl, D] := H[Bl, D] + where(Dg[Bl, E] =:= D, 1, 0)]),
+      % a work-group per block, its digits, counts and ranks in local memory
+      over([Bl:NB], [over([E:Bk], [Dg[Bl, E] := ((KIn[Bl*Bk + E] >> ShE) /\ 15) xor XmE]),
+                     over([D:Bins], [H[Bl, D] := 0,
+                                     over([E:Bk], [H[Bl, D] := H[Bl, D] + where(Dg[Bl, E] =:= D, 1, 0)])]),
+                     over([E:Bk], [Rank[Bl, E] := 0,
+                                   over([E2:Bk], [Rank[Bl, E] := Rank[Bl, E]
+                                                     + where(E2 < E, where(Dg[Bl, E2] =:= Dg[Bl, E], 1, 0), 0)])])]),
       over([D:Bins], [C[D] := 0]),
       over([D:Bins, Bl:NB], [C[D] := C[D] + H[Bl, D]]),
       over([D:Bins], [Off[D] := 0]),
@@ -107,8 +112,6 @@ pass_boxes(KIn, VIn, KOut, VOut, ShE, XmE, N, NB, NS, Bk, S, Bins, Boxes) :-
       over([D:Bins, Su:NS, Su2:NS], [PS[D, Su] := PS[D, Su] + where(Su2 < Su, G[D, Su2], 0)]),
       over([D:Bins, Su:NS, B1:S], [PB[D, Su*S + B1] := 0]),
       over([D:Bins, Su:NS, B1:S, B2:S], [PB[D, Su*S + B1] := PB[D, Su*S + B1] + where(B2 < B1, H[Su*S + B2, D], 0)]),
-      over([Bl:NB, E:Bk], [Rank[Bl, E] := 0]),
-      over([Bl:NB, E:Bk, E2:Bk], [Rank[Bl, E] := Rank[Bl, E] + where(E2 < E, where(Dg[Bl, E2] =:= Dg[Bl, E], 1, 0), 0)]),
       over([I:N], [Dest[I] := Off[Dg[I // Bk, I mod Bk]] + PS[Dg[I // Bk, I mod Bk], I // BS]
                               + PB[Dg[I // Bk, I mod Bk], I // Bk] + Rank[I // Bk, I mod Bk]]),
       over([I:N], [KOut[Dest[I]] := KIn[I], VOut[Dest[I]] := VIn[I]])
