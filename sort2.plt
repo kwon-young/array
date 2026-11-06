@@ -1,3 +1,5 @@
+:- module(sort2_tests, []).
+
 :- use_module(core2).
 :- use_module(compile2).
 :- use_module(sort2).

@@ -1,3 +1,5 @@
+:- module(compile2_tests, []).
+
 :- use_module(core2).
 :- use_module(compile2).
 :- use_module(opencl, [opencl_device/2, cl_device_info/3]).
@@ -485,11 +487,14 @@ test(one_program_for_every_size, [timeout(120), forall(opencl_device(D, _))]) :-
    shape(X, [N]), shape(Y, [N]),
    over([I:N], [Y[I] := X[I] * 2]),
    kernels(Y, [], Ks), source(Ks, Src), once(sub_string(Src, _, _, _, "int v")),
-   aggregate_all(count, compile2:program_state(_, _, _), C0),
    forall(member(Size, [16, 40]),
           ( numlist(1, Size, Xs), eval(Y, [X-Xs], Ref), run(Y, [X-Xs], V, [device(D)]), near(Ref, V) )),
-   aggregate_all(count, compile2:program_state(_, _, _), C1),
-   C1 =< C0 + 1,
+   % the program run builds, by its source, not a count of every program: other units build
+   % theirs concurrently
+   compile2:device(D, Device, Context, _), compile2:device_options(Device, Derived),
+   merge_options([device(D)], Derived, Options),
+   kernels(Y, Options, RunKs), source(RunKs, RunSrc),
+   aggregate_all(count, compile2:program_state(Context, RunSrc, _), 1),
    var(N).
 
 % A reduction in groups over an unknown row length, the rows counted by another input.

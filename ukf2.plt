@@ -1,3 +1,5 @@
+:- module(ukf2_tests, []).
+
 :- use_module(core2).
 :- use_module(compile2).
 :- use_module(ukf2).
