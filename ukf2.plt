@@ -4,6 +4,10 @@
 :- use_module(opencl, [opencl_device/2]).
 :- use_module(library(clpfd), [transpose/2]).
 
+% The references are evaluated once for every program and data, then read from the disk:
+% see reference.pl.
+:- set_prolog_flag(eval_cache, true).
+
 % The step is checked against a reference on lists: the same model run with is/2 at the
 % sigma points, the moments by hand, and, the observation being 2-dimensional, the closed
 % forms of the inverse and the determinant of Szz. The reference runs on one state; the

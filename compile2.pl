@@ -5,6 +5,7 @@
 :- use_module(opencl).
 :- use_module(buffer).
 :- use_module(minimalloc).
+:- use_module(reference).
 :- discontiguous items_code/6.
 
 % The pipeline, from the boxes of core2 to OpenCL:
@@ -2503,9 +2504,7 @@ eval(Out, Data, Values) :-
    findall(Vs, ( bind_extents(Boxes, Data),
                  maplist(host_buffer(Data), Names, Terms),
                  pairs_keys_values(Env, Names, Terms),
-                 maplist(step(Env, []), Boxes),
-                 member(Out1-Term, Env), Out1 == Out, !,
-                 Term =.. [_ | Vs] ),
+                 evaluate(Out, Boxes, Env, Vs) ),
            [Values]).
 
 host_buffer(Data, Name, Term), member(Name1-List, Data), Name1 == Name =>
@@ -2516,41 +2515,3 @@ host_buffer(_, Name, Term) =>
    length(Zeros, N), maplist(=(0), Zeros),
    Term =.. [data | Zeros].
 
-step(Env, Idx, over([], Eqs)) =>
-   maplist(step(Env, Idx), Eqs).
-step(Env, Idx, over([I:E | Axes], Eqs)) =>
-   extent(E, N0),
-   N is N0-1,
-   forall(between(0, N, V), step(Env, [I-V | Idx], over(Axes, Eqs))).
-step(Env, Idx, P := V) =>
-   core2:place(P, N, Ts),
-   element(Env, Idx, N, Ts, Term, Arg),
-   ev(Env, Idx, V, X),
-   nb_setarg(Arg, Term, X).
-
-% element(+Env, +Idx, +N, +Ts, -Term, -Arg): the element N[Ts] is argument Arg of Term.
-element(Env, Idx, N, Ts, Term, Arg) :-
-   member(N1-Term, Env), N1 == N, !,
-   shape(N, Shape),
-   foldl(offset_step(Env, Idx), Ts, Shape, 0, Off),
-   Arg is Off+1.
-
-offset_step(Env, Idx, T, E, Off0, Off) :-
-   ev(Env, Idx, T, X),
-   extent(E, M),
-   Off is Off0*M + X.
-
-ev(_, Idx, V, X), var(V), member(I-X0, Idx), I == V => X = X0.
-ev(Env, Idx, V, X), var(V) => element(Env, Idx, V, [], Term, Arg), arg(Arg, Term, X).
-ev(_, _, N, X), number(N) => X = N.
-ev(Env, Idx, R, X), core2:place(R, N, Ts) => element(Env, Idx, N, Ts, Term, Arg), arg(Arg, Term, X).
-ev(Env, Idx, where(C, T, E), X) => ev(Env, Idx, C, B), branch(B, Env, Idx, T, E, X).
-ev(Env, Idx, E, X), E =.. [Op, A, B], memberchk(Op, [<, =<, =:=]) =>
-   ev(Env, Idx, A, XA), ev(Env, Idx, B, XB), G =.. [Op, XA, XB], truth(G, X).
-ev(Env, Idx, E, X) => E =.. [Op | As], maplist(ev(Env, Idx), As, Xs), E1 =.. [Op | Xs], X is E1.
-
-branch(B, Env, Idx, _, E, X), B =:= 0 => ev(Env, Idx, E, X).
-branch(_, Env, Idx, T, _, X) => ev(Env, Idx, T, X).
-
-truth(G, X), call(G) => X = 1.
-truth(_, X) => X = 0.

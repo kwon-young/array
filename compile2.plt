@@ -4,6 +4,10 @@
 :- op(20, yf, []).
 :- use_module(bench2, [vit_block/6]).
 
+% The references are evaluated once for every program and data, then read from the disk:
+% see reference.pl.
+:- set_prolog_flag(eval_cache, true).
+
 % The tests are several units, since plunit runs units concurrently: run_tests(all, [jobs(6)]).
 
 % The kernels are checked against the reference on every device, with and without tiles.
