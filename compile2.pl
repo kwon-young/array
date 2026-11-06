@@ -21,8 +21,9 @@
 %             A box over one sequential axis whose equations are boxes with parallel work
 %             is a host loop: its boxes are kernels taking the index as a parameter;
 %   print:    one OpenCL C kernel per box or chain, an element typed by its name's kind, int
-%             for bool and int, float for float, indices int; the staged and vectorised
-%             kernels take float elements;
+%             for bool and int, float for float, indices int, the integer operations of a
+%             subscript or an int value as C's; the staged and vectorised kernels take float
+%             elements, and load a read that is not affine one element at a time;
 %   allocate: the inputs and the output each a buffer; the intermediates offsets into one
 %             arena, laid out by minimalloc from their lifetimes over the kernel sequence;
 %             a kernel takes each buffer as a pointer and an element offset into it;
@@ -952,6 +953,7 @@ places(_, _, Ss0, Ss) => Ss0 = Ss.
 % so that it takes a different value at each point of the axes it mentions, D among them.
 covers(Axes, S, D) :-
    catch(core2:form(Axes, S, 1, 0-[], _-Pairs), error(_, _), fail),
+   \+ ( member(Key-_, Pairs), nonvar(Key) ),      % a remainder covers nothing
    keysort(Pairs, Sorted),
    group_pairs_by_key(Sorted, Groups),
    convlist(radix(Axes), Groups, Radix),
@@ -1743,6 +1745,7 @@ stride(V, Off, S) :-
    term_variables(Off, Vs),
    maplist([X, X:1]>>true, Vs, Scope),
    catch(core2:form(Scope, Off, 1, 0-[], _-Pairs), error(_, _), fail),
+   \+ ( member(Key-_, Pairs), nonvar(Key) ),      % a remainder has no stride
    foldl(coef(V), Pairs, 0, S).
 
 coef(V, X-K, S0, S), X == V => S is S0 + K.
@@ -1833,8 +1836,10 @@ offset(Ts, Shape, Off) :-
 index(Ctx, V, C), var(V) => var_name(Ctx, V, C).
 index(_, N, C), integer(N) => C = N.
 index(Ctx, R, C), core2:place(R, N, Ts) => place(Ctx, N, Ts, P), format(atom(C), "(int)~w", [P]).
-index(Ctx, E, C), E =.. [Op, A, B], memberchk(Op-COp, [(+)-(+), (-)-(-), (*)-(*), (//)-(/), (mod)-('%')]) =>
+index(Ctx, E, C), E =.. [Op, A, B], c_int_op(Op, COp) =>
    index(Ctx, A, CA), index(Ctx, B, CB), format(atom(C), "(~w ~w ~w)", [CA, COp, CB]).
+index(Ctx, where(I, T, E), C) =>
+   value(Ctx, I, CI), index(Ctx, T, CT), index(Ctx, E, CE), format(atom(C), "(~w ? ~w : ~w)", [CI, CT, CE]).
 index(Ctx, E, C), E =.. [F, A, B], memberchk(F, [max, min]) =>
    index(Ctx, A, CA), index(Ctx, B, CB), format(atom(C), "~w(~w, ~w)", [F, CA, CB]).
 index(_, E, _) => type_error(index_expression, E).
@@ -1862,6 +1867,8 @@ value(Ctx, X + A*B, C), has_read(A*B), kind_of(X + A*B, 2) =>
    maplist(value(Ctx), [A, B, X], [CA, CB, CX]), format(atom(C), "fma(~w, ~w, ~w)", [CA, CB, CX]).
 value(Ctx, E, C), E =.. [Op, A, B], memberchk(Op, [+, -, *, <, =<, =:=]) =>
    maplist(value(Ctx), [A, B], [CA, CB]), c_op(Op, COp), format(atom(C), "(~w ~w ~w)", [CA, COp, CB]).
+value(Ctx, E, C), E =.. [Op, A, B], c_int_op(Op, COp), core2:int_op(Op) =>
+   maplist(value(Ctx), [A, B], [CA, CB]), format(atom(C), "(~w ~w ~w)", [CA, COp, CB]).
 value(Ctx, A / B, C) =>
    maplist(value(Ctx), [A, B], [CA, CB]), format(atom(C), "((float)~w / ~w)", [CA, CB]).
 value(Ctx, -A, C) => value(Ctx, A, CA), format(atom(C), "(-~w)", [CA]).
@@ -1880,6 +1887,20 @@ has_read(E) :-
 c_op(=<, C) => C = '<='.
 c_op(=:=, C) => C = '=='.
 c_op(Op, C) => C = Op.
+
+% c_int_op(?Op, ?C): the C of an operation on ints; / and % agree with // and mod on the
+% non-negative operands the bounds rule admits.
+c_int_op(+, C) => C = (+).
+c_int_op(-, C) => C = (-).
+c_int_op(*, C) => C = (*).
+c_int_op(//, C) => C = (/).
+c_int_op(mod, C) => C = '%'.
+c_int_op(>>, C) => C = (>>).
+c_int_op(<<, C) => C = (<<).
+c_int_op(/\, C) => C = (&).
+c_int_op(\/, C) => C = '|'.
+c_int_op(xor, C) => C = (^).
+c_int_op(_, _) => fail.
 
 fmt(Format, Args) --> { format(codes(Codes), Format, Args) }, Codes.
 

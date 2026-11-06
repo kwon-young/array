@@ -435,6 +435,44 @@ test(kinds_coerce_data, [timeout(120), forall(opencl_device(D, _))]) :-
 
 :- end_tests(compile2_kinds).
 
+:- begin_tests(compile2_hull).
+
+% A gather through xor, the stride of a bitonic pass, against the Prolog evaluation.
+test(xor_gather, [timeout(120), forall(opencl_device(D, _))]) :-
+   power_of_two(N), shape(X, [N]), shape(S, [P]), elements(S, 0-(N-1)), shape(T, [P, N]),
+   over([Pi:P, I:N], [T[Pi, I] := X[I xor S[Pi]]]),
+   N = 64, P = 3,
+   numlist(1, 64, Xs), Data = [X-Xs, S-[1, 8, 32]],
+   eval(T, Data, Ref), run(T, Data, V, [device(D)]),
+   near(Ref, V).
+
+% A read strided by mod and a quotient, and a where in a subscript.
+test(mod_quotient_where_reads, [timeout(120), forall(opencl_device(D, _))]) :-
+   shape(X, [32]), shape(T, [32]),
+   over([I:32], [T[I] := X[(I*3) mod 32] + X[I // 4] + X[where(I < 16, I, 31 - I)]]),
+   numlist(1, 32, Xs), eval(T, [X-Xs], Ref), run(T, [X-Xs], V, [device(D)]),
+   near(Ref, V).
+
+% A count over a bit test: /\ in a value, an int reduction.
+test(and_in_a_count, [timeout(120), forall(opencl_device(D, _))]) :-
+   shape(C, [8]),
+   over([I:8], [C[I] := 0]),
+   over([I:8, K:64], [C[I] := C[I] + where((K /\ I) =:= 0, 1, 0)]),
+   eval(C, [], Ref), run(C, [], V, [device(D)]),
+   Ref == V.
+
+% A non-affine read inside a matmul: the staged kernel loads it one element at a time.
+test(non_affine_read_in_a_staged_matmul, [timeout(120), forall(opencl_device(D, _))]) :-
+   power_of_two(M), shape(A, [64, M]), shape(B, [M, 64]), shape(C, [64, 64]),
+   over([I:64, J:64], [C[I, J] := 0]),
+   over([I:64, J:64, K:M], [C[I, J] := C[I, J] + A[I, K xor 1] * B[K, J]]),
+   M = 64,
+   numlist(1, 4096, Ns), maplist([X, Y]>>(Y is (X * 3) mod 7 - 3), Ns, As), maplist([X, Y]>>(Y is (X * 5) mod 11 - 5), Ns, Bs),
+   eval(C, [A-As, B-Bs], Ref), run(C, [A-As, B-Bs], V, [device(D)]),
+   near(Ref, V).
+
+:- end_tests(compile2_hull).
+
 :- begin_tests(compile2_alloc).
 
 % A name lives from the first kernel mentioning it to the last, and across the whole of a

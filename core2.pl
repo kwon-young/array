@@ -1,4 +1,4 @@
-:- module(core2, [shape/2, elements/2, kind/2, label_kinds/1, over/2, op(20, yf, [])]).
+:- module(core2, [shape/2, elements/2, kind/2, label_kinds/1, power_of_two/1, over/2, op(20, yf, [])]).
 :- use_module(library(clpBNR)).
 
 :- multifile error:has_type/2.
@@ -18,9 +18,21 @@
 % The kind of a written name is the greatest kind of the values written to it.
 % The kind of an input is declared by kind/2, or float when nothing narrows it.
 % label_kinds/1 resolves the kinds of a program's names before it is compiled or run.
+%
+% A subscript is a value of kind int.
+% Its hull over the points of its box is a pair of terms in the extents, posted to clpBNR once:
+% the affine part in the indices is exact, and each other operation bounds its operands' hulls,
+% themselves split the same way, so that an affine expression nested in a remainder stays exact.
+% A division, a remainder, a shift and the bit operations take non-negative operands;
+% xor and \/ need both operands below a power of two, a number or an extent declared by
+% power_of_two/1.
 
 prim(+, 2).  prim(-, 2).  prim(-, 1).  prim(*, 2).  prim(/, 2).  prim(max, 2).  prim(min, 2).
 prim(exp, 1).  prim(sqrt, 1).  prim(log, 1).  prim(<, 2).  prim(=<, 2).  prim(=:=, 2).
+prim(//, 2).  prim(mod, 2).  prim(>>, 2).  prim(<<, 2).  prim(/\, 2).  prim(\/, 2).  prim(xor, 2).
+
+% int_op(?Op): an operation on ints alone.
+int_op(//).  int_op(mod).  int_op(>>).  int_op(<<).  int_op(/\).  int_op(\/).  int_op(xor).
 
 arith(E, Args) :-
    compound(E),
@@ -91,6 +103,29 @@ kind:attr_unify_hook(_, Other) :-
    throw(error(permission_error(bind, name, Other), _)).
 
 kind:attribute_goals(_) --> [].
+
+% power_of_two(+N): the extent N is a power of two: checked on a number, declared on a variable,
+% which the bounds rule of xor reads, and related to its exponent for clpBNR.
+power_of_two(N), integer(N) =>
+   (  N > 0, N /\ (N-1) =:= 0
+   -> true
+   ;  domain_error(power_of_two, N)
+   ).
+power_of_two(N), var(N) =>
+   extent(N),
+   put_attr(N, pow2, true),
+   K::integer(0, 62),
+   {N == 2**K}.
+power_of_two(N) =>
+   type_error(extent, N).
+
+pow2:attr_unify_hook(_, N) :-
+   (  integer(N), N > 0, N /\ (N-1) =:= 0
+   -> true
+   ;  throw(error(domain_error(power_of_two, N), _))
+   ).
+
+pow2:attribute_goals(N) --> [power_of_two(N)].
 
 % label_kinds(+Names): the kinds of Names resolved.
 % An input takes the one kind its uses leave it, float when they leave all three, int when they rule float out.
@@ -198,7 +233,7 @@ value_kind(Scope, where(C, T, E), K) =>
 value_kind(Scope, E, K), arith(E, Args) =>
    maplist(value_kind(Scope), Args, Ks),
    E =.. [Op | _],
-   op_kind(Op, Ks, K).
+   op_kind(Op, E, Ks, K).
 
 variable_kind(index, _, K) => K = 1.
 variable_kind(number, _, K) => K = 1.
@@ -208,13 +243,18 @@ number_kind(N, K), ( N == 0 ; N == 1 ) => K = 0.
 number_kind(N, K), integer(N) => K = 1.
 number_kind(_, K) => K = 2.
 
-op_kind(Op, _, K), memberchk(Op, [<, =<, =:=]) => K = 0.
-op_kind(Op, _, K), memberchk(Op, [/, sqrt, exp, log]) => K = 2.
-op_kind(_, Ks, K) => foldl(kmax, Ks, 1, K).
+op_kind(Op, _, _, K), memberchk(Op, [<, =<, =:=]) => K = 0.
+op_kind(Op, _, _, K), memberchk(Op, [/, sqrt, exp, log]) => K = 2.
+op_kind(Op, E, Ks, K), int_op(Op) => maplist(at_most_int(E), Ks), K = 1.
+op_kind(_, _, Ks, K) => foldl(kmax, Ks, 1, K).
 
 kmax(A, B, K) :-
    K::integer(0, 2),
    {K == max(A, B)}.
+
+% at_most_int(+Culprit, +K): the kind K is held to int; a forall would undo the constraint.
+at_most_int(Culprit, K) :-
+   holds(K =< 1, Culprit).
 
 % holds(+Constraint, +Culprit): the kind constraint is posted, or Culprit is of the wrong kind.
 holds(Constraint, Culprit) :-
@@ -256,33 +296,155 @@ in_bounds(Scope, A, Ss) :-
 fit(Scope, _, Ss, Shape), same_length(Ss, Shape) => maplist(subscript_in(Scope), Ss, Shape).
 fit(_, A, Ss, Shape) => length(Shape, Rank), domain_error(rank(Rank), [](Ss, A)).
 
-% subscript_in(+Scope, +S, +N): S, affine in the indices of Scope, stays in 0..N-1 at every
-% point of Scope: a relation between the extents of Scope and N, which may be unknown. A read
-% of a name with a range, a gather, stays in it by that range.
-subscript_in(_, S, N), place(S, A, _), get_attr(A, elements, Lo-Hi) =>
-   name_kind(A, K),
+% subscript_in(+Scope, +S, +N): S, a value of kind int, stays in 0..N-1 at every point of
+% Scope: its hull, terms in the extents of Scope and N, posted as one constraint, a relation
+% between extents which may be unknown.
+subscript_in(Scope, S, N) :-
+   value_kind(Scope, S, K),
    holds(K =< 1, S),
-   within(Lo, Hi, N, S).
-subscript_in(Scope, S, N) =>
-   affine(Scope, S, C, Terms),
-   foldl(spread, Terms, C-C, Low-High),
+   hull(Scope, S, Low, High),
    within(Low, High, N, S).
 
 within(Low, High, N, _), {Low >= 0, High =< N-1} => true.
 within(_, _, _, S) => domain_error(in_bounds, S).
 
-spread(K-N, Low-High0, Bounds), K > 0 => Bounds = Low-(High0 + K*(N-1)).
-spread(K-N, Low0-High, Bounds) => Bounds = (Low0 + K*(N-1))-High.
+% hull(+Scope, +E, -Low, -High): bounds on the int expression E over the points of Scope: its
+% affine part exactly, from the extents of its indices, and each remainder by the rule of its
+% operation on the hulls of its operands, split the same way.
+hull(Scope, E, Low, High) :-
+   affine(Scope, E, C, Terms),
+   foldl(spread(Scope), Terms, C-C, Low0-High0),
+   simplify(Low0, Low),
+   simplify(High0, High).
+
+spread(_, K-N, Low-High0, Bounds), K > 0 => Bounds = Low-(High0 + K*(N-1)).
+spread(_, K-N, Low0-High, Bounds) => Bounds = (Low0 + K*(N-1))-High.
+spread(Scope, rest(K, E), Low0-High0, Bounds), K > 0 =>
+   remainder(Scope, E, Lo, Hi), Bounds = (Low0 + K*Lo)-(High0 + K*Hi).
+spread(Scope, rest(K, E), Low0-High0, Bounds) =>
+   remainder(Scope, E, Lo, Hi), Bounds = (Low0 + K*Hi)-(High0 + K*Lo).
+
+% remainder(+Scope, +E, -Lo, -Hi): the hull of a remainder E: a read in its range; a product
+% of non-negatives; a quotient by the divmod relation, exact; a remainder below its divisor;
+% a shift as a product or a quotient by a power of two; and below the least mask of its
+% operands, and xor or \/ below their greatest, each a mask; max, min and where by their parts.
+remainder(_, R, Lo, Hi), place(R, A, _) =>
+   (  get_attr(A, elements, Lo0-Hi0)
+   -> Lo = Lo0, Hi = Hi0
+   ;  existence_error(elements, R)
+   ).
+remainder(Scope, A*B, Lo, Hi) =>
+   hull(Scope, A, La, Ha), hull(Scope, B, Lb, Hb),
+   nonneg(La, A*B), nonneg(Lb, A*B),
+   Lo = La*Lb, Hi = Ha*Hb.
+remainder(Scope, A // B, Lo, Hi) =>
+   hull(Scope, A, La, Ha), hull(Scope, B, Lb, Hb),
+   nonneg(La, A // B), positive(Lb, A // B),
+   quotient(La, Hb, Lo), quotient(Ha, Lb, Hi).
+remainder(Scope, A mod B, Lo, Hi) =>
+   hull(Scope, A, La, Ha), hull(Scope, B, Lb, Hb),
+   nonneg(La, A mod B), positive(Lb, A mod B),
+   Lo = 0, Hi = min(Ha, Hb - 1).
+remainder(Scope, A >> B, Lo, Hi) =>
+   hull(Scope, A, La, Ha), shift(B, A >> B, P),
+   nonneg(La, A >> B),
+   quotient(La, P, Lo), quotient(Ha, P, Hi).
+remainder(Scope, A << B, Lo, Hi) =>
+   hull(Scope, A, La, Ha), shift(B, A << B, P),
+   nonneg(La, A << B),
+   Lo = La*P, Hi = Ha*P.
+remainder(Scope, A /\ B, Lo, Hi) =>
+   hull(Scope, A, La, Ha), hull(Scope, B, Lb, Hb),
+   nonneg(La, A /\ B), nonneg(Lb, A /\ B),
+   Lo = 0, Hi = min(Ha, Hb).
+remainder(Scope, E, Lo, Hi), E =.. [Op, A, B], memberchk(Op, [\/, xor]) =>
+   hull(Scope, A, La, Ha), hull(Scope, B, Lb, Hb),
+   nonneg(La, E), nonneg(Lb, E), mask(Ha, E), mask(Hb, E),
+   Lo = 0, Hi = max(Ha, Hb).
+remainder(Scope, E, Lo, Hi), E =.. [Op, A, B], memberchk(Op, [max, min]) =>
+   hull(Scope, A, La, Ha), hull(Scope, B, Lb, Hb),
+   Lo =.. [Op, La, Lb], Hi =.. [Op, Ha, Hb].
+remainder(Scope, where(_, T, E), Lo, Hi) =>
+   hull(Scope, T, Lt, Ht), hull(Scope, E, Le, He),
+   Lo = min(Lt, Le), Hi = max(Ht, He).
+remainder(_, E, _, _) =>
+   domain_error(bounded, E).
+
+% nonneg(+Lo, +Culprit) and positive(+Lo, +Culprit): the bound Lo is at least 0, or 1, by its
+% form: a number, an extent, a sum, a product, a max or a min of such.
+nonneg(Lo, Culprit) :-
+   (  at_least(Lo, 0)
+   -> true
+   ;  domain_error(non_negative, Culprit)
+   ).
+
+positive(Lo, Culprit) :-
+   (  at_least(Lo, 1)
+   -> true
+   ;  domain_error(positive, Culprit)
+   ).
+
+at_least(N, B), number(N) => N >= B.
+at_least(V, B), var(V) => range(V, [Lo, _]), number(Lo), Lo >= B.
+at_least(A+C, B) => at_least(A, B), at_least(C, 0) ; at_least(A, 0), at_least(C, B).
+at_least(A*C, B), B =< 0 => at_least(A, 0), at_least(C, 0).
+at_least(A*C, B) => at_least(A, B), at_least(C, 1) ; at_least(A, 1), at_least(C, B).
+at_least(max(A, C), B) => ( at_least(A, B) ; at_least(C, B) ).
+at_least(min(A, C), B) => at_least(A, B), at_least(C, B).
+at_least(_, _) => fail.
+
+% quotient(+A, +B, -Q): Q is A // B: a number, or the integer of the divmod relation
+% A = B*Q + R, 0 =< R < B, which clpBNR keeps exact.
+quotient(A, B, Q), number(A), number(B) => Q is A // B.
+quotient(A, B, Q) =>
+   Q::integer, R::integer(0, inf),
+   {A == B*Q + R, R =< B - 1}.
+
+% shift(+B, +Culprit, -P): the shift B is a non-negative number, P the power of two it is.
+shift(B, _, P), integer(B), B >= 0 => P is 1 << B.
+shift(_, Culprit, _) => domain_error(shift, Culprit).
+
+% mask(+Hi, +Culprit): the bound Hi is one below a power of two: a number, an extent declared
+% by power_of_two/1 less one, or the max of two masks.
+mask(Hi, Culprit) :-
+   (  is_mask(Hi)
+   -> true
+   ;  domain_error(power_of_two, Culprit)
+   ).
+
+is_mask(N), integer(N) => N >= 0, N /\ (N+1) =:= 0.
+is_mask(N-1), var(N) => get_attr(N, pow2, _).
+is_mask(max(A, B)) => is_mask(A), is_mask(B).
+is_mask(_) => fail.
+
+% simplify(+T0, -T): T0 with its numbers folded and its identities dropped: the terms stay
+% symbolic in the extents, for clpBNR to take whole.
+simplify(T0, T), number(T0) => T = T0.
+simplify(T0, T), var(T0) => T = T0.
+simplify(T0, T), T0 =.. [Op, A0, B0], memberchk(Op, [+, -, *, min, max]) =>
+   simplify(A0, A), simplify(B0, B), fold(Op, A, B, T).
+simplify(T0, T) => T = T0.
+
+fold(Op, A, B, T), number(A), number(B) => T0 =.. [Op, A, B], T is T0.
+fold(+, A, B, T), A == 0 => T = B.
+fold(+, A, B, T), B == 0 => T = A.
+fold(-, A, B, T), B == 0 => T = A.
+fold(*, A, B, T), ( A == 0 ; B == 0 ) => T = 0.
+fold(*, A, B, T), A == 1 => T = B.
+fold(*, A, B, T), B == 1 => T = A.
+fold(Op, A, B, T) => T =.. [Op, A, B].
 
 % affine(+Scope, +S, -C, -Terms): S is C plus the sum of K*I for each K-N of Terms, I the
-% index of extent N; C is an expression in numbers.
+% index of extent N, plus K*E for each rest(K, E), E a remainder; C is an expression in
+% numbers.
 affine(Scope, S, C, Terms) :-
    form(Scope, S, 1, 0-[], C-Pairs),
    keysort(Pairs, Sorted),
    group_pairs_by_key(Sorted, Groups),
    foldl(term(Scope), Groups, [], Terms).
 
-% form(+Scope, +S, +K, +C0-Pairs0, -C-Pairs): C0 + K*S, with its index terms as I-K pairs.
+% form(+Scope, +S, +K, +C0-Pairs0, -C-Pairs): C0 + K*S, with its index terms as I-K pairs and
+% its remainders as r(E)-K pairs.
 form(S, A+B, K, Acc0, Acc) => form(S, A, K, Acc0, Acc1), form(S, B, K, Acc1, Acc).
 form(S, A-B, K, Acc0, Acc) => form(S, A, K, Acc0, Acc1), K1 is -K, form(S, B, K1, Acc1, Acc).
 form(S, -A, K, Acc0, Acc) => K1 is -K, form(S, A, K1, Acc0, Acc).
@@ -291,9 +453,11 @@ form(S, A*B, K, Acc0, Acc), number(B) => K1 is K*B, form(S, A, K1, Acc0, Acc).
 form(S, V, K, C-Pairs0, Acc), var(V), in_scope(V, S) => Acc = C-[V-K | Pairs0].
 form(S, V, K, C0-Pairs, Acc), var(V), variable(S, V, number) => Acc = (C0 + K*V)-Pairs.
 form(_, N, K, C0-Pairs, Acc), number(N) => Acc = (C0 + K*N)-Pairs.
+form(_, E, K, C-Pairs0, Acc), compound(E) => Acc = C-[r(E)-K | Pairs0].
 form(_, E, _, _, _) => type_error(affine, E).
 
 term(_, _-Ks, Terms0, Terms), sum_list(Ks, 0) => Terms = Terms0.
+term(_, r(E)-Ks, Terms0, Terms) => sum_list(Ks, K), Terms = [rest(K, E) | Terms0].
 term(Scope, I-Ks, Terms0, Terms) => sum_list(Ks, K), extent(Scope, I, N), Terms = [K-N | Terms0].
 
 extent(Scope, I, N) :-
@@ -473,9 +637,70 @@ test(gather_range_above_extent, [timeout(10), throws(error(domain_error(in_bound
 test(gather_out_of_range, [timeout(10), throws(error(domain_error(in_bounds, _), _))]) :-
    shape(Idx, [4]), elements(Idx, 0-5), shape(H, [3]),
    over([K:4], [H[Idx[K]] := H[Idx[K]] + 1]).
-test(gather_needs_a_range, [timeout(10), throws(error(type_error(affine, _), _))]) :-
+test(gather_needs_a_range, [timeout(10), throws(error(existence_error(elements, _), _))]) :-
    shape(Idx, [4]), shape(H, [3]),
    over([K:4], [H[Idx[K]] := 1]).
+
+% Beyond affine: a remainder is hulled by its operation on exact hulls of its operands, and the
+% whole posted once as terms in the extents.
+test(hull_mod_relates_extents, [timeout(10), true(Lo == 3)]) :-
+   shape(X, [M]),
+   over([I:7], [_T[I] := X[I mod 3]]),
+   range(M, [Lo, _]).
+test(hull_quotient_is_exact, [timeout(10), true(Lo == 4)]) :-
+   shape(X, [M]),
+   over([I:7], [_T[I] := X[I // 2]]),
+   range(M, [Lo, _]).
+test(hull_quotient_symbolic, [timeout(10)]) :-
+   shape(X, [N]), shape(Y, [H]),
+   over([I:N], [Y[I // 2] := X[I]]),
+   N = 8, range(H, [4, _]).
+test(hull_nested_affine_is_exact, [timeout(10), true(Lo == 13)]) :-
+   shape(X, [M]),
+   over([I:4, J:2], [_T[I, J] := X[(2*I + J) mod 7 + 2*I]]),
+   range(M, [Lo, _]).
+test(hull_clamp_fits_anything, [timeout(10)]) :-
+   shape(X, [N]),
+   over([I:N], [_T[I] := X[min(I*3, N-1)]]).
+test(hull_where_is_the_union, [timeout(10), true(Lo == 7)]) :-
+   shape(X, [M]),
+   over([I:3], [_T[I] := X[where(I < 1, I + 4, I)]]),
+   range(M, [Lo, _]).
+test(hull_symbolic_coefficient, [timeout(10), true(Lo == 6)]) :-
+   shape(X, [N, M]),
+   over([I:2, J:3], [T[I*M + J] := X[I, J]]),
+   N = 2, M = 3, shape(T, [L]), range(L, [Lo, _]).
+test(hull_xor_with_a_power_of_two, [timeout(10)]) :-
+   power_of_two(N), shape(X, [N]), shape(S, [P]), elements(S, 0-(N-1)),
+   over([Pi:P, I:N], [_T[Pi, I] := X[I xor S[Pi]]]).
+test(hull_xor_needs_a_power_of_two, [timeout(10), throws(error(domain_error(power_of_two, _), _))]) :-
+   shape(X, [N]),
+   over([I:N], [_T[I] := X[I xor 1]]).
+test(hull_and_needs_no_declaration, [timeout(10)]) :-
+   shape(X, [N]), shape(S, [P]), elements(S, 0-(N-1)),
+   over([Pi:P, I:N], [_T[Pi, I] := X[I /\ S[Pi]]]).
+test(hull_shift, [timeout(10), true(Lo == 2)]) :-
+   shape(X, [M]),
+   over([I:8], [_T[I] := X[I >> 2]]),
+   range(M, [Lo, _]).
+test(hull_rejects_a_float_subscript, [timeout(10), throws(error(domain_error(kind, _), _))]) :-
+   shape(X, [4]),
+   over([I:4], [_T[I] := X[I / 2]]).
+test(hull_rejects_a_float_operand, [timeout(10), throws(error(domain_error(kind, _), _))]) :-
+   shape(X, [4]), shape(W, [4]), kind(W, float),
+   over([I:4], [_T[I] := X[W[I] mod 2]]).
+test(hull_quotient_needs_a_positive_divisor, [timeout(10), throws(error(domain_error(positive, _), _))]) :-
+   shape(X, [N]), shape(D, [1]), elements(D, 0-3),
+   over([I:N], [_T[I] := X[I // D[0]]]).
+test(power_of_two_on_a_number, [timeout(10)]) :-
+   power_of_two(8).
+test(power_of_two_rejects_six, [timeout(10), throws(error(domain_error(power_of_two, 6), _))]) :-
+   power_of_two(6).
+test(power_of_two_binds_to_a_power, [timeout(10)]) :-
+   power_of_two(N), shape(_X, [N]), N = 512.
+test(power_of_two_refuses_six_later, [timeout(10)]) :-
+   power_of_two(N), shape(_X, [N]),
+   \+ catch(N = 6, error(domain_error(power_of_two, _), _), fail).
 test(read_before_write, [timeout(10), fixme(needs_dependence_analysis),
                          throws(error(domain_error(written, _), _))]) :-
    over([T:8], [F[T] := F[T+1]]).
