@@ -1,4 +1,4 @@
-:- module(core2, [shape/2, elements/2, over/2, op(20, yf, [])]).
+:- module(core2, [shape/2, elements/2, kind/2, label_kinds/1, over/2, op(20, yf, [])]).
 :- use_module(library(clpBNR)).
 
 :- multifile error:has_type/2.
@@ -12,6 +12,12 @@
 % a clpBNR variable stands for a number. The definition of a name hangs on it as the
 % attribute def(Shape, Boxes), the boxes writing it, in order. An input is a name no box
 % writes. The left-hand side of an equation is the only thing that creates a name.
+%
+% The elements of a name have a kind: bool, int or float, in that order.
+% A kind is a clpBNR integer in 0..2, hanging on the name as the attribute kind.
+% The kind of a written name is the greatest kind of the values written to it.
+% The kind of an input is declared by kind/2, or float when nothing narrows it.
+% label_kinds/1 resolves the kinds of a program's names before it is compiled or run.
 
 prim(+, 2).  prim(-, 2).  prim(-, 1).  prim(*, 2).  prim(/, 2).  prim(max, 2).  prim(min, 2).
 prim(exp, 1).  prim(sqrt, 1).  prim(log, 1).  prim(<, 2).  prim(=<, 2).  prim(=:=, 2).
@@ -62,6 +68,62 @@ elements(A, _) => type_error(name, A).
 elements:attr_unify_hook(_, Other) :-
    throw(error(permission_error(bind, name, Other), _)).
 
+% kind(?A, ?Kind): the kind of the elements of the name A, bool, int or float.
+% Declared on an input, it may come before its shape; read on any name, it is known once labelled.
+kind(A, Kind), var(A) => name_kind(A, K), kind_name(A, Kind, K).
+kind(A, _) => type_error(name, A).
+
+% name_kind(+A, -K): the kind of A as a clpBNR integer, created at its first use.
+name_kind(A, K), get_attr(A, kind, K0) => K = K0.
+name_kind(A, K) => K::integer(0, 2), put_attr(A, kind, K).
+
+kind_name(_, Kind, K), integer(K) => nth0(K, [bool, int, float], Kind).
+kind_name(A, Kind, K), nonvar(Kind) =>
+   must_be(oneof([bool, int, float]), Kind),
+   once(nth0(K0, [bool, int, float], Kind)),
+   (  K = K0
+   -> true
+   ;  domain_error(kind(Kind), A)
+   ).
+kind_name(_, Kind, K) => when(ground(K), nth0(K, [bool, int, float], Kind)).
+
+kind:attr_unify_hook(_, Other) :-
+   throw(error(permission_error(bind, name, Other), _)).
+
+kind:attribute_goals(_) --> [].
+
+% label_kinds(+Names): the kinds of Names resolved.
+% An input takes the one kind its uses leave it, float when they leave all three, int when they rule float out.
+% A written name takes the least kind its values allow.
+label_kinds(Names) :-
+   partition(written, Names, Written, Inputs),
+   maplist(label_input, Inputs),
+   maplist(label_written, Written).
+
+written(A) :-
+   get_attr(A, core2, def(_, [_ | _])).
+
+label_input(A) :-
+   name_kind(A, K),
+   (  integer(K)
+   -> true
+   ;  range(K, [Lo, Hi]),
+      (  Lo =:= Hi
+      -> K = Lo
+      ;  Hi =:= 2
+      -> K = 2
+      ;  K = 1
+      )
+   ).
+
+label_written(A) :-
+   name_kind(A, K),
+   (  integer(K)
+   -> true
+   ;  range(K, [Lo, _]),
+      K = Lo
+   ).
+
 % shape(?A, ?Shape): the shape of the name A, declaring A if it has none.
 shape(A, Shape), get_attr(A, core2, def(Shape0, _)) => Shape = Shape0.
 shape(A, Shape), var(A) => must_be(shape, Shape), put_attr(A, core2, def(Shape, [])).
@@ -99,7 +161,10 @@ well_formed(Scope, P := V) =>
    place(P, A, Ts),
    maplist(well_formed(Scope), Ts),
    target(Scope, A, Ts),
-   well_formed(Scope, V).
+   well_formed(Scope, V),
+   value_kind(Scope, V, Kv),
+   name_kind(A, Ka),
+   holds(Ka >= Kv, P := V).
 well_formed(Scope, V), var(V) =>
    variable(Scope, V, Kind),
    scalar(Kind, V).
@@ -114,6 +179,49 @@ well_formed(Scope, E), arith(E, Args) =>
    maplist(well_formed(Scope), Args).
 well_formed(_, E) =>
    type_error(value, E).
+
+% value_kind(+Scope, +V, -K): the kind of the well-formed value V, a clpBNR integer in 0..2.
+% An index or an extent is an int, a number has the least kind holding it, a read has its name's.
+% A comparison is a bool.
+% A division, a root, an exponential and a logarithm are floats.
+% The other operations take the greatest kind of their operands, an int at the least: arithmetic on bools is on ints.
+% A where takes the greatest kind of its branches, and its condition is a bool.
+value_kind(Scope, V, K), var(V) => variable(Scope, V, Kind), variable_kind(Kind, V, K).
+value_kind(_, N, K), number(N) => number_kind(N, K).
+value_kind(_, R, K), place(R, A, _) => name_kind(A, K).
+value_kind(Scope, where(C, T, E), K) =>
+   value_kind(Scope, C, Kc),
+   holds(Kc == 0, C),
+   value_kind(Scope, T, Kt),
+   value_kind(Scope, E, Ke),
+   kmax(Kt, Ke, K).
+value_kind(Scope, E, K), arith(E, Args) =>
+   maplist(value_kind(Scope), Args, Ks),
+   E =.. [Op | _],
+   op_kind(Op, Ks, K).
+
+variable_kind(index, _, K) => K = 1.
+variable_kind(number, _, K) => K = 1.
+variable_kind(name(_), V, K) => name_kind(V, K).
+
+number_kind(N, K), ( N == 0 ; N == 1 ) => K = 0.
+number_kind(N, K), integer(N) => K = 1.
+number_kind(_, K) => K = 2.
+
+op_kind(Op, _, K), memberchk(Op, [<, =<, =:=]) => K = 0.
+op_kind(Op, _, K), memberchk(Op, [/, sqrt, exp, log]) => K = 2.
+op_kind(_, Ks, K) => foldl(kmax, Ks, 1, K).
+
+kmax(A, B, K) :-
+   K::integer(0, 2),
+   {K == max(A, B)}.
+
+% holds(+Constraint, +Culprit): the kind constraint is posted, or Culprit is of the wrong kind.
+holds(Constraint, Culprit) :-
+   (  {Constraint}
+   -> true
+   ;  domain_error(kind, Culprit)
+   ).
 
 % variable(+Scope, +V, -Kind): a variable is an index, a name, or a number.
 variable(Scope, V, Kind), in_scope(V, Scope) => Kind = index.
@@ -152,6 +260,8 @@ fit(_, A, Ss, Shape) => length(Shape, Rank), domain_error(rank(Rank), [](Ss, A))
 % point of Scope: a relation between the extents of Scope and N, which may be unknown. A read
 % of a name with a range, a gather, stays in it by that range.
 subscript_in(_, S, N), place(S, A, _), get_attr(A, elements, Lo-Hi) =>
+   name_kind(A, K),
+   holds(K =< 1, S),
    within(Lo, Hi, N, S).
 subscript_in(Scope, S, N) =>
    affine(Scope, S, C, Terms),
@@ -197,7 +307,11 @@ attribute_goals(A) -->
    { get_attr(A, core2, def(Shape, Boxes)),
      include(owner(A), Boxes, Owned) },
    [shape(A, Shape)],
+   kind_goal(A),
    Owned.
+
+kind_goal(A) --> { get_attr(A, kind, K), integer(K), nth0(K, [bool, int, float], Kind) }, !, [kind(A, Kind)].
+kind_goal(_) --> [].
 
 owner(A, Box) :-
    writes(Box, [First | _]),
@@ -293,6 +407,56 @@ test(not_a_shape, [timeout(10), throws(error(type_error(shape, _), _))]) :-
    shape(_, [2, foo]).
 test(not_a_value, [timeout(10), throws(error(type_error(value, _), _))]) :-
    over([I:3], [_T[I] := foo(I)]).
+
+% Kinds: inferred forwards from the values written, backwards from the uses of an input, and
+% labelled once the program is built.
+test(kind_float_accumulation, [timeout(10), true(K == float)]) :-
+   x(X),
+   over([I:3], [S[I] := 0]),
+   over([I:3], [S[I] := S[I] + X[I]]),
+   label_kinds([X, S]), kind(S, K).
+test(kind_count_is_int, [timeout(10), true(K == int)]) :-
+   x(X),
+   over([I:3], [C[I] := 0]),
+   over([I:3], [C[I] := C[I] + where(X[I] < 0, 1, 0)]),
+   label_kinds([X, C]), kind(C, K).
+test(kind_comparison_is_bool, [timeout(10), true(K == bool)]) :-
+   x(X),
+   over([I:3], [B[I] := X[I] < 0]),
+   label_kinds([X, B]), kind(B, K).
+test(kind_division_is_float, [timeout(10), true(K == float)]) :-
+   over([I:3], [T[I] := I / 2]),
+   label_kinds([T]), kind(T, K).
+test(kind_index_arithmetic_is_int, [timeout(10), true(K == int)]) :-
+   over([I:3], [T[I] := I + 1]),
+   label_kinds([T]), kind(T, K).
+test(kind_input_defaults_to_float, [timeout(10), true(K == float)]) :-
+   x(X),
+   over([I:3], [_T[I] := X[I]]),
+   label_kinds([X]), kind(X, K).
+test(kind_declared_before_shape, [timeout(10), true(K == int)]) :-
+   kind(Idx, int), shape(Idx, [4]), elements(Idx, 0-2), shape(H, [3]),
+   over([K4:4], [H[Idx[K4]] := 1]),
+   label_kinds([Idx, H]), kind(Idx, K).
+test(kind_where_condition_narrows_input, [timeout(10), true(K == bool)]) :-
+   x(X),
+   over([I:3], [_T[I] := where(X[I], 1, 0)]),
+   label_kinds([X]), kind(X, K).
+test(kind_subscript_defaults_to_int, [timeout(10), true(K == int)]) :-
+   shape(Idx, [4]), elements(Idx, 0-2), shape(H, [3]),
+   over([K4:4], [H[Idx[K4]] := 1]),
+   label_kinds([Idx, H]), kind(Idx, K).
+test(kind_float_subscript, [timeout(10), throws(error(domain_error(kind, _), _))]) :-
+   shape(Idx, [4]), elements(Idx, 0-2), kind(Idx, float), shape(H, [3]),
+   over([K4:4], [H[Idx[K4]] := 1]).
+test(kind_where_condition_not_bool, [timeout(10), throws(error(domain_error(kind, _), _))]) :-
+   x(X), kind(X, float),
+   over([I:3], [_T[I] := where(X[I], 1, 0)]).
+test(kind_declared_too_low, [timeout(10), throws(error(domain_error(kind, _), _))]) :-
+   shape(S, [3]), kind(S, bool),
+   over([I:3], [S[I] := 2]).
+test(kind_unknown, [timeout(10), throws(error(type_error(oneof(_), _), _))]) :-
+   x(X), kind(X, double).
 
 % Beyond the structural check: a gather needs the range of the index array's elements, and
 % a read of a place must come after its write.

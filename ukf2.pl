@@ -17,7 +17,7 @@ depend on the detection taken; MuSel is the posterior mean of the detection Sel[
 for each state. N and M are the model's, ground; B and D may stay extent variables.
 
     ukf_step(+Model, +dims(B, N, M, D), +Crit, +in(Mu, P, R, Zdet, Sel), -Out)
-        Mu[B, N], P[B, N, N], R[M, M], Zdet[D, M], Sel[B] in 0..D-1
+        Mu[B, N], P[B, N, N], R[M, M], Zdet[D, M], Sel[B] in 0..D-1, ints
         Out = out(MuPred, PPred, MuZ, Szz, Score, MuPost, PPost, MuSel)
         MuPred[B, N], PPred[B, N, N], MuZ[B, M], Szz[B, M, M], Score[B, D],
         MuPost[B, D, N], PPost[B, N, N], MuSel[B, N]

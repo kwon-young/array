@@ -87,7 +87,7 @@ test(cumsum_batch_is_parallel, [timeout(30), true(V == [1.0, 2.0, 4.0, 6.0, 9.0,
    J1 == J, T1 == T,
    run(C, [X-[1, 2, 3, 4, 5, 6]], V, [tile(1)]).
 
-test(fibonacci_is_sequential, [timeout(30), true(V == [1.0, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0])]) :-
+test(fibonacci_is_sequential, [timeout(30), true(V == [1, 1, 2, 3, 5, 8, 13, 21])]) :-
    shape(F, [8]),
    over([], [F[0] := 1, F[1] := 1]),
    over([T:6], [F[T+2] := F[T] + F[T+1]]),
@@ -392,6 +392,48 @@ test(vit_block_is_nine_kernels, [timeout(120), forall(opencl_device(D, _))]) :-
    near(Ref, V), shape(X, _).
 
 :- end_tests(compile2_fusion).
+
+:- begin_tests(compile2_kinds).
+
+% A count is an int: an int reduction on the device, read back as integers.
+test(int_count_reduction, [timeout(120), forall(opencl_device(D, _))]) :-
+   shape(X, [8, 64]), shape(C, [8]),
+   over([I:8], [C[I] := 0]),
+   over([I:8, K:64], [C[I] := C[I] + where(X[I, K] < 0, 1, 0)]),
+   numlist(1, 512, Ns), maplist([N, V]>>(V is (N mod 7) - 3), Ns, Xs),
+   eval(C, [X-Xs], Ref), run(C, [X-Xs], V, [device(D)]),
+   kind(C, int), maplist(integer, V), Ref == V.
+
+% A max over ints starts from the int extreme, in the registers and in the split partials.
+test(int_max_reduction, [timeout(120), forall(opencl_device(D, _))]) :-
+   shape(X, [4, 1024]), kind(X, int), shape(M, [4]),
+   over([I:4], [M[I] := -2147483648]),
+   over([I:4, K:1024], [M[I] := max(M[I], X[I, K])]),
+   kernels(M, [], Ks), source(Ks, Src), \+ sub_string(Src, _, _, _, "INFINITY"),
+   numlist(1, 4096, Ns), maplist([N, V]>>(V is ((N * 7919) mod 1000) - 500), Ns, Xs),
+   eval(M, [X-Xs], Ref), run(M, [X-Xs], V, [device(D)]),
+   Ref == V.
+
+% An int scatter folds with the built-in atomic.
+test(int_scatter_uses_builtin_atomic, [timeout(120), forall(opencl_device(D, _))]) :-
+   shape(Idx, [4096]), elements(Idx, 0-15), shape(H, [16]),
+   over([I:16], [H[I] := 0]),
+   over([K:4096], [H[Idx[K]] := H[Idx[K]] + 1]),
+   kernels(H, [], [_, Scatter]), source([Scatter], Src), once(sub_string(Src, _, _, _, "atomic_add(")),
+   numlist(1, 4096, Ks), maplist([X, Y]>>(Y is (X * 7) mod 16), Ks, Is),
+   eval(H, [Idx-Is], Ref), run(H, [Idx-Is], V, [device(D)]),
+   Ref == V.
+
+% The data is coerced to the kind: an int input given as floats is truncated, a float input
+% given as integers is converted; a quotient of ints is a float.
+test(kinds_coerce_data, [timeout(120), forall(opencl_device(D, _))]) :-
+   shape(Idx, [8]), elements(Idx, 0-3), shape(X, [4]), shape(Y, [8]),
+   over([K:8], [Y[K] := X[Idx[K]] / 2]),
+   Data = [Idx-[0.0, 1.0, 2.0, 3.0, 3.0, 2.0, 1.0, 0.0], X-[1, 2, 3, 4]],
+   eval(Y, Data, Ref), run(Y, Data, V, [device(D)]),
+   kind(Y, float), near([0.5, 1.0, 1.5, 2.0, 2.0, 1.5, 1.0, 0.5], Ref), near(Ref, V).
+
+:- end_tests(compile2_kinds).
 
 :- begin_tests(compile2_alloc).
 

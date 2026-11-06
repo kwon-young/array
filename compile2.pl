@@ -20,7 +20,9 @@
 %             memory, a barrier between the boxes;
 %             A box over one sequential axis whose equations are boxes with parallel work
 %             is a host loop: its boxes are kernels taking the index as a parameter;
-%   print:    one OpenCL C kernel per box or chain, elements float, indices int;
+%   print:    one OpenCL C kernel per box or chain, an element typed by its name's kind, int
+%             for bool and int, float for float, indices int; the staged and vectorised
+%             kernels take float elements;
 %   allocate: the inputs and the output each a buffer; the intermediates slices of one arena,
 %             laid out by minimalloc from their lifetimes over the kernel sequence;
 %   run:      the buffers on the device, kernels in program order, the output read back.
@@ -62,6 +64,32 @@ in_list(List, X) :-
 names(Term, Names) :-
    term_variables(Term, Vars),
    include(is_name, Vars, Names).
+
+% label_program(+Out, +Boxes): the kinds of the names of Boxes and Out resolved, see label_kinds/1.
+label_program(Out, Boxes) :-
+   names(Boxes, Names0),
+   sort([Out | Names0], Names),
+   label_kinds(Names).
+
+% ctype(+N, -T): the C type of the elements of N: int for a bool or an int, float for a float,
+% and float while the kind is unresolved, a name the compiler made.
+ctype(N, T) :-
+   core2:name_kind(N, K),
+   (  integer(K), K < 2
+   -> T = int
+   ;  T = float
+   ).
+
+% kind_of(+E, -K): the kind of the value E, 0, 1 or 2, once the names are labelled: the rules of
+% core2:value_kind/3 on numbers.
+kind_of(V, K), var(V), is_name(V) => core2:name_kind(V, K0), ( integer(K0) -> K = K0 ; K = 2 ).
+kind_of(V, K), var(V) => K = 1.
+kind_of(N, K), number(N) => core2:number_kind(N, K).
+kind_of(R, K), core2:place(R, N, _) => kind_of(N, K).
+kind_of(where(_, T, E), K) => kind_of(T, KT), kind_of(E, KE), K is max(KT, KE).
+kind_of(E, K), E =.. [Op, _, _], memberchk(Op, [<, =<, =:=]) => K = 0.
+kind_of(E, K), E =.. [Op | _], memberchk(Op, [/, sqrt, exp, log]) => K = 2.
+kind_of(E, K), compound(E) => E =.. [_ | As], maplist(kind_of, As, Ks), max_list([1 | Ks], K).
 
 is_name(V) :-
    get_attr(V, core2, _).
@@ -152,6 +180,7 @@ kernels(Out, Options, Kernels) :-
    must_be(positive_integer, L),
    L /\ (L-1) =:= 0,
    program(Out, Boxes0),
+   label_program(Out, Boxes0),
    fuse(Out, Boxes0, Boxes1),
    splits(Boxes1, L, Min, Boxes),
    chains(Boxes, Out, Boxes, opts(Tile, G, TK, W, Major, Threads, KC, MC, Min, L, Epi, LDS, U), L-LDS-SW, Min, [], Plan),
@@ -212,7 +241,8 @@ splittable(over(Axes, [P := V]), L, Min, [Init, Partial, Combine]) :-
    Chunk is N // C,
    shape(G, Shape),
    shape(Gp, [C | Shape]),
-   monoid(Op, Identity, _),
+   core2:kind(G, Kind), core2:kind(Gp, Kind),
+   ctype(G, T), identity(Op, T, Identity),
    subst([K-(Kc*Chunk + Ki)], E, E1),
    Subs = [Kc | Ts],
    Partials = [](Subs, Gp),
@@ -296,7 +326,7 @@ epilogue(Out, All, [InitBox | Bs0], Before, Init, Red, Post, Temps, Rest) :-
    before(C, NsI, Bs0, Before, [Red | Bs]),
    Red = over(AxesR, [PR := VR]),
    core2:place(PR, C1, TsR), C1 == C,
-   VR =.. [Op, R, _], monoid(Op, _, _), core2:place(R, C2, TsR1), C2 == C, TsR1 == TsR,
+   VR =.. [Op, R, _], monoid(Op, _), core2:place(R, C2, TsR1), C2 == C, TsR1 == TsR,
    maplist(arg(1), AxesI, IsI), maplist(arg(1), AxesR, IsR),
    term_variables(TsR, VsR), forall(member(V, VsR), in_list(IsR, V)),
    length(IsR, NR), length(VsR, NV), NR =:= NV + 1,
@@ -496,7 +526,7 @@ phase(_, _, _, _, _) => fail.
 reduction(RowIs, P := V, red(G, Ts, Op, E)) :-
    core2:place(P, G, Ts),
    V =.. [Op, R, E],
-   monoid(Op, _, _),
+   monoid(Op, _),
    core2:place(R, G1, Ts1),
    G1 == G,
    Ts1 == Ts,
@@ -505,11 +535,17 @@ reduction(RowIs, P := V, red(G, Ts, Op, E)) :-
    names(E, Ns),
    \+ in_list(Ns, G).
 
-% monoid(?Op, ?Identity, ?C): the identity, as a number and as OpenCL C.
-monoid(+, 0, '0.0f').
-monoid(*, 1, '1.0f').
-monoid(max, NegInf, '-INFINITY') :- NegInf is -inf.
-monoid(min, Inf, 'INFINITY') :- Inf is inf.
+% monoid(?Op, ?Identity): the identity of a monoid, as a number.
+monoid(+, 0).
+monoid(*, 1).
+monoid(max, NegInf) :- NegInf is -inf.
+monoid(min, Inf) :- Inf is inf.
+
+% identity(+Op, +T, -Identity): the identity in the C type T: an int has no infinity, its
+% extremes stand in.
+identity(max, int, Identity) => Identity = -2147483648.
+identity(min, int, Identity) => Identity = 2147483647.
+identity(Op, _, Identity) => monoid(Op, Identity).
 
 % align(+Rows, +Prev, +Box0, -Box): Box is Box0 with its parallel axes renamed to the rows. An
 % axis that shares a subscript position of a name with a row of Prev is that row; the rows
@@ -864,7 +900,7 @@ writes_name(G, over(_, Eqs)) :- member(E, Eqs), writes_name(G, E), !.
 
 fold_of(G, P := V, Op) :-
    core2:place(P, G1, Ts), G1 == G,
-   V =.. [Op, R, E], monoid(Op, _, _),
+   V =.. [Op, R, E], monoid(Op, _),
    core2:place(R, G2, Ts1), G2 == G, Ts1 == Ts,
    names(E, Ns), \+ in_list(Ns, G).
 
@@ -989,20 +1025,34 @@ info_width(info(_, T, _, _), T).
 source(Plan, Source) :-
    flat_plan(Plan, Kernels),
    foldl([K, S0, S]>>(get_dict(id, K, I), kernel_source(I, K, S1), string_concat(S0, S1, S)), Kernels, "", Body),
-   foldl([K, Os0, Os]>>(get_dict(atomics, K, As) -> pairs_values(As, Ops), append(Os0, Ops, Os) ; Os = Os0),
+   foldl([K, Os0, Os]>>(get_dict(atomics, K, As) -> maplist(typed_atomic, As, Ops), append(Os0, Ops, Os) ; Os = Os0),
          Kernels, [], Ops0),
    sort(Ops0, Ops),
    foldl([Op, H0, H]>>(atomic_helper(Op, H1), string_concat(H0, H1, H)), Ops, "", Helpers),
    string_concat(Helpers, Body, Source).
 
-atomic_helper(Op, Helper) :-
-   atomic_function(Op, F), fold(Op, 'old.f', 'v', Expr),
+typed_atomic(G-Op, Op-T) :-
+   ctype(G, T).
+
+% atomic_helper(+Op-T, -Helper): the float folds, and the int product, loop on a compare-and-swap;
+% the other int folds are built in.
+atomic_helper(Op-float, Helper) =>
+   atomic_function(Op, float, F), fold(Op, float, 'old.f', 'v', Expr),
    format(string(Helper), "inline void ~w(volatile __global float *p, float v) {
   union { unsigned int u; float f; } old, new_;
   do { old.f = *p; new_.f = ~w; } while (atomic_cmpxchg((volatile __global unsigned int *)p, old.u, new_.u) != old.u);
 }
 
 ", [F, Expr]).
+atomic_helper((*)-int, Helper) =>
+   Helper = "inline void atomic_mul_int(volatile __global int *p, int v) {
+  int old;
+  do { old = *p; } while (atomic_cmpxchg(p, old, old * v) != old);
+}
+
+".
+atomic_helper(_, Helper) =>
+   Helper = "".
 
 kernel_source(I, K, Source), get_dict(kind, K, items) =>
    kernel{box: Box, par: Par, seq: Seq, priv: Priv, local: Local, names: Names0, stage: Stage, vector: W, ranges: Ranges,
@@ -1050,17 +1100,27 @@ phase_write(spread(_, _, Eqs), Acc0, Acc) => core2:writes(over([], Eqs), Ws), ap
 phase_write(reduce(_, Reds), Acc0, Acc) => maplist(arg(1), Reds, Ws), append(Ws, Acc0, Acc).
 
 shared_decl(Ctx, N-_-Size) -->
-   { var_name(Ctx, N, Name), format(atom(SName), "s_~w", [Name]) },
-   local_array(SName, Size).
+   { var_name(Ctx, N, Name), format(atom(SName), "s_~w", [Name]), ctype(N, T) },
+   local_array(T, SName, Size).
 
-% local_array(+Name, +Size): a local array of Size floats, aligned to 32 bytes at run time: a
-% vector access to it is a typed pointer, aligned loads, and a runtime may hand local memory
-% out aligned to 16 bytes only, whatever the attribute asks (pocl's OpenMP scheduler takes
-% it from malloc, and lays the first array at the raw base), which faults the loads.
-local_array(Name, Size) -->
+% local_array(+T, +Name, +Size): a local array of Size elements of T, aligned to 32 bytes at run
+% time: a vector access to it is a typed pointer, aligned loads, and a runtime may hand local
+% memory out aligned to 16 bytes only, whatever the attribute asks (pocl's OpenMP scheduler
+% takes it from malloc, and lays the first array at the raw base), which faults the loads.
+local_array(T, Name, Size) -->
    { Padded is Size + 8 },
-   fmt("  __local float ~w_[~d] __attribute__((aligned(32)));\n", [Name, Padded]),
-   fmt("  __local float *~w = (__local float *)(((uintptr_t)~w_ + 31) & ~~(uintptr_t)31);\n", [Name, Name]).
+   fmt("  __local ~w ~w_[~d] __attribute__((aligned(32)));\n", [T, Name, Padded]),
+   fmt("  __local ~w *~w = (__local ~w *)(((uintptr_t)~w_ + 31) & ~~(uintptr_t)31);\n", [T, Name, T, Name]).
+
+% tile_type(+R, -T): the C type of a staged tile of the read R, float: the staged and vectorised
+% kernels take float elements.
+tile_type(R, T) :-
+   core2:place(R, N, _),
+   ctype(N, T),
+   (  T == float
+   -> true
+   ;  domain_error(kind(float), R)
+   ).
 
 shared_fence(_, []) --> [].
 shared_fence(Ctx, [_ | _]) --> fence(Ctx).
@@ -1330,9 +1390,9 @@ pack_index(_, Jp, Kk, KC, tile(R, A, Jj, T, k_first, Name), Tile) =>
 pack_index(_, _, Kk, _, tile(R, none, none, T, M, Name), Tile) =>
    Tile = tile(R, none, none, T, M, Name, Kk).
 
-panel(KC, MCT, NS, tile(_, _, _, T, Major, Name, _)) -->
-   { panel_tiles(Major, MCT, NS, Count), Size is Count*T*KC },
-   local_array(Name, Size).
+panel(KC, MCT, NS, tile(R, _, _, T, Major, Name, _)) -->
+   { panel_tiles(Major, MCT, NS, Count), Size is Count*T*KC, tile_type(R, CT) },
+   local_array(CT, Name, Size).
 
 panel_tiles(k_last, MCT, _, Count) => Count = MCT.
 panel_tiles(k_first, _, NS, Count) => Count = NS.
@@ -1387,9 +1447,9 @@ local_of(_, _, _, _, Lj, L) => L = Lj.
 layout(k_last, L, S, T, TK, _, Kk, Index) => Index = (L*T + S)*TK + Kk.
 layout(k_first, L, S, T, _, G, Kk, Index) => Width is G*T, Index = Kk*Width + (L*T + S).
 
-local_tile(G, TK, tile(_, A, _, T, _, Name, _)) -->
-   { tile_rows(A, G, T, Rows), Size is Rows*TK },
-   local_array(Name, Size).
+local_tile(G, TK, tile(R, A, _, T, _, Name, _)) -->
+   { tile_rows(A, G, T, Rows), Size is Rows*TK, tile_type(R, CT) },
+   local_array(CT, Name, Size).
 
 tile_rows(none, _, _, Rows) => Rows = 1.
 tile_rows(_, G, T, Rows) => Rows is G*T.
@@ -1420,8 +1480,8 @@ range_params(Ctx, I-range(_, _), Param) :-
    format(atom(Param), "int lo_~w, int n_~w", [Name, Name]).
 
 param(Ctx, N, Param) :-
-   var_name(Ctx, N, Name),
-   format(atom(Param), "__global float *~w", [Name]).
+   var_name(Ctx, N, Name), ctype(N, T),
+   format(atom(Param), "__global ~w *~w", [T, Name]).
 
 % A kernel of work-groups: a group per point of the rows, its items l of L sharing lm; or a
 % work item per point, the only item of its row.
@@ -1430,7 +1490,7 @@ work_groups(Ctx, Rows, item) -->
    "  int l = 0;\n",
    group_rows(Ctx, Rows, "get_global_id(0)").
 work_groups(Ctx, Rows, L) -->
-   fmt("  int l = get_local_id(0);\n  __local float lm[~d];\n", [L]),
+   fmt("  int l = get_local_id(0);\n  __local float lm[~d];\n  __local int lmi[~d];\n", [L, L]),
    group_rows(Ctx, Rows, "get_group_id(0)").
 
 group_rows(_, [], _) --> !.
@@ -1485,23 +1545,24 @@ unravel_spread(Ctx, [I:_ | Axes], [Count | Counts], [Start | Starts], V) -->
    unravel_spread(Ctx, Axes, Counts, Starts, V1).
 
 register(Ctx, red(G, _, Op, _)) -->
-   { var_name(Ctx, G, Name), monoid(Op, _, Identity) },
-   fmt("  float p_~w = ~w;\n", [Name, Identity]).
+   { var_name(Ctx, G, Name), ctype(G, T), identity(Op, T, Identity), value(Ctx, Identity, CI) },
+   fmt("  ~w p_~w = ~w;\n", [T, Name, CI]).
 
 accumulate(Ctx, red(G, _, Op, E)) -->
-   { var_name(Ctx, G, Name), format(atom(P), "p_~w", [Name]), value(Ctx, E, CE), fold(Op, P, CE, C) },
+   { var_name(Ctx, G, Name), ctype(G, T), format(atom(P), "p_~w", [Name]), value(Ctx, E, CE), fold(Op, T, P, CE, C) },
    fmt("  ~w = ~w;\n", [P, C]).
 
 combine(Ctx, 1, red(G, Ts, Op, _)) -->
    !,
-   { var_name(Ctx, G, Name), place(Ctx, G, Ts, Place), format(atom(P), "p_~w", [Name]), fold(Op, Place, P, Final) },
+   { var_name(Ctx, G, Name), ctype(G, T), place(Ctx, G, Ts, Place), format(atom(P), "p_~w", [Name]), fold(Op, T, Place, P, Final) },
    fmt("  ~w = ~w;\n", [Place, Final]).
 combine(Ctx, L, red(G, Ts, Op, _)) -->
-   { var_name(Ctx, G, Name), place(Ctx, G, Ts, Place), Half is L // 2,
-     fold(Op, 'lm[l]', 'lm[l + s]', Tree), fold(Op, Place, 'lm[0]', Final) },
-   fmt("  lm[l] = p_~w;\n  barrier(CLK_LOCAL_MEM_FENCE);\n", [Name]),
-   fmt("  for (int s = ~d; s > 0; s >>= 1) { if (l < s) lm[l] = ~w; barrier(CLK_LOCAL_MEM_FENCE); }\n",
-       [Half, Tree]),
+   { var_name(Ctx, G, Name), ctype(G, T), scratch(T, Lm), place(Ctx, G, Ts, Place), Half is L // 2,
+     format(atom(Lhs), "~w[l]", [Lm]), format(atom(Rhs), "~w[l + s]", [Lm]), format(atom(Top), "~w[0]", [Lm]),
+     fold(Op, T, Lhs, Rhs, Tree), fold(Op, T, Place, Top, Final) },
+   fmt("  ~w[l] = p_~w;\n  barrier(CLK_LOCAL_MEM_FENCE);\n", [Lm, Name]),
+   fmt("  for (int s = ~d; s > 0; s >>= 1) { if (l < s) ~w[l] = ~w; barrier(CLK_LOCAL_MEM_FENCE); }\n",
+       [Half, Lm, Tree]),
    fmt("  if (l == 0) ~w = ~w;\n", [Place, Final]),
    fence(Ctx).
 
@@ -1511,8 +1572,14 @@ fence(Ctx) --> { get_dict(items, Ctx, 1) }, !, [].
 fence(Ctx) --> { get_dict(fence, Ctx, local) }, !, "  barrier(CLK_LOCAL_MEM_FENCE);\n".
 fence(_) --> fence.
 
-fold(Op, A, B, C), memberchk(Op, [+, *]) => format(atom(C), "(~w ~w ~w)", [A, Op, B]).
-fold(Op, A, B, C) => format(atom(C), "f~w(~w, ~w)", [Op, A, B]).
+% fold(+Op, +T, +A, +B, -C): the fold of A and B by Op in the C type T.
+fold(Op, _, A, B, C), memberchk(Op, [+, *]) => format(atom(C), "(~w ~w ~w)", [A, Op, B]).
+fold(Op, float, A, B, C) => format(atom(C), "f~w(~w, ~w)", [Op, A, B]).
+fold(Op, _, A, B, C) => format(atom(C), "~w(~w, ~w)", [Op, A, B]).
+
+% scratch(+T, -Lm): the local array of the reduction tree of the C type T.
+scratch(float, Lm) => Lm = lm.
+scratch(int, Lm) => Lm = lmi.
 
 var_name(Ctx, V, Name) :-
    get_dict(env, Ctx, Env),
@@ -1546,12 +1613,12 @@ privates(Ctx) -->
    sequence(private_tile(Ctx), Priv).
 
 private_local(Ctx, N) -->
-   { shape(N, Shape), size(Shape, Size), var_name(Ctx, N, Name) },
-   fmt("  float p_~w[~d] = {0};\n", [Name, Size]).   % pocl 7.1 breaks an uninitialised array
+   { shape(N, Shape), size(Shape, Size), var_name(Ctx, N, Name), ctype(N, T) },
+   fmt("  ~w p_~w[~d] = {0};\n", [T, Name, Size]).   % pocl 7.1 breaks an uninitialised array
 
 private_tile(Ctx, N-Infos) -->
-   { maplist(info_width, Infos, Es), size(Es, Size), var_name(Ctx, N, Name) },
-   fmt("  float r_~w[~d] = {0};\n", [Name, Size]).
+   { maplist(info_width, Infos, Es), size(Es, Size), var_name(Ctx, N, Name), ctype(N, T) },
+   fmt("  ~w r_~w[~d] = {0};\n", [T, Name, Size]).
 
 size(Es, Size) :-
    foldl(times, Es, 1, Size).
@@ -1680,16 +1747,20 @@ statement(Ctx, copy(Way, N, S)) -->
 statement(Ctx, P := V) -->
    { core2:place(P, N, Ts), get_dict(atomics, Ctx, Atomics), member(N1-Op, Atomics), N1 == N, !,
      V =.. [Op, _, E], value(Ctx, E, R), access(Ctx, N, Ts, Name-Off), index(Ctx, Off, CO),
-     atomic_function(Op, F) },
+     ctype(N, T), atomic_function(Op, T, F) },
    fmt("  ~w(&~w[~w], ~w);\n", [F, Name, CO, R]).
 statement(Ctx, P := V) -->
    { core2:place(P, N, Ts), access(Ctx, N, Ts, Access), value(Ctx, V, R), store(Ctx, Access, R, C) },
    fmt("  ~w\n", [C]).
 
-atomic_function(+, F) => F = atomic_add_float.
-atomic_function(max, F) => F = atomic_max_float.
-atomic_function(min, F) => F = atomic_min_float.
-atomic_function(*, F) => F = atomic_mul_float.
+atomic_function(+, float, F) => F = atomic_add_float.
+atomic_function(max, float, F) => F = atomic_max_float.
+atomic_function(min, float, F) => F = atomic_min_float.
+atomic_function(*, float, F) => F = atomic_mul_float.
+atomic_function(+, int, F) => F = atomic_add.
+atomic_function(max, int, F) => F = atomic_max.
+atomic_function(min, int, F) => F = atomic_min.
+atomic_function(*, int, F) => F = atomic_mul_int.
 
 % access(+Ctx, +N, +Ts, -Name-Off): the C array holding N[Ts], private over its tiles, local or
 % global, and the offset in it, a term.
@@ -1776,23 +1847,21 @@ value(Ctx, where(I, T, E), C), get_dict(vec, Ctx, L), L \== none =>
    format(atom(C), "(~w ? (float~d)(~w) : (float~d)(~w))", [CI, W, CT, W, CE]).
 value(Ctx, where(I, T, E), C) =>
    maplist(value(Ctx), [I, T, E], [CI, CT, CE]), format(atom(C), "(~w ? ~w : ~w)", [CI, CT, CE]).
-value(Ctx, A*B + X, C), has_read(A*B) =>
+value(Ctx, A*B + X, C), has_read(A*B), kind_of(A*B + X, 2) =>
    maplist(value(Ctx), [A, B, X], [CA, CB, CX]), format(atom(C), "fma(~w, ~w, ~w)", [CA, CB, CX]).
-value(Ctx, X + A*B, C), has_read(A*B) =>
+value(Ctx, X + A*B, C), has_read(A*B), kind_of(X + A*B, 2) =>
    maplist(value(Ctx), [A, B, X], [CA, CB, CX]), format(atom(C), "fma(~w, ~w, ~w)", [CA, CB, CX]).
 value(Ctx, E, C), E =.. [Op, A, B], memberchk(Op, [+, -, *, <, =<, =:=]) =>
    maplist(value(Ctx), [A, B], [CA, CB]), c_op(Op, COp), format(atom(C), "(~w ~w ~w)", [CA, COp, CB]).
-value(Ctx, A / B, C), integer(A) =>
-   value(Ctx, B, CB), format(atom(C), "((float)~w / ~w)", [A, CB]).
 value(Ctx, A / B, C) =>
-   maplist(value(Ctx), [A, B], [CA, CB]), format(atom(C), "(~w / ~w)", [CA, CB]).
+   maplist(value(Ctx), [A, B], [CA, CB]), format(atom(C), "((float)~w / ~w)", [CA, CB]).
 value(Ctx, -A, C) => value(Ctx, A, CA), format(atom(C), "(-~w)", [CA]).
 value(Ctx, E, C), E =.. [F, A, B], memberchk(F, [max, min]) =>
-   maplist(value(Ctx), [A, B], [CA, CB]), format(atom(C), "f~w(~w, ~w)", [F, CA, CB]).
+   maplist(value(Ctx), [A, B], [CA, CB]), ( kind_of(E, 2) -> T = float ; T = int ), fold(F, T, CA, CB, C).
 value(Ctx, E, C), E =.. [F, A], memberchk(F, [exp, sqrt, log]) =>
    value(Ctx, A, CA), format(atom(C), "~w(~w)", [F, CA]).
 
-% has_read(+E): E reads a place, so it is a float and fma applies.
+% has_read(+E): E reads a place, so fma applies when E is a float.
 has_read(E) :-
    sub_term(T, E),
    core2:place(T, N, _),
@@ -1946,22 +2015,28 @@ built_(Context, Device, Source, Program) =>
    cl_program(Context, Device, Source, "", Program),
    assertz(program_state(Context, Source, Program)).
 
-% device_buffer(+Context, +Queue, +Data, +Name, -Mem): a float buffer of Name, holding its
-% data when given, zeroes otherwise.
+% device_buffer(+Context, +Queue, +Data, +Name, -Mem): a buffer of Name, of its kind, holding
+% its data when given, zeroes otherwise.
 device_buffer(Context, Queue, Data, Name, Mem) :-
    shape(Name, Shape), size(Shape, N), Bytes is 4*max(N, 1),
    cl_buffer(Context, Bytes, Mem),
    (  member(Name1-List, Data), Name1 == Name
-   -> maplist(to_float, List, Floats),
-      Term =.. [data | Floats],
-      buffer_from_data(Host, float32, N, Term),
-      buffer_offset(Host, float32, N, 0, Pointer),
+   -> ctype(Name, T), host_type(T, HT), maplist(coerce(T), List, Elements),
+      Term =.. [data | Elements],
+      buffer_from_data(Host, HT, N, Term),
+      buffer_offset(Host, HT, N, 0, Pointer),
       cl_write(Queue, Mem, 0, Pointer, Bytes)
    ;  cl_fill(Queue, Mem, Bytes, [], Event),
       cl_wait([Event])
    ).
 
-to_float(X, F) :- F is float(X).
+% coerce(+T, +X, -V): the number X as an element of the C type T.
+coerce(float, X, V) => V is float(X).
+coerce(int, X, V) => V is truncate(X).
+
+% host_type(+T, -HT): the host buffer type of the C type T.
+host_type(float, HT) => HT = float32.
+host_type(int, HT) => HT = int32.
 
 launch(Queue, Program, Buffers, Env, Kernel) :-
    kernel{id: I, names: Names, free: Free} :< Kernel,
@@ -2032,10 +2107,11 @@ buffer_arg(Buffers, N, mem(M)) :-
 read_back(Queue, Buffers, Out, Values) :-
    buffer_arg(Buffers, Out, mem(Mem)),
    shape(Out, Shape), size(Shape, N), Bytes is 4*N,
-   buffer_alloc(Host, float32, N, true),
-   buffer_offset(Host, float32, N, 0, Pointer),
+   ctype(Out, T), host_type(T, HT),
+   buffer_alloc(Host, HT, N, true),
+   buffer_offset(Host, HT, N, 0, Pointer),
    cl_read(Queue, Mem, 0, Pointer, Bytes),
-   buffer_to_data(Host, float32, N, Term),
+   buffer_to_data(Host, HT, N, Term),
    Term =.. [_ | Values].
 
 % Allocation
@@ -2199,6 +2275,7 @@ arrange(Bufs, Capacity, Height, Offsets) :-
 % eval(+Out, +Data, -Values): the boxes of Out run in Prolog, exactly, on Data.
 eval(Out, Data, Values) :-
    program(Out, Boxes),
+   label_program(Out, Boxes),
    names(Boxes, Names0), sort([Out | Names0], Names),
    maplist(host_buffer(Data), Names, Terms),
    pairs_keys_values(Env, Names, Terms),
@@ -2207,7 +2284,8 @@ eval(Out, Data, Values) :-
    Term =.. [_ | Values].
 
 host_buffer(Data, Name, Term), member(Name1-List, Data), Name1 == Name =>
-   Term =.. [data | List].
+   ctype(Name, T), maplist(coerce(T), List, Elements),
+   Term =.. [data | Elements].
 host_buffer(_, Name, Term) =>
    shape(Name, Shape), size(Shape, N),
    length(Zeros, N), maplist(=(0), Zeros),
