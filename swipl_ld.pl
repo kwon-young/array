@@ -1,4 +1,4 @@
-:- module(swipl_ld, [clang_format/2, compile_object/2, link_objects/2]).
+:- module(swipl_ld, [clang_format/2, compile_object/3, link_objects/2]).
 
 :- use_module(library(process)).
 
@@ -22,16 +22,28 @@ clang_format(In, Out) :-
       )
    ).
 
-compile_object(In, OutFile) :-
+% compile_object(+In, +Flags, -OutFile)
+% OutFile is the object compiled from the C source In, with the compiler
+% Flags.
+compile_object(In, Flags, OutFile) :-
    tmp_file_stream(InFile, StreamIn, [extension(c)]),
    format(StreamIn, "~s", [In]),
    close(StreamIn),
    tmp_file_stream(OutFile, StreamOut, [extension(o)]),
    close(StreamOut),
-   process_create(path('swipl-ld'), ['-fpic', '-cc-options,-march=native', '-O3', '-c', '-o', OutFile, InFile], [stdout(std), stderr(std)]).
+   maplist([Flag, Option]>>atom_concat('-cc-options,', Flag, Option),
+           Flags, Options),
+   append([['-g', '-fpic', '-c'], Options, ['-o', OutFile, InFile]], Args),
+   swipl_ld(Args).
 
 link_objects(Objects, OutFile) :-
    tmp_file_stream(OutFile, StreamOut, [extension(so)]),
    close(StreamOut),
-   append(['-fpic', '-march=native', '-O3', '-shared', '-o', OutFile], Objects, Options),
-   process_create(path('swipl-ld'), Options, [stdout(std), stderr(std)]).
+   append(['-g', '-fpic', '-shared', '-o', OutFile], Objects, Args),
+   swipl_ld(Args).
+
+% swipl-ld builds against the Prolog that runs it: its headers and library.
+swipl_ld(Args) :-
+   current_prolog_flag(executable, Prolog),
+   process_create(path('swipl-ld'), ['-pl', Prolog | Args],
+                  [stdout(std), stderr(std)]).

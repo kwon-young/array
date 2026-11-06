@@ -1,21 +1,21 @@
-:- module(gen_type, [main/0, type/3, pl_c_type/2]).
+:- module(gen_type, [main/0, type/4, pl_c_type/2]).
 
 :- use_module(library(dcg/basics)).
 :- use_module(library(dcg/high_order)).
 :- use_module(c99).
 
-type(bool, '_Bool', bool).
-type(int8, int8_t, int64).
-type(int16, int16_t, int64).
-type(int32, int32_t, int64).
-type(int64, int64_t, int64).
-type(uint8, uint8_t, uint64).
-type(uint16, uint16_t, uint64).
-type(uint32, uint32_t, uint64).
-type(uint64, uint64_t, uint64).
-type(float16, '_Float16', float).
-type(float32, '_Float32', float).
-type(float64, '_Float64', float).
+type(bool, '_Bool', int64, boolean).
+type(int8, int8_t, int64, integer).
+type(int16, int16_t, int64, integer).
+type(int32, int32_t, int64, integer).
+type(int64, int64_t, int64, integer).
+type(uint8, uint8_t, uint64, integer).
+type(uint16, uint16_t, uint64, integer).
+type(uint32, uint32_t, uint64, integer).
+type(uint64, uint64_t, uint64, integer).
+type(float16, '_Float16', float, float).
+type(float32, '_Float32', float, float).
+type(float64, '_Float64', float, float).
 
 pl_c_type(int64, int64_t).
 pl_c_type(uint64, uint64_t).
@@ -31,7 +31,7 @@ type_atom(Type, Name) :-
    atomic_list_concat(['ATOM_', Type], Name).
 
 declare -->
-   foreach(type(Type, _, _), declare(Type)).
+   foreach(type(Type, _, _, _), declare(Type)).
 
 declare(Type) -->
    {type_atom(Type, Name)},
@@ -46,7 +46,7 @@ load -->
    ].
 
 if_type(Type, Body, AST) :-
-   type(Type, CType, _),
+   type(Type, CType, _, _),
    type_atom(Type, Atom),
    AST = (
       if(type == Atom && (offset+1)*sizeof(CType) =< size) {
@@ -55,7 +55,7 @@ if_type(Type, Body, AST) :-
    ).
 
 load(AST) :-
-   type(Type, CType, PlType),
+   type(Type, CType, PlType, _),
    atomic_list_concat(['PL_unify_', PlType], Unify),
    Return =.. [Unify, v, *(cast(buffer, *CType) + offset)],
    if_type(Type, return(Return), AST).
@@ -69,13 +69,15 @@ set -->
    ].
 
 set(AST) :-
-   type(Type, CType, PlType),
+   type(Type, CType, PlType, _),
    pl_c_type(PlType, PlCType),
    atomic_list_concat(['PL_get_', PlType, '_ex'], Get),
    GetCall =.. [Get, v_t, &v],
    Body = (
       PlCType:v,
-      GetCall,
+      if(GetCall == 'FALSE') {
+         return('FALSE')
+      },
       *(cast(buffer, *CType) + offset) = v,
       return('TRUE')
    ),
@@ -89,7 +91,7 @@ atom_size -->
    }].
 
 atom_size(AST) :-
-   type(Type, CType, _),
+   type(Type, CType, _, _),
    type_atom(Type, Atom),
    AST = (
       if(type == Atom) {
@@ -105,7 +107,7 @@ install -->
    }].
 
 install(Atom = 'PL_new_atom'(String)) :-
-   type(Type, _, _),
+   type(Type, _, _, _),
    type_atom(Type, Atom),
    atom_string(Type, String).
 

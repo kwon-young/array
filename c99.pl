@@ -78,12 +78,20 @@ statement(for(Init, Cond, End) {Body}) -->
    compound_statement(Body).
 statement(while(Cond) {Body}) -->
    [while, '('], exp(Cond), [')'], compound_statement(Body).
+statement(if_else(Cond, Then, Else)) -->
+   [if, '('], exp(Cond), [')'],
+   compound_statement(Then),
+   [else],
+   compound_statement(Else).
 statement(if A else B) -->
    statement(if A),
    [else], statement(B).
 statement(if Cond { Then }) -->
    [if, '('], exp(Cond), [')'],
       compound_statement(Then).
+% A pragma takes its own line.
+statement(pragma(Words)) -->
+   [eol(), #, pragma], sequence(pragma_word, Words), [eol()].
 statement(return(X)) -->
    [return], exp(X), [;].
 statement(;) -->
@@ -121,14 +129,22 @@ exp(A * B) -->
    exp(A), [*], exp(B).
 exp(A / B) -->
    exp(A), [/], exp(B).
+exp(A mod B) -->
+   exp(A), ['%'], exp(B).
+exp(A // B) -->
+   exp(A), [/], exp(B).
 exp(A && B) -->
    exp(A), [&&], exp(B).
+exp(or(A, B)) -->
+   exp(A), ['||'], exp(B).
+exp(A =\= B) -->
+   exp(A), ['!='], exp(B).
 exp(Exp[Size]) -->
-   exp(Exp), ['[', integer(Size), ']'].
+   exp(Exp), ['['], exp(Size), [']'].
 exp(*Exp) -->
    [*, '('], exp(Exp), [')'].
 exp(&Exp) -->
-   [&], exp(Exp).
+   [&, '('], exp(Exp), [')'].
 exp(Exp++) -->
    exp(Exp), [++].
 exp(dot(A, B)) -->
@@ -136,6 +152,13 @@ exp(dot(A, B)) -->
 exp(Compound) -->
    {compound(Compound), compound_name_arguments(Compound, Name, Args)},
    name(Name), params(Args).
+
+pragma_word(Word) -->
+   { atom(Word) },
+   [atom(Word)].
+pragma_word(reduction(Op, Var)) -->
+   { format(atom(Clause), "reduction(~w:~w)", [Op, Var]) },
+   [atom(Clause)].
 
 litteral(Integer) -->
    {integer(Integer)}, [integer(Integer)].
