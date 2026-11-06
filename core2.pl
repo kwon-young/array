@@ -1,4 +1,5 @@
-:- module(core2, [shape/2, elements/2, kind/2, label_kinds/1, power_of_two/1, over/2, op(20, yf, [])]).
+:- module(core2, [shape/2, elements/2, kind/2, label_kinds/1, power_of_two/1, permutation/1, over/2,
+                  op(20, yf, [])]).
 :- use_module(library(clpBNR)).
 
 :- multifile error:has_type/2.
@@ -26,10 +27,14 @@
 % A division, a remainder, a shift and the bit operations take non-negative operands;
 % xor and \/ need both operands below a power of two, a number or an extent declared by
 % power_of_two/1.
+% bits(F) is the int whose bits are those of the float F, as the device holds it.
+% permutation/1 declares the elements of an int name distinct, so that a write through it,
+% A[P[I]], is to distinct places along I: the compiler keeps I parallel.
 
 prim(+, 2).  prim(-, 2).  prim(-, 1).  prim(*, 2).  prim(/, 2).  prim(max, 2).  prim(min, 2).
 prim(exp, 1).  prim(sqrt, 1).  prim(log, 1).  prim(<, 2).  prim(=<, 2).  prim(=:=, 2).
 prim(//, 2).  prim(mod, 2).  prim(>>, 2).  prim(<<, 2).  prim(/\, 2).  prim(\/, 2).  prim(xor, 2).
+prim(bits, 1).
 
 % int_op(?Op): an operation on ints alone.
 int_op(//).  int_op(mod).  int_op(>>).  int_op(<<).  int_op(/\).  int_op(\/).  int_op(xor).
@@ -126,6 +131,19 @@ pow2:attr_unify_hook(_, N) :-
    ).
 
 pow2:attribute_goals(N) --> [power_of_two(N)].
+
+% permutation(+A): the elements of the int name A are distinct.
+permutation(A), var(A) =>
+   name_kind(A, K),
+   holds(K =< 1, A),
+   put_attr(A, perm, true).
+permutation(A) =>
+   type_error(name, A).
+
+perm:attr_unify_hook(_, Other) :-
+   throw(error(permission_error(bind, name, Other), _)).
+
+perm:attribute_goals(A) --> [permutation(A)].
 
 % label_kinds(+Names): the kinds of Names resolved.
 % An input takes the one kind its uses leave it, float when they leave all three, int when they rule float out.
@@ -245,6 +263,7 @@ number_kind(_, K) => K = 2.
 
 op_kind(Op, _, _, K), memberchk(Op, [<, =<, =:=]) => K = 0.
 op_kind(Op, _, _, K), memberchk(Op, [/, sqrt, exp, log]) => K = 2.
+op_kind(bits, _, _, K) => K = 1.
 op_kind(Op, E, Ks, K), int_op(Op) => maplist(at_most_int(E), Ks), K = 1.
 op_kind(_, _, Ks, K) => foldl(kmax, Ks, 1, K).
 
@@ -621,6 +640,15 @@ test(kind_declared_too_low, [timeout(10), throws(error(domain_error(kind, _), _)
    over([I:3], [S[I] := 2]).
 test(kind_unknown, [timeout(10), throws(error(type_error(oneof(_), _), _))]) :-
    x(X), kind(X, double).
+test(kind_bits_is_int_of_anything, [timeout(10), true(K == int)]) :-
+   x(X),
+   over([I:3], [B[I] := bits(X[I])]),
+   label_kinds([X, B]), kind(B, K).
+test(permutation_is_int, [timeout(10), true(K == int)]) :-
+   shape(P, [4]), permutation(P),
+   label_kinds([P]), kind(P, K).
+test(permutation_of_a_float, [timeout(10), throws(error(domain_error(kind, _), _))]) :-
+   shape(P, [4]), kind(P, float), permutation(P).
 
 % Beyond the structural check: a gather needs the range of the index array's elements, and
 % a read of a place must come after its write.

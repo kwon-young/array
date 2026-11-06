@@ -96,6 +96,7 @@ kind_of(R, K), core2:place(R, N, _) => kind_of(N, K).
 kind_of(where(_, T, E), K) => kind_of(T, KT), kind_of(E, KE), K is max(KT, KE).
 kind_of(E, K), E =.. [Op, _, _], memberchk(Op, [<, =<, =:=]) => K = 0.
 kind_of(E, K), E =.. [Op | _], memberchk(Op, [/, sqrt, exp, log]) => K = 2.
+kind_of(bits(_), K) => K = 1.
 kind_of(E, K), compound(E) => E =.. [_ | As], maplist(kind_of, As, Ks), max_list([1 | Ks], K).
 
 is_name(V) :-
@@ -106,7 +107,8 @@ is_name(V) :-
 
 % fuse(+Out, +Boxes0, -Boxes): Boxes0 with each pure name but Out substituted into the boxes
 % that read it. A name is pure when one box writes it, in one equation whose targets are the
-% box's indices, and the names its value reads are not written again afterwards.
+% box's indices, and the names its value reads are not written again afterwards; a
+% permutation stays, the scatters through it depend on reading it.
 fuse(Out, Boxes0, Boxes) :-
    fuse(Out, Boxes0, [], Boxes).
 
@@ -121,6 +123,7 @@ fuse(Out, [Box | Later], Rev, Boxes) =>
 pure(Out, over(Axes, [P := V]), Later, N, Is, V) :-
    core2:place(P, N, Ts),
    N \== Out,
+   \+ get_attr(N, perm, _),                        % a permutation is read as such, see covers/3
    boxes_of(N, [_]),
    maplist(arg(1), Axes, Is),
    permutation_eq(Is, Ts),
@@ -482,9 +485,11 @@ host_loop(Out, All, over([T:E], Inner), Min, T, E, Inner) :-
 
 % worth(+Rows, +Phases, +Min): a chain reducing twice fuses its passes over the rows; one
 % reducing once is worth a work-group when the rows alone would leave the device idle.
-% Inside a host loop, two phases or more save a launch per step, which is worth a group.
-worth(_, Phases, _, [_ | _]) :-
-   Phases = [_, _ | _], !.
+% Inside a host loop, two phases or more save a launch per step, which is worth a group
+% while the rows are few; a group per row of many rows is a launch of too many groups.
+worth(Rows, Phases, Min, [_ | _]) :-
+   Phases = [_, _ | _],
+   maplist(arg(2), Rows, Es), size(Es, N), N < Min, !.
 worth(Rows, Phases, Min, _) :-
    aggregate_all(count, member(reduce(_, _), Phases), Reductions),
    maplist(arg(2), Rows, Es),
@@ -676,8 +681,17 @@ schedule(Out, Boxes, opts(Tile, G, TK, W, Major, Threads, KC, MC, Min, L, _, LDS
    exclude(in_list(Locals), All, Names),
    staging(Box, Par, Seq1, TilePairs, Written, Priv, Locals, G, TK, Major, Threads, KC, MC, LDS, Stage),
    ranges(Box0, Par1, Widths, Stage, Ranges),
+   vector_width(W, All, W1),
    Kernel = kernel{kind: items, box: Box, par: Par, seq: Seq, priv: Priv, local: Locals, names: Names, tiles: TilePairs,
-                   stage: Stage, vector: W, ranges: Ranges, atomics: Atomics, pre: [], post: [], temps: []}.
+                   stage: Stage, vector: W1, ranges: Ranges, atomics: Atomics, pre: [], post: [], temps: []}.
+
+% vector_width(+W, +Names, -W1): the vector width of a kernel over Names: W when every name is
+% a float, else 1: the vector loads, stores and casts are float ones.
+vector_width(W, Names, W1) :-
+   (  forall(member(N, Names), ctype(N, float))
+   -> W1 = W
+   ;  W1 = 1
+   ).
 
 % ranges(+Box, +Par, +Widths, +Stage, -Ranges): when every equation of Box writes its place
 % back unchanged outside a guard, the guard bounds the parallel axes: I-range(Lo, Count) in
@@ -967,8 +981,15 @@ places(G, T, Ss0, Ss), core2:place(T, G1, S), G1 == G => Ss0 = [S | Ss1], places
 places(G, T, Ss0, Ss), compound(T) => T =.. [_ | As], foldl(places(G), As, Ss0, Ss).
 places(_, _, Ss0, Ss) => Ss0 = Ss.
 
-% covers(+Axes, +S, +D): S is affine in the indices of Axes, its coefficients a mixed radix,
+% covers(+Axes, +S, +D): S is a read of a permutation, see core2:permutation/1, at subscripts
+% one of which covers D, so distinct along D; or S is affine in the indices of Axes, its
+% coefficients a mixed radix,
 % so that it takes a different value at each point of the axes it mentions, D among them.
+covers(Axes, S, D) :-
+   core2:place(S, P, Es), get_attr(P, perm, _),
+   !,
+   member(E, Es), covers(Axes, E, D),
+   !.
 covers(Axes, S, D) :-
    catch(core2:form(Axes, S, 1, 0-[], _-Pairs), error(_, _), fail),
    \+ ( member(Key-_, Pairs), nonvar(Key) ),      % a remainder covers nothing
@@ -2014,6 +2035,8 @@ value(Ctx, E, C), E =.. [F, A, B], memberchk(F, [max, min]) =>
    maplist(value(Ctx), [A, B], [CA, CB]), ( kind_of(E, 2) -> T = float ; T = int ), fold(F, T, CA, CB, C).
 value(Ctx, E, C), E =.. [F, A], memberchk(F, [exp, sqrt, log]) =>
    value(Ctx, A, CA), format(atom(C), "~w(~w)", [F, CA]).
+value(Ctx, bits(A), C) =>
+   value(Ctx, A, CA), format(atom(C), "as_int((float)~w)", [CA]).
 
 % has_read(+E): E reads a place, so fma applies when E is a float.
 has_read(E) :-

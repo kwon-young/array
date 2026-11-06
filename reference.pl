@@ -4,6 +4,7 @@
 :- use_module(library(pairs)).
 :- use_module(library(filesex)).
 :- use_module(core2).
+:- use_module(buffer).
 
 /** <module> The reference evaluation of a program
 
@@ -141,6 +142,9 @@ expr(Ctx, Idx, where(C, T, E), X) ==>
    expr(Ctx, Idx, C, B),
    { branch(Ctx, Idx, T, X, Then), branch(Ctx, Idx, E, X, Else) },
    [( B =:= 0 -> Else ; Then )].
+expr(Ctx, Idx, bits(A), X) ==>
+   expr(Ctx, Idx, A, XA),
+   [F is XA, float_bits(F, X)].
 expr(Ctx, Idx, E, X), compound(E), E =.. [Op, A, B], memberchk(Op, [<, =<, =:=]) ==>
    expr(Ctx, Idx, A, XA), expr(Ctx, Idx, B, XB),
    { G =.. [Op, XA, XB] },
@@ -149,6 +153,11 @@ expr(Ctx, Idx, E, X) ==>
    { E =.. [Op | As] },
    foldl(expr(Ctx, Idx), As, Xs),
    { X =.. [Op | Xs] }.
+
+% float_bits(+F, -I): I is the int whose bits are those of F as a float32, through a buffer.
+float_bits(F, I) :-
+   buffer_from_data(B, float32, 1, data(F)),
+   buffer_to_data(B, int32, 1, data(I)).
 
 % branch(+Ctx, +Idx, +E, -X, -Goal): Goal binds X to the value of E, run alone.
 branch(Ctx, Idx, E, X, Goal) :-

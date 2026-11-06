@@ -543,6 +543,26 @@ test(undetermined_extent, [timeout(120), throws(error(existence_error(extent_val
 
 :- end_tests(compile2_symbolic).
 
+:- begin_tests(compile2_permutation).
+
+% A scatter through a permutation keeps its axis parallel: a kernel of work items, no atomics.
+test(scatter_through_a_permutation_is_parallel, [timeout(120), forall(opencl_device(D, _))]) :-
+   shape(P, [64]), elements(P, 0-63), permutation(P), shape(X, [64]), shape(Y, [64]),
+   over([I:64], [Y[P[I]] := X[I] * 2]),
+   kernels(Y, [], [K]), kernel{kind: items, par: [_:_], atomics: []} :< K,
+   numlist(1, 64, Xs), numlist(0, 63, Is), maplist([I, J]>>(J is (I * 37) mod 64), Is, Ps),
+   eval(Y, [P-Ps, X-Xs], Ref), run(Y, [P-Ps, X-Xs], V, [device(D)]), near(Ref, V).
+
+% The bits of a float, as the device holds it.
+test(bits_of_floats, [timeout(120), forall(opencl_device(D, _))]) :-
+   shape(X, [4]), shape(B, [4]),
+   over([I:4], [B[I] := bits(X[I])]),
+   Xs = [1.0, -2.0, 0.5, 0.0],
+   eval(B, [X-Xs], Ref), run(B, [X-Xs], V, [device(D)]),
+   Ref == [1065353216, -1073741824, 1056964608, 0], V == Ref.
+
+:- end_tests(compile2_permutation).
+
 :- begin_tests(compile2_alloc).
 
 % A name lives from the first kernel mentioning it to the last, and across the whole of a
