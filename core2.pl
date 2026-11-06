@@ -32,6 +32,8 @@ error:has_type(extent, X) :- extent(X).
 error:has_type(axis, X) :- nonvar(X), X = I:N, is_of_type(index, I), is_of_type(extent, N).
 error:has_type(axes, X) :- is_of_type(list(axis), X), maplist(arg(1), X, Is), distinct(Is).
 error:has_type(shape, X) :- is_of_type(list(extent), X).
+error:has_type(bound, X) :- ground(X), !, catch(_ is X, _, fail).
+error:has_type(bound, X) :- term_variables(X, Vs), forall(member(V, Vs), get_attr(V, clpBNR, _)).
 error:has_type(place, X) :- place(X, A, Ts), var(A), is_of_type(list, Ts).
 error:has_type(equation, X) :- nonvar(X), equation(X).
 
@@ -52,8 +54,9 @@ place(_, _, _) => fail.
 
 % elements(?A, ?Lo-Hi): the elements of the name A lie in Lo..Hi: declared for an input, so
 % that a read of it can be a subscript, a gather, checked by the bounds rule as the interval.
+% A bound is a number or an expression in extents, D-1 for a subscript into D places.
 elements(A, Range), get_attr(A, elements, R) => Range = R.
-elements(A, Lo-Hi), var(A) => must_be(number, Lo), must_be(number, Hi), put_attr(A, elements, Lo-Hi).
+elements(A, Lo-Hi), var(A) => must_be(bound, Lo), must_be(bound, Hi), put_attr(A, elements, Lo-Hi).
 elements(A, _) => type_error(name, A).
 
 elements:attr_unify_hook(_, Other) :-
@@ -296,6 +299,13 @@ test(not_a_value, [timeout(10), throws(error(type_error(value, _), _))]) :-
 test(gather, [timeout(10)]) :-
    shape(Idx, [4]), elements(Idx, 0-2), shape(H, [3]),
    over([K:4], [H[Idx[K]] := H[Idx[K]] + 1]).
+test(gather_symbolic_range, [timeout(10), true(Lo == 3)]) :-
+   shape(H, [N]), shape(Idx, [4]), elements(Idx, 0-(N-1)),
+   over([K:4], [H[Idx[K]] := H[Idx[K]] + 1]),
+   N = 3, range(N, [Lo, _]).
+test(gather_range_above_extent, [timeout(10), throws(error(domain_error(in_bounds, _), _))]) :-
+   shape(H, [N]), shape(Idx, [4]), elements(Idx, 0-N),
+   over([K:4], [H[Idx[K]] := 1]).
 test(gather_out_of_range, [timeout(10), throws(error(domain_error(in_bounds, _), _))]) :-
    shape(Idx, [4]), elements(Idx, 0-5), shape(H, [3]),
    over([K:4], [H[Idx[K]] := H[Idx[K]] + 1]).

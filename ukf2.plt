@@ -130,6 +130,16 @@ test(selection_gathers_the_pair, [timeout(60)]) :-
    length(Row0, 4), length(Skip, 4), length(Row1, 4),
    append([Row0, _, _, Skip, Row1, _], Pairs), append(Row0, Row1, Sel).
 
+% The batch and the detections are extent variables until the data fixes them: the step
+% is built once for the model, before the sizes are known.
+test(symbolic_batch_and_detections, [timeout(60)]) :-
+   case(dims(B0, N, M, D0), Crit, Data, in(Mu, P, R, Zdet, Sel), Refs),
+   ukf_step(cv_range_model, dims(B, N, M, D), Crit, in(Mu, P, R, Zdet, Sel), Out),
+   \+ ground(B-D),
+   B = B0, D = D0,
+   forall(member(I, [5, 7, 8]),
+          ( arg(I, Out, Name), expected(I, Refs, Expected), eval(Name, Data, V), near(Expected, V) )).
+
 % The step compiles to a bounded number of kernels per output.
 test(kernel_count, [timeout(60), true(Ns == [13, 15, 15])]) :-
    case(Dims, Crit, _, In, _),

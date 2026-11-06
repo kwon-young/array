@@ -14,7 +14,7 @@ scored against every detection: the negative log-likelihood of the detection und
 predicted observation, inf outside the gate D2 =< Crit. The Kalman update follows for every
 state and detection pair, the mean per pair and the covariance per state, since it does not
 depend on the detection taken; MuSel is the posterior mean of the detection Sel[b] chosen
-for each state.
+for each state. N and M are the model's, ground; B and D may stay extent variables.
 
     ukf_step(+Model, +dims(B, N, M, D), +Crit, +in(Mu, P, R, Zdet, Sel), -Out)
         Mu[B, N], P[B, N, N], R[M, M], Zdet[D, M], Sel[B] in 0..D-1
@@ -25,9 +25,9 @@ for each state.
 
 ukf_step(Model, dims(B, N, M, D), Crit, in(Mu, P, R, Zdet, Sel),
          out(MuPred, PPred, MuZ, Szz, Score, MuPost, PPost, MuSel)) :-
-   K is 2*N, Dm1 is D-1, Nf is float(N), W is 1/float(K), C0 is 0.5*M*log(2*pi), Inf is inf,
+   K is 2*N, Nf is float(N), W is 1/float(K), C0 is 0.5*M*log(2*pi), Inf is inf,
    shape(Mu, [B, N]), shape(P, [B, N, N]), shape(R, [M, M]), shape(Zdet, [D, M]),
-   shape(Sel, [B]), elements(Sel, 0-Dm1),
+   shape(Sel, [B]), elements(Sel, 0-(D-1)),
    % Sigma points: X[b, s*N + j] = Mu[b] + (1 - 2 s) L[b][:, j], L L^T = N P.
    shape(S, [B, N, N]), shape(X, [B, K, N]),
    over([Bi:B, I:N, J:N], [S[Bi, I, J] := Nf * P[Bi, I, J]]),
