@@ -189,9 +189,12 @@ over(Axes, Eqs) :-
    writes(Box, Names),
    maplist(define(Box), Names).
 
+% writes(+Box, -Names): the names Box writes, in the order of their first equation: never the
+% standard order of variables, their addresses, which a copy of the program does not keep.
 writes(over(_, Eqs), Names) :-
-   foldl(lhs, Eqs, [], Names0),
-   sort(Names0, Names).
+   foldl(lhs, Eqs, [], Rev),
+   reverse(Rev, Names0),
+   list_to_set(Names0, Names).
 
 lhs(over(_, Eqs), Names0, Names) => foldl(lhs, Eqs, Names0, Names).
 lhs(P := _, Names0, Names) => place(P, A, _), Names = [A | Names0].

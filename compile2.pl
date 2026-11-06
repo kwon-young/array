@@ -78,7 +78,7 @@ names(Term, Names) :-
 % label_program(+Out, +Boxes): the kinds of the names of Boxes and Out resolved, see label_kinds/1.
 label_program(Out, Boxes) :-
    names(Boxes, Names0),
-   sort([Out | Names0], Names),
+   list_to_set([Out | Names0], Names),
    label_kinds(Names).
 
 % ctype(+N, -T): the C type of the elements of N: int for a bool or an int, float for a float,
@@ -317,7 +317,7 @@ chains([B | Bs], Out, All, Opts, L, Min, Free, Plan), arg(11, Opts, true),
       rows_are_items(K0) =>
    chains(Before, Out, All, Opts, L, Min, Free, PsB),
    restrip(K0, Init0, Init), restrip(K0, Post0, Post),
-   get_dict(names, K0, Names0), names(Init-Post, Names1), append(Names0, Names1, Names2), sort(Names2, Names3),
+   get_dict(names, K0, Names0), names(Init-Post, Names1), append(Names0, Names1, Names2), list_to_set(Names2, Names3),
    exclude(in_list(Temps), Names3, Names),
    K = K0.put(_{pre: Init, post: Post, temps: Temps, free: Free, names: Names}),
    append(PsB, [K | Ps], Plan),
@@ -1148,12 +1148,12 @@ kernel_source(I, K, Source), get_dict(kind, K, groups) =>
 % phase_writes(+Phases, -Names): the names the phases write.
 phase_writes(Phases, Names) :-
    foldl(phase_write, Phases, [], Names0),
-   sort(Names0, Names).
+   list_to_set(Names0, Names).
 
 phase_write(loop(_, _, Phases), Acc0, Acc) => foldl(phase_write, Phases, Acc0, Acc).
-phase_write(serial(Eqs), Acc0, Acc) => core2:writes(over([], Eqs), Ws), append(Ws, Acc0, Acc).
-phase_write(spread(_, _, Eqs), Acc0, Acc) => core2:writes(over([], Eqs), Ws), append(Ws, Acc0, Acc).
-phase_write(reduce(_, Reds), Acc0, Acc) => maplist(arg(1), Reds, Ws), append(Ws, Acc0, Acc).
+phase_write(serial(Eqs), Acc0, Acc) => core2:writes(over([], Eqs), Ws), append(Acc0, Ws, Acc).
+phase_write(spread(_, _, Eqs), Acc0, Acc) => core2:writes(over([], Eqs), Ws), append(Acc0, Ws, Acc).
+phase_write(reduce(_, Reds), Acc0, Acc) => maplist(arg(1), Reds, Ws), append(Acc0, Ws, Acc).
 
 shared_decl(Ctx, N-_-Size) -->
    { var_name(Ctx, N, Name), format(atom(SName), "s_~w", [Name]), ctype(N, T) },
@@ -2408,7 +2408,7 @@ allocate(Context, Queue, Device, Plan, Out, Data, Options, Alloc) :-
    option(alloc(How), Options, arena),
    flat_plan(Plan, Kernels),
    foldl([K, Ns0, Ns]>>(get_dict(names, K, N1), append(Ns0, N1, Ns)), Kernels, [], Names0),
-   sort(Names0, Names),
+   list_to_set(Names0, Names),
    partition(intermediate(Out, Data), Names, Inter, Own),
    maplist(own_buffer(Context, Queue, Data), Own, OwnBuffers),
    cl_device_info(Device, mem_base_addr_align, Bits), Align is Bits // 8,
@@ -2553,7 +2553,7 @@ arrange(Bufs, Capacity, Height, Offsets) :-
 eval(Out, Data, Values) :-
    program(Out, Boxes),
    label_program(Out, Boxes),
-   names(Boxes, Names0), sort([Out | Names0], Names),
+   names(Boxes, Names0), list_to_set([Out | Names0], Names),
    findall(Vs, ( bind_extents(Boxes, Data),
                  maplist(host_buffer(Data), Names, Terms),
                  pairs_keys_values(Env, Names, Terms),
