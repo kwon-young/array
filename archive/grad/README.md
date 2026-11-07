@@ -7,3 +7,4 @@ Open questions when it was set aside: in-place values (names written more than o
 
 `compile2-epilogue-overwrites.diff` is a fix found alongside it, against `compile2.pl`/`compile2.plt` before the move to `prolog/array/compile.pl` and `test/compile.plt`:
 an epilogue that adds into a name written before it, `Y[Ts] := Y[Ts] + C[Ts]`, must load that name's register tile instead of only storing it.
+It is applied on master, with its test, as commit "An epilogue accumulating into a written name loads its register tile".

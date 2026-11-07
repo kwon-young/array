@@ -1116,13 +1116,21 @@ kernel_source(I, K, Source), get_dict(kind, K, items) =>
    Box = over(_, Eqs),
    context(K, Box, Priv, Local, Ctx0),
    get_dict(tiles, K, TilePairs), pairs_values(TilePairs, TileIs),
-   core:writes(over([], Pre), Inits0), core:writes(over([], Post), Inits1), append(Inits0, Inits1, Inits),
+   include(overwrites, Post, Overwrites),
+   core:writes(over([], Pre), Inits0), core:writes(over([], Overwrites), Inits1), append(Inits0, Inits1, Inits),
    epilogue_names(Post, Priv, Priv1),
    Ctx = Ctx0.put(_{stage: [], vector: W, vec: none, unroll: TileIs, ranges: Ranges, atomics: Atomics,
                    pre: Pre, post: Post, temps: Temps, inits: Inits, priv: Priv1}),
    exclude(in_list(Temps), Names0, Names),
    items_code(Ctx, Par, Seq, Eqs, Stage, Codes),
    kernel_text(I, Ctx, Names, Codes, Source).
+
+% overwrites(+Eq): the equation writes a name its value does not read: its register tile
+% needs no copy in. One that reads its target, Y[Ts] := Y[Ts] + C[Ts], loads it at each tile.
+overwrites(P := V) :-
+   core:place(P, N, _),
+   names(V, Ns),
+   \+ in_list(Ns, N).
 
 % epilogue_names(+Post, +Priv0, -Priv): the names the epilogue writes at the register tile's
 % point share its register layout.

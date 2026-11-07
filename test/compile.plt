@@ -361,6 +361,19 @@ test(matmul_with_epilogue_is_one_kernel, [timeout(120), forall(opencl_device(D, 
    eval(Y, [X-Xs, W-Ws, B-Bs, R-Rs], Ref), run(Y, [X-Xs, W-Ws, B-Bs, R-Rs], Vals, [device(D)]),
    near(Ref, Vals).
 
+% An epilogue that adds into a name written before it reads that name's elements: the
+% register tile is loaded at each tile, whichever device runs it, a CPU's thread visiting many.
+test(epilogue_accumulating_into_a_written_name, [timeout(120), forall(opencl_device(D, _))]) :-
+   shape(X, [64, 96]), shape(W, [96, 64]), shape(R, [64, 64]), shape(C, [64, 64]), shape(Y, [64, 64]),
+   over([I0:64, J0:64], [Y[I0, J0] := R[I0, J0]]),
+   over([I:64, J:64], [C[I, J] := 0]),
+   over([I:64, J:64, K:96], [C[I, J] := C[I, J] + X[I, K] * W[K, J]]),
+   over([I2:64, J2:64], [Y[I2, J2] := Y[I2, J2] + C[I2, J2] * 0.5]),
+   numlist(1, 6144, Xs0), maplist([A, V]>>(V is (A mod 13) / 13), Xs0, Xs), maplist([A, V]>>(V is ((A * 3) mod 7) / 7 - 0.5), Xs0, Ws),
+   numlist(1, 4096, Rs0), maplist([A, V]>>(V is (A mod 5) / 5 + 1), Rs0, Rs),
+   eval(Y, [X-Xs, W-Ws, R-Rs], Ref), run(Y, [X-Xs, W-Ws, R-Rs], Vals, [device(D)]),
+   near(Ref, Vals).
+
 test(pure_names_stay_buffers_under_a_reduction, [timeout(60)]) :-
    shape(X, [64, 64]), shape(W, [64, 64]), shape(C, [64, 64]),
    over([I:64, J:64], [E[I, J] := exp(X[I, J])]),
