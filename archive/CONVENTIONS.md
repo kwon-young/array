@@ -1,0 +1,6 @@
+- for documentation
+  - always use 1 line per sentence.
+  - if a sentence is to long, break it into multiple lines
+- always use the locally built `~/prog/swipl-devel/install/bin/swipl` executable
+- run tests using the command `~/prog/swipl-devel/install/bin/swipl -g run_tests -t halt myfile.pl
+- avoid `.` functional dict notation in tests, always use :< op to extract the relevant keys.

@@ -441,6 +441,45 @@ add_node(A, Nodes0, Nodes), get_dict(id, A, Id), member(B, Nodes0),
 add_node(A, Nodes0, Nodes) =>
    Nodes = [A | Nodes0].
 
+% Linear algebra
+% ==============
+
+% L = A.cholesky(): L is the lower triangular factor of the symmetric
+% positive definite matrices A, of shape [..., N, N], with A = L @ L^T; the
+% leading dims are a batch. A matrix that isn't positive definite gives NaN.
+% A fold, right-looking and in place: the state starts as A, and the step k
+% takes the outer product of the column k of L out of it, then puts that
+% column in its column k, which the update just zeroed.
+% A row i of L sums to A_ii squared: |L_ij| =< sqrt(A_ii).
+M.cholesky() := L :-
+   A = M.as(float),
+   length(A.shape(), NDim),
+   NB is NDim - 2,
+   length(BatchShape, NB),
+   append(BatchShape, [N, N], A.shape()),
+   findall(D, ( between(1, NB, D1), D is D1 - 1 ), Dims),
+   same_length(BatchShape, Ones),
+   maplist(=(1), Ones),
+   append(Ones, [N, N], EyeShape),
+   append(BatchShape, [N, N], Shape),
+   Eye = array{}.eye(N, [device(A.device)]),
+   Xs = Eye.reshape(EyeShape).expand(Shape),
+   L = Xs.fold(array:cholesky_step, A, NB, [batched_dims(Dims)]),
+   Magnitude::real,
+   {Magnitude is sqrt(max(A.range, 0))},
+   Sign::real(-1, 1),
+   {L.range <= Sign*Magnitude}.
+
+% X is the row k of the identity. The column k of A is 0 above the row k,
+% as the step at each row before zeroed its rest.
+cholesky_step(X, A, A1) :-
+   Col @= A @ X,
+   Pivot @= X @ Col,
+   L @= Col / sqrt(Pivot),
+   A.shape() = [N, N],
+   Column = L.reshape([N, 1]),
+   A1 @= A - Column * L.reshape([1, N]) + Column * X.reshape([1, N]).
+
 % numpy's basic indexing, as a relation: Index holds an item per dim, from
 % the first, missing items reading their whole dim:
 %   * an integer I, -Dim =< I < Dim, from the end when negative, drops its
@@ -2880,6 +2919,27 @@ test('a batch of left-looking Cholesky factorizations',
     L0 = array{}.zeros([2, 3, 3], [dtype(float), device(D)]),
     L = Xs.fold(M:cholesky_left_step(U), Ass, L0, 1, [batched_dims([0])]),
     L.tolist() = [L1, L2],
+    close_matrices(L1, [[2, 0, 0], [1, 2, 0], [1, 1, 2]]),
+    close_matrices(L2, [[3, 0, 0], [1, 2, 0], [0, 1, 1]]).
+
+test('a Cholesky factor', [forall(devices(D)), timeout(60)]) :-
+    A = array{}.fromlist([[4.0, 2.0, 2.0], [2.0, 5.0, 3.0], [2.0, 3.0, 6.0]],
+                         [device(D)]),
+    L = A.cholesky(),
+    L.shape() == [3, 3],
+    close_matrices(L.tolist(), [[2, 0, 0], [1, 2, 0], [1, 1, 2]]),
+    array:range_min_max(L.range, Min, Max),
+    Min >= -2.45,
+    Max =< 2.45.
+
+test('a batch of Cholesky factors of integer matrices',
+     [forall(devices(D)), timeout(60)]) :-
+    As = array{}.fromlist([[[[4, 2, 2], [2, 5, 3], [2, 3, 6]],
+                            [[9, 3, 0], [3, 5, 2], [0, 2, 2]]]],
+                          [device(D)]),
+    L = As.cholesky(),
+    L.shape() == [1, 2, 3, 3],
+    L.tolist() = [[L1, L2]],
     close_matrices(L1, [[2, 0, 0], [1, 2, 0], [1, 1, 2]]),
     close_matrices(L2, [[3, 0, 0], [1, 2, 0], [0, 1, 1]]).
 
