@@ -1,5 +1,7 @@
-:- [bench2].
-:- use_module(opencl).
+:- use_module(library(array)).
+:- ['../bench'].
+:- use_module('../../examples/linalg').
+:- use_module(library(array/opencl)).
 
 % Where the Cholesky time goes: the plan's ranges, the per-step launches without the update,
 % the update alone, and the cost of an empty launch.
@@ -15,7 +17,7 @@ chol_only_update(A, L, N) :-
    over([K:N], [over([I:N, J:N], [L[I, J] := where(K < J, where(J =< I, L[I, J] - C[I] * C[J], L[I, J]), L[I, J])])]).
 
 probe(Device, N) :-
-   cholesky(_, L, N), compile2:device(Device, Dev, _, _), device_options(Dev, Opts),
+   cholesky(_, L, N), compile:device(Device, Dev, _, _), device_options(Dev, Opts),
    kernels(L, Opts, [_, loop(_, _, Steps)]), last(Steps, U),
    kernel{ranges: R, par: Par} :< U, print(update_ranges(R)-par(Par)), nl,
    spd(N, As),
@@ -24,7 +26,7 @@ probe(Device, N) :-
    chol_only_update(A3, L3, N), bench_data('update only     ', L3, [A3-As], Device, [], 3).
 
 empty_launch(Device, Reps) :-
-   compile2:device(Device, Dev, Context, Queue),
+   compile:device(Device, Dev, Context, Queue),
    cl_program(Context, Dev, "__kernel void k0(__global float *a) { a[0] = 1.0f; }", "", Program),
    cl_kernel(Program, k0, K), cl_buffer(Context, 16, Mem),
    cl_enqueue(Queue, K, [mem(Mem)], 1, 0, [], _), cl_finish(Queue),

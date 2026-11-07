@@ -1,11 +1,10 @@
 :- module(bench_sort, [go_sort/1]).
-:- use_module(core2).
-:- use_module(compile2).
-:- use_module(sort2).
-:- use_module(bench2, [bench_data/6]).
+:- use_module(library(array)).
+:- use_module('../examples/sort').
+:- use_module(bench, [bench_data/6]).
 :- use_module(library(clpBNR)).
 
-% The sorts of sort2.pl against bench_sort.py: the same sizes, N float keys with an
+% The sorts of sort.pl against bench_sort.py: the same sizes, N float keys with an
 % int payload, the keys distinct and scrambled, the best of 5 runs. A network does the same
 % work whatever the order of the keys, so the runs after the first, on the keys the first
 % sorted in place, cost the same; the radix sort takes the float keys through float_keys/3

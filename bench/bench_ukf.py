@@ -1,6 +1,6 @@
 import time, sys, numpy as np
 
-# One UKF step as in ukf2.pl: B states of dimension N, scored against D detections of
+# One UKF step as in ukf.pl: B states of dimension N, scored against D detections of
 # dimension M, the constant-velocity track observed as range and y. Same sigma set (2N
 # points, equal weights) and same outputs: Score[B, D], PPost[B, N, N], MuSel[B, N].
 

@@ -1,9 +1,8 @@
-:- module(sort2_tests, []).
+:- module(sort_tests, []).
 
-:- use_module(core2).
-:- use_module(compile2).
-:- use_module(sort2).
-:- use_module(opencl, [opencl_device/2]).
+:- use_module(library(array)).
+:- use_module('../examples/sort').
+:- use_module(library(array/opencl), [opencl_device/2]).
 
 % keys(+N, -Keys): N distinct keys in a scrambled order.
 keys(N, Keys) :-
@@ -35,7 +34,7 @@ data(Keys, Vals, Ks, Ss, KeyList, [Keys-KeyList, Vals-Is, Ks-KL, Ss-SL]) :-
    length(KeyList, N), N1 is N - 1, numlist(0, N1, Is),
    pass_table(N, KL, SL).
 
-:- begin_tests(sort2).
+:- begin_tests(sorting).
 
 test(pass_table_of_eight, [timeout(10), true(Ks-Ss == [2, 4, 4, 8, 8, 8]-[1, 2, 1, 4, 2, 1])]) :-
    pass_table(8, Ks, Ss).
@@ -99,4 +98,4 @@ test(float_keys_order, [timeout(300), forall(opencl_device(D, _))]) :-
    expected(FL, _, Order),
    run(Vals, Data, V, [device(D)]), V == Order.
 
-:- end_tests(sort2).
+:- end_tests(sorting).

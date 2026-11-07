@@ -1,11 +1,10 @@
 :- module(bench_ukf, [go_ukf/1, check_ukf/2, ukf_all/3]).
-:- use_module(core2).
-:- use_module(compile2).
-:- use_module(ukf2).
-:- use_module(bench2, [bench_data/6]).
+:- use_module(library(array)).
+:- use_module('../examples/ukf').
+:- use_module(bench, [bench_data/6]).
 :- use_module(library(csv)).
 
-% The UKF step of ukf2.pl against bench_ukf.py: the same sizes, and one program computing
+% The UKF step of ukf.pl against bench_ukf.py: the same sizes, and one program computing
 % the score, the posterior covariance and the selected mean, pulled by a rank-0 name that
 % reads one element of each.
 

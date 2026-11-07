@@ -1,6 +1,6 @@
 import time, sys, numpy as np
 
-# A key-payload sort as in sort2.pl: N float32 keys, distinct and scrambled, with their
+# A key-payload sort as in sort.pl: N float32 keys, distinct and scrambled, with their
 # positions as payload. numpy's argsort and torch's sort, which return the payload order and
 # the sorted keys, the best of 5 runs.
 

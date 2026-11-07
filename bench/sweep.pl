@@ -1,4 +1,5 @@
-:- [bench2].
+:- [bench].
+:- use_module('../examples/linalg').
 % sweep(+Device, +N, +Extra): the matmul N^3 under a grid of schedules, best time each.
 sweep(Device, N, Extra) :-
    forall(( member(Tiles, [[4, 4], [4, 8], [8, 8]]), member(G, [4, 8]), member(TK, [8, 16, 32]),

@@ -1,5 +1,5 @@
-:- module(sort2, [bitonic/5, pass_table/3, radix/5, radix_table/2, float_keys/3]).
-:- use_module(core2).
+:- module(sorting, [bitonic/5, pass_table/3, radix/5, radix_table/2, float_keys/3]).
+:- use_module(library(array)).
 :- use_module(library(clpBNR)).
 
 /** <module> A bitonic sort as boxes

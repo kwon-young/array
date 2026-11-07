@@ -1,11 +1,13 @@
 :- module(bench_alloc, [go_alloc/1, go_alloc/2, example/5]).
-:- use_module(core2).
-:- use_module(compile2).
-:- use_module(bench2).
+:- use_module(library(array)).
+:- use_module(library(array/compile)).
+:- use_module(bench).
+:- use_module('../examples/linalg').
+:- use_module('../examples/nn').
 :- use_module(bench_ukf, [ukf_all/3]).
 :- set_prolog_flag(stack_limit, 4_000_000_000).
 
-% Every example of bench2.pl and bench_ukf.pl, run with the intermediates as buffers of their
+% Every example of bench.pl and bench_ukf.pl, run with the intermediates as buffers of their
 % own and as slices of one arena, for the memory each takes and the kernel time under each.
 
 example('matmul 512^3', C, Data, [], 5) :- matmul(_, _, C, 512, 512, 512), inputs_data(C, Data).
@@ -14,18 +16,18 @@ example('softmax 1024x1024', Y, Data, [local(64)], 5) :- softmax(_, Y, 1024, 102
 example('softmax 64x4096', Y, Data, [local(128)], 5) :- softmax(_, Y, 64, 4096), inputs_data(Y, Data).
 example('dot 1M', S, Data, [local(256)], 5) :- dot(_, _, S, 1048576), inputs_data(S, Data).
 example(Label, L, [A-As], [], 3) :-
-   member(N, [32, 64, 256, 1024]), cholesky(A, L, N), bench2:spd(N, As), format(atom(Label), "cholesky ~d", [N]).
+   member(N, [32, 64, 256, 1024]), cholesky(A, L, N), spd(N, As), format(atom(Label), "cholesky ~d", [N]).
 example(Label, L, [A-As], [], 3) :-
-   member(M-N, [1024-32, 256-64]), batched_cholesky(A, L, M, N), bench2:spd(N, As1),
+   member(M-N, [1024-32, 256-64]), batched_cholesky(A, L, M, N), spd(N, As1),
    findall(X, ( between(1, M, _), member(X, As1) ), As), format(atom(Label), "cholesky ~dx~d batch", [N, M]).
 example(Label, L, [A-As], [], 3) :-
-   member(N-NB, [256-32, 1024-32, 1024-64]), blocked_cholesky(A, L, N, NB), bench2:spd(N, As),
+   member(N-NB, [256-32, 1024-32, 1024-64]), blocked_cholesky(A, L, N, NB), spd(N, As),
    format(atom(Label), "blocked cholesky ~d nb ~d", [N, NB]).
 example(Label, H, [Idx-Is, W-Ws], [], 3) :-
-   member(M-N, [1048576-256, 1048576-1048576]), scatter(Idx, W, H, M, N), bench2:scatter_data(M, N, Is, Ws),
+   member(M-N, [1048576-256, 1048576-1048576]), scatter(Idx, W, H, M, N), bench:scatter_data(M, N, Is, Ws),
    format(atom(Label), "scatter ~d into ~d", [M, N]).
 example('embedding backward 65536x64 into 10000', E, [Idx-Is, G-Gs], [], 3) :-
-   embedding_backward(Idx, G, E, 65536, 10000, 64), bench2:scatter_data(65536, 10000, Is, _),
+   embedding_backward(Idx, G, E, 65536, 10000, 64), bench:scatter_data(65536, 10000, Is, _),
    numlist(1, 4194304, Gs0), maplist([X, Y]>>(Y is X mod 7), Gs0, Gs).
 example('mlp 256x768x3072', Y, Data, [], 3) :- mlp(_, Y, 256, 768, 3072), inputs_data(Y, Data).
 example('vit block 256x768x12', Y, Data, [], 3) :- vit_block(_, Y, 256, 768, 12, 3072), inputs_data(Y, Data).

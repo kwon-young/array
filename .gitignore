@@ -1,3 +1,18 @@
+# build artifacts
+/lib/
+/build/
+*.o
 *.so
-buffer_types.h
-build/
+
+# editor / tooling
+/.cache/
+/.claude/
+compile_commands.json
+*~
+
+# pack manager state
+status.db
+
+# pack archives
+*.tgz
+*.zip

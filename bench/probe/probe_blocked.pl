@@ -1,11 +1,13 @@
-:- [bench2].
-:- use_module(opencl).
+:- use_module(library(array)).
+:- ['../bench'].
+:- use_module('../../examples/linalg').
+:- use_module(library(array/opencl)).
 
 % The plan of the blocked Cholesky, and the time of its parts: the panel sweep alone, the
 % row solve alone, the trailing update alone, by programs with the other parts removed.
 
 plan(Device, N, NB) :-
-   blocked_cholesky(_, L, N, NB), compile2:device(Device, Dev, _, _), device_options(Dev, Opts),
+   blocked_cholesky(_, L, N, NB), compile:device(Device, Dev, _, _), device_options(Dev, Opts),
    kernels(L, Opts, Plan), forall(member(P, Plan), show(P, "")).
 
 show(loop(_, E, Inner), Indent) :- format("~wloop ~w~n", [Indent, E]), string_concat(Indent, "  ", I1), forall(member(P, Inner), show(P, I1)).

@@ -1,14 +1,14 @@
-:- module(compile2, [program/2, eval/3, kernels/3, source/2, run/4, device_options/2, allocate/8, lifetimes/2]).
+:- module(compile, [program/2, eval/3, kernels/3, source/2, run/4, device_options/2, allocate/8, lifetimes/2]).
 :- use_module(library(clpBNR)).
 :- use_module(library(dcg/high_order)).
-:- use_module(core2).
+:- use_module(core).
 :- use_module(opencl).
 :- use_module(buffer).
 :- use_module(minimalloc).
 :- use_module(reference).
 :- discontiguous items_code/6.
 
-% The pipeline, from the boxes of core2 to OpenCL:
+% The pipeline, from the boxes of core to OpenCL:
 %   program:  the boxes an output depends on, each after the boxes it reads;
 %   fuse:     a pure name, one box, one equation, its targets its indices, is substituted
 %             into its readers and its box dropped;
@@ -46,7 +46,7 @@ program(Out, Boxes) :-
    reverse(Rev, Boxes).
 
 boxes_of(Name, Boxes) :-
-   get_attr(Name, core2, def(_, Boxes)).
+   get_attr(Name, core, def(_, Boxes)).
 
 visit(_, Box, Seen0, Seen), in_list(Seen0, Box) => Seen = Seen0.
 visit(Stack, Box, _, _), in_list(Stack, Box) => domain_error(acyclic, Box).
@@ -84,18 +84,18 @@ label_program(Out, Boxes) :-
 % ctype(+N, -T): the C type of the elements of N: int for a bool or an int, float for a float,
 % and float while the kind is unresolved, a name the compiler made.
 ctype(N, T) :-
-   core2:name_kind(N, K),
+   core:name_kind(N, K),
    (  integer(K), K < 2
    -> T = int
    ;  T = float
    ).
 
 % kind_of(+E, -K): the kind of the value E, 0, 1 or 2, once the names are labelled: the rules of
-% core2:value_kind/3 on numbers.
-kind_of(V, K), var(V), is_name(V) => core2:name_kind(V, K0), ( integer(K0) -> K = K0 ; K = 2 ).
+% core:value_kind/3 on numbers.
+kind_of(V, K), var(V), is_name(V) => core:name_kind(V, K0), ( integer(K0) -> K = K0 ; K = 2 ).
 kind_of(V, K), var(V) => K = 1.
-kind_of(N, K), number(N) => core2:number_kind(N, K).
-kind_of(R, K), core2:place(R, N, _) => kind_of(N, K).
+kind_of(N, K), number(N) => core:number_kind(N, K).
+kind_of(R, K), core:place(R, N, _) => kind_of(N, K).
 kind_of(where(_, T, E), K) => kind_of(T, KT), kind_of(E, KE), K is max(KT, KE).
 kind_of(E, K), E =.. [Op, _, _], memberchk(Op, [<, =<, =:=]) => K = 0.
 kind_of(E, K), E =.. [Op | _], memberchk(Op, [/, sqrt, exp, log]) => K = 2.
@@ -103,7 +103,7 @@ kind_of(bits(_), K) => K = 1.
 kind_of(E, K), compound(E) => E =.. [_ | As], maplist(kind_of, As, Ks), max_list([1 | Ks], K).
 
 is_name(V) :-
-   get_attr(V, core2, _).
+   get_attr(V, core, _).
 
 % Fusion
 % ======
@@ -124,14 +124,14 @@ fuse(Out, [Box | Later], Rev, Boxes) =>
    fuse(Out, Later, [Box | Rev], Boxes).
 
 pure(Out, over(Axes, [P := V]), Later, N, Is, V) :-
-   core2:place(P, N, Ts),
+   core:place(P, N, Ts),
    N \== Out,
    \+ get_attr(N, perm, _),                        % a permutation is read as such, see covers/3
    boxes_of(N, [_]),
    maplist(arg(1), Axes, Is),
    permutation_eq(Is, Ts),
    names(V, Read),
-   \+ ( member(M, Read), member(B, Later), core2:writes(B, Ws), in_list(Ws, M) ),
+   \+ ( member(M, Read), member(B, Later), core:writes(B, Ws), in_list(Ws, M) ),
    \+ ( member(B, Later), reused(B, N) ).
 
 % reused(+Box, +N): Box reads N at a subscript that leaves one of its axes out, so each
@@ -236,8 +236,8 @@ reorder(Acc, Init, Partial, Combine, Acc1) =>
 
 init_of(over(_, [P := V]), over(_, [P1 := _])) :-
    number(V),
-   core2:place(P, G, _),
-   core2:place(P1, G1, _),
+   core:place(P, G, _),
+   core:place(P1, G1, _),
    G == G1.
 
 splittable(over(Axes, [P := V]), L, Min, [Init, Partial, Combine]) :-
@@ -256,7 +256,7 @@ splittable(over(Axes, [P := V]), L, Min, [Init, Partial, Combine]) :-
    Chunk is N // C,
    shape(G, Shape),
    shape(Gp, [C | Shape]),
-   core2:kind(G, Kind), core2:kind(Gp, Kind),
+   core:kind(G, Kind), core:kind(Gp, Kind),
    ctype(G, T), identity(Op, T, Identity),
    subst([K-(Kc*Chunk + Ki)], E, E1),
    Subs = [Kc | Ts],
@@ -345,12 +345,12 @@ rows_are_items(K) :-
 % the initialisation reads come Before the kernel.
 epilogue(Out, All, [InitBox | Bs0], Before, Init, Red, Post, Temps, Rest) :-
    InitBox = over(AxesI, [PI := VI]),
-   core2:place(PI, C, TsI),
+   core:place(PI, C, TsI),
    names(VI, NsI), \+ in_list(NsI, C),
    before(C, NsI, Bs0, Before, [Red | Bs]),
    Red = over(AxesR, [PR := VR]),
-   core2:place(PR, C1, TsR), C1 == C,
-   VR =.. [Op, R, _], monoid(Op, _), core2:place(R, C2, TsR1), C2 == C, TsR1 == TsR,
+   core:place(PR, C1, TsR), C1 == C,
+   VR =.. [Op, R, _], monoid(Op, _), core:place(R, C2, TsR1), C2 == C, TsR1 == TsR,
    maplist(arg(1), AxesI, IsI), maplist(arg(1), AxesR, IsR),
    term_variables(TsR, VsR), forall(member(V, VsR), in_list(IsR, V)),
    length(IsR, NR), length(VsR, NV), NR =:= NV + 1,
@@ -363,7 +363,7 @@ epilogue(Out, All, [InitBox | Bs0], Before, Init, Red, Post, Temps, Rest) :-
 % C nor write a name of Read.
 before(C, Read, [B | Bs], Before, Rest) :-
    names(B, Ns), \+ in_list(Ns, C),
-   core2:writes(B, Ws), \+ ( member(W, Ws), in_list(Read, W) ),
+   core:writes(B, Ws), \+ ( member(W, Ws), in_list(Read, W) ),
    !,
    Before = [B | Before1], before(C, Read, Bs, Before1, Rest).
 before(_, _, Bs, [], Bs).
@@ -376,7 +376,7 @@ restrip(K, Eqs0, Eqs) :-
    subst(Subst, Eqs0, Eqs).
 
 strip_pair(Axes, I-Ii, S0, [I-(I*T + Ii) | S0]) :-
-   core2:extent(Axes, Ii, E), extent(E, T).
+   core:extent(Axes, Ii, E), extent(E, T).
 
 % posts(+C, +Ts, +Boxes, -Eqs, -Used, -Rest): the boxes reading C at Ts over the same axes,
 % renamed to Ts, until one does not: their equations, and the boxes themselves.
@@ -394,7 +394,7 @@ posts(_, _, Bs, [], [], Bs).
 
 % post_eq(+C, +Is, +Eq): Eq writes a name but C, at a place over all the indices: elementwise.
 post_eq(C, Is, P := _) :-
-   core2:place(P, N, Ts), N \== C,
+   core:place(P, N, Ts), N \== C,
    term_variables(Ts, Vs), forall(member(I, Is), in_list(Vs, I)).
 
 % renaming(+TsA, +IsA, +TsB, -Pairs): the subscripts TsA, over the indices IsA, are TsB up to
@@ -455,7 +455,7 @@ sweep(over(Axes, Eqs), Opts, L-LDS-SW, Min, Free, Kernel) :-
    (  Item == true
    -> Kernel = kernel{kind: groups, rows: Rows, phases: [loop(T, E, Phases)], local: 1, item: true, names: Names,
                       free: Free, shared: []}
-   ;  core2:writes(Box, Written),
+   ;  core:writes(Box, Written),
       maplist(arg(1), Rows, RowIs),
       length(RowIs, Drop),
       Budget is LDS // 8,
@@ -532,7 +532,7 @@ extend(_, _, Bs, Phases, Rest) =>
 % of Prev has a row index, that same index.
 own_row(Rows, Prev, Box) :-
    maplist(arg(1), Rows, RowIs),
-   core2:writes(over([], Prev), Written),
+   core:writes(over([], Prev), Written),
    forall(( member(N, Written), accesses(Box, N, Ss), member(S, Ss),
             accesses(Prev, N, Ps), member(P, Ps), nth0(K, P, R), var(R), in_list(RowIs, R) ),
           ( nth0(K, S, R1), R1 == R )).
@@ -554,10 +554,10 @@ phase(_, _, _, _, _) => fail.
 % reduction(+RowIs, +Eq, -Red): Eq is G[Ts] := Op(G[Ts], E), Op a monoid, Ts over the rows
 % alone, E not reading G: red(G, Ts, Op, E).
 reduction(RowIs, P := V, red(G, Ts, Op, E)) :-
-   core2:place(P, G, Ts),
+   core:place(P, G, Ts),
    V =.. [Op, R, E],
    monoid(Op, _),
-   core2:place(R, G1, Ts1),
+   core:place(R, G1, Ts1),
    G1 == G,
    Ts1 == Ts,
    term_variables(Ts, Vs),
@@ -608,8 +608,8 @@ distinct(Vars) :-
    same_length(Vars, Sorted).
 
 same_extent(D, Par, R, Rows) :-
-   core2:extent(Par, D, Ed),
-   core2:extent(Rows, R, Er),
+   core:extent(Par, D, Ed),
+   core:extent(Rows, R, Er),
    (  ground(Ed-Er)
    -> extent(Ed, N), extent(Er, N)
    ;  Ed == Er
@@ -678,7 +678,7 @@ schedule(Out, Boxes, opts(Tile, G, TK, W, Major, Threads, KC, MC, Min, L, _, LDS
    exclude(axis_in(ParIs), Axes, Seq0),
    exclude(axis_in(TileIs), Seq0, Seq1),
    append(Seq1, Tiles, Seq),
-   core2:writes(Box, Written),
+   core:writes(Box, Written),
    exclude(in_list(Locals), Written, Globals),
    atomics(Box, Par, Locals, Atomics),
    pairs_keys(Atomics, AtomicNames),
@@ -727,8 +727,8 @@ guarded(over(_, Eqs), Conds) :-
    forall(member(Cs, Rest), Cs =@= Conds).
 
 guards(P := where(C, V, E), Conds) :-
-   core2:place(P, N, Ts), core2:place(E, N1, Ts1), N1 == N, Ts1 == Ts,
-   ( V = where(_, _, E1), core2:place(E1, N2, Ts2), N2 == N, Ts2 == Ts -> guards(P := V, Cs), Conds = [C | Cs]
+   core:place(P, N, Ts), core:place(E, N1, Ts1), N1 == N, Ts1 == Ts,
+   ( V = where(_, _, E1), core:place(E1, N2, Ts2), N2 == N, Ts2 == Ts -> guards(P := V, Cs), Conds = [C | Cs]
    ; Conds = [C] ).
 
 % direct_bound(+Conds, +Is, +Axis, +B0, -B): the bounds of the axis from the guards comparing
@@ -807,7 +807,7 @@ staging(Box, Par, [K:D], TilePairs, Written, Priv, [], _, _, _, Threads0, KC0, M
       member(I1-Ii, TilePairs), I1 == I, member(J1-Jj, TilePairs), J1 == J,
       length(Written, NW), length(Priv, NW),
       Box = over(Axes, Eqs), \+ ( member(E, Eqs), is_box(E) ),
-      core2:extent(Axes, Ii, EI), core2:extent(Axes, Jj, EJ), extent(EI, TI), extent(EJ, TJ),
+      core:extent(Axes, Ii, EI), core:extent(Axes, Jj, EJ), extent(EI, TI), extent(EJ, TJ),
       block(N, KC0, KC), MCT0 is max(1, MC0 // TI), block(NI, MCT0, MCT), block(NJ, Threads0, Threads),
       reads(Box, Written, Reads),
       include(mentions_k(K), Reads, Staged),
@@ -824,7 +824,7 @@ staging(Box, Par, [K:D], TilePairs, Written, Priv, [], G, TK0, Major, _, _, _, _
       member(I1-Ii, TilePairs), I1 == I, member(J1-Jj, TilePairs), J1 == J,
       length(Written, NW), length(Priv, NW),
       Box = over(Axes, Eqs), \+ ( member(E, Eqs), is_box(E) ),
-      core2:extent(Axes, Ii, EI), core2:extent(Axes, Jj, EJ), extent(EI, TI), extent(EJ, TJ),
+      core:extent(Axes, Ii, EI), core:extent(Axes, Jj, EJ), extent(EI, TI), extent(EJ, TJ),
       reads(Box, Written, Reads),
       include(mentions_k(K), Reads, Staged),
       maplist(staged(I-Ii-TI-Major, J-Jj-TJ, K, BatchIs), Staged, Tiles0) =>
@@ -846,7 +846,7 @@ reads(Box, Written, Reads) :-
    dedupe(Reads0, Reads).
 
 read_terms(T, _, Rs0, Rs), var(T) => Rs0 = Rs.
-read_terms(T, W, Rs0, Rs), core2:place(T, N, S), \+ in_list(W, N) => Rs0 = [T | Rs1], read_terms(S, W, Rs1, Rs).
+read_terms(T, W, Rs0, Rs), core:place(T, N, S), \+ in_list(W, N) => Rs0 = [T | Rs1], read_terms(S, W, Rs1, Rs).
 read_terms(T, W, Rs0, Rs), compound(T) => T =.. [_ | As], foldl([A, R0, R]>>read_terms(A, W, R0, R), As, Rs0, Rs).
 read_terms(_, _, Rs0, Rs) => Rs0 = Rs.
 
@@ -863,7 +863,7 @@ staged(_, _, K, Bs, R, Tile), within(R, [K | Bs]) => Tile = tile(R, none, none, 
 staged(_, _, _, _, _, _) => fail.
 
 within(R, Allowed) :-
-   core2:place(R, _, Subs),
+   core:place(R, _, Subs),
    term_variables(Subs, Vs),
    forall(member(V, Vs), in_list(Allowed, V)).
 
@@ -893,8 +893,8 @@ parallel_axes(Box, Locals, Axes, Strict, Fill, L, Par) :-
 % mentioned by no other box.
 locals(Out, Boxes, over(_, Eqs), Locals) :-
    partition(is_box, Eqs, Inner, Top),
-   core2:writes(over([], Inner), Written),
-   core2:writes(over([], Top), Direct),
+   core:writes(over([], Inner), Written),
+   core:writes(over([], Top), Direct),
    include(local(Out, Boxes, Direct), Written, Locals).
 
 is_box(over(_, _)).
@@ -903,7 +903,7 @@ local(Out, Boxes, Direct, N) :-
    N \== Out,
    \+ in_list(Direct, N),
    boxes_of(N, [_]),
-   \+ ( member(B, Boxes), names(B, Ns), in_list(Ns, N), \+ ( core2:writes(B, Ws), in_list(Ws, N) ) ).
+   \+ ( member(B, Boxes), names(B, Ns), in_list(Ns, N), \+ ( core:writes(B, Ws), in_list(Ws, N) ) ).
 
 % parallel(+Box, +Locals, +Axis): no written name but a local one is accessed at places that
 % differ along Axis: where two accesses differ, neither mentions it, and where all agree,
@@ -916,7 +916,7 @@ parallel(Box, Locals, Axis) :-
 % atomic update, in whatever order.
 parallel(Box, Locals, How, D:_) :-
    Box = over(Axes, _),
-   core2:writes(Box, Written),
+   core:writes(Box, Written),
    forall(( member(G, Written), \+ in_list(Locals, G) ),
           ( accesses(Box, G, [S | Ss]),
             forall(member(S1, Ss), compatible(D, S, S1)),
@@ -936,20 +936,20 @@ folded(over(_, Eqs), G, Op) :-
    accesses(over([], Eqs), G, Ss),
    length(Ws, NW), length(Ss, NS), NS =:= 2*NW.
 
-writes_name(G, P := _) :- core2:place(P, G1, _), G1 == G.
+writes_name(G, P := _) :- core:place(P, G1, _), G1 == G.
 writes_name(G, over(_, Eqs)) :- member(E, Eqs), writes_name(G, E), !.
 
 fold_of(G, P := V, Op) :-
-   core2:place(P, G1, Ts), G1 == G,
+   core:place(P, G1, Ts), G1 == G,
    V =.. [Op, R, E], monoid(Op, _),
-   core2:place(R, G2, Ts1), G2 == G, Ts1 == Ts,
+   core:place(R, G2, Ts1), G2 == G, Ts1 == Ts,
    names(E, Ns), \+ in_list(Ns, G).
 
 % atomics(+Box, +Par, +Locals, -Atomics): the folded names whose targets do not cover every
 % parallel axis: their updates are atomic. Name-Op pairs.
 atomics(Box, Par, Locals, Atomics) :-
    Box = over(Axes, _),
-   core2:writes(Box, Written),
+   core:writes(Box, Written),
    convlist(atomic_name(Box, Axes, Par, Locals), Written, Atomics).
 
 atomic_name(Box, Axes, Par, Locals, G, G-Op) :-
@@ -984,21 +984,21 @@ accesses(Term, G, Ss) :-
 
 places(G, T, Ss0, Ss), var(T), T == G, shape(G, []) => Ss0 = [[] | Ss].
 places(_, T, Ss0, Ss), var(T) => Ss0 = Ss.
-places(G, T, Ss0, Ss), core2:place(T, G1, S), G1 == G => Ss0 = [S | Ss1], places(G, S, Ss1, Ss).
+places(G, T, Ss0, Ss), core:place(T, G1, S), G1 == G => Ss0 = [S | Ss1], places(G, S, Ss1, Ss).
 places(G, T, Ss0, Ss), compound(T) => T =.. [_ | As], foldl(places(G), As, Ss0, Ss).
 places(_, _, Ss0, Ss) => Ss0 = Ss.
 
-% covers(+Axes, +S, +D): S is a read of a permutation, see core2:permutation/1, at subscripts
+% covers(+Axes, +S, +D): S is a read of a permutation, see core:permutation/1, at subscripts
 % one of which covers D, so distinct along D; or S is affine in the indices of Axes, its
 % coefficients a mixed radix,
 % so that it takes a different value at each point of the axes it mentions, D among them.
 covers(Axes, S, D) :-
-   core2:place(S, P, Es), get_attr(P, perm, _),
+   core:place(S, P, Es), get_attr(P, perm, _),
    !,
    member(E, Es), covers(Axes, E, D),
    !.
 covers(Axes, S, D) :-
-   catch(core2:form(Axes, S, 1, 0-[], _-Pairs), error(_, _), fail),
+   catch(core:form(Axes, S, 1, 0-[], _-Pairs), error(_, _), fail),
    \+ ( member(Key-_, Pairs), nonvar(Key) ),      % a remainder covers nothing
    keysort(Pairs, Sorted),
    group_pairs_by_key(Sorted, Groups),
@@ -1015,7 +1015,7 @@ covers(Axes, S, D) :-
 radix(_, _-Ks, Term), sum_list(Ks, 0) => Term = none.
 radix(Axes, I-Ks, Term) =>
    sum_list(Ks, K),
-   core2:extent(Axes, I, E),
+   core:extent(Axes, I, E),
    (  extent_max(E, N)
    -> true
    ;  N = inf
@@ -1064,7 +1064,7 @@ private(Box, ParIs, TilePairs, G, G-Infos) :-
    maplist(tile_info(S, BoxAxes, TilePairs), Mentioned, Infos).
 
 tile_info(S, BoxAxes, TilePairs, Ii, info(Ii, T, P, I)) :-
-   core2:extent(BoxAxes, Ii, E),
+   core:extent(BoxAxes, Ii, E),
    extent(E, T),
    member(I-Ii1, TilePairs), Ii1 == Ii, !,
    nth0(P, S, Sp), mentions(Sp, Ii), !,
@@ -1116,7 +1116,7 @@ kernel_source(I, K, Source), get_dict(kind, K, items) =>
    Box = over(_, Eqs),
    context(K, Box, Priv, Local, Ctx0),
    get_dict(tiles, K, TilePairs), pairs_values(TilePairs, TileIs),
-   core2:writes(over([], Pre), Inits0), core2:writes(over([], Post), Inits1), append(Inits0, Inits1, Inits),
+   core:writes(over([], Pre), Inits0), core:writes(over([], Post), Inits1), append(Inits0, Inits1, Inits),
    epilogue_names(Post, Priv, Priv1),
    Ctx = Ctx0.put(_{stage: [], vector: W, vec: none, unroll: TileIs, ranges: Ranges, atomics: Atomics,
                    pre: Pre, post: Post, temps: Temps, inits: Inits, priv: Priv1}),
@@ -1127,7 +1127,7 @@ kernel_source(I, K, Source), get_dict(kind, K, items) =>
 % epilogue_names(+Post, +Priv0, -Priv): the names the epilogue writes at the register tile's
 % point share its register layout.
 epilogue_names(Post, Priv0, Priv) :-
-   core2:writes(over([], Post), Ws),
+   core:writes(over([], Post), Ws),
    ( Priv0 = [_-Infos | _] -> convlist(as_tile(Infos, Priv0), Ws, New), append(Priv0, New, Priv) ; Priv = Priv0 ).
 
 as_tile(Infos, Priv0, N, N-Infos) :-
@@ -1151,8 +1151,8 @@ phase_writes(Phases, Names) :-
    list_to_set(Names0, Names).
 
 phase_write(loop(_, _, Phases), Acc0, Acc) => foldl(phase_write, Phases, Acc0, Acc).
-phase_write(serial(Eqs), Acc0, Acc) => core2:writes(over([], Eqs), Ws), append(Acc0, Ws, Acc).
-phase_write(spread(_, _, Eqs), Acc0, Acc) => core2:writes(over([], Eqs), Ws), append(Acc0, Ws, Acc).
+phase_write(serial(Eqs), Acc0, Acc) => core:writes(over([], Eqs), Ws), append(Acc0, Ws, Acc).
+phase_write(spread(_, _, Eqs), Acc0, Acc) => core:writes(over([], Eqs), Ws), append(Acc0, Ws, Acc).
 phase_write(reduce(_, Reds), Acc0, Acc) => maplist(arg(1), Reds, Ws), append(Acc0, Ws, Acc).
 
 shared_decl(Ctx, N-_-Size) -->
@@ -1171,7 +1171,7 @@ local_array(T, Name, Size) -->
 % tile_type(+R, -T): the C type of a staged tile of the read R, float: the staged and vectorised
 % kernels take float elements.
 tile_type(R, T) :-
-   core2:place(R, N, _),
+   core:place(R, N, _),
    ctype(N, T),
    (  T == float
    -> true
@@ -1239,7 +1239,7 @@ private_extent(Scope, Cs, P, E) :-
 % reach(+Scope, +C, -R): the most the coordinate C is over Scope, a number: a private array has a
 % size.
 reach(Scope, C, R) :-
-   core2:hull(Scope, C, _, Hi),
+   core:hull(Scope, C, _, Hi),
    (  extent_max(Hi, R)
    -> true
    ;  existence_error(upper_bound, C)
@@ -1324,8 +1324,8 @@ hoist_masks(Ctx0, K, Eqs0, Ctx, Eqs, Epilogue) :-
    reverse(Rev, Eqs), reverse(RevE, Epilogue).
 
 hoist_mask(K, P := V, Ctx0-Eqs-Eps, Acc1),
-      core2:place(P, N, Ts), guards(P := V, Conds), \+ mentions(Conds, K),
-      innermost(V, Inner), Inner =.. [Op, P1, E], memberchk(Op, [+, -]), core2:place(P1, N1, Ts1), N1 == N, Ts1 == Ts,
+      core:place(P, N, Ts), guards(P := V, Conds), \+ mentions(Conds, K),
+      innermost(V, Inner), Inner =.. [Op, P1, E], memberchk(Op, [+, -]), core:place(P1, N1, Ts1), N1 == N, Ts1 == Ts,
       get_dict(priv, Ctx0, Priv), member(N2-Infos, Priv), N2 == N =>
    shape(N, Shape), shape(Acc, Shape),
    T = [](Ts, Acc),
@@ -1355,7 +1355,7 @@ rebuild([C | Cs], Fold, P, Masked) => rebuild(Cs, Fold, P, Inner), Masked = wher
 % when it is contiguous along the other one, a transposed store; Count vectors per item.
 load_spec(Ctx, Gi-I, Gj-J, Vv, Kb, K, G, TK, Items, tile(R, Axis, Strip, T, Major, Name, _),
           spec(Name, W, Count, Vectors, Index, Step, Subs1, Reg)) :-
-   core2:place(R, N, Subs),
+   core:place(R, N, Subs),
    tile_rows(Axis, G, T, Rows),
    get_dict(vector, Ctx, W0),
    access(Ctx, N, Subs, _-Off),
@@ -1435,7 +1435,7 @@ next_block(Ctx, Subs, Subs1) :-
 
 % vector_read(+Ctx, +W, +Read, -C): the global read R[Subs] as W lanes from its address.
 vector_read(Ctx, W, R, C) :-
-   core2:place(R, N, Subs),
+   core:place(R, N, Subs),
    access(Ctx, N, Subs, Name-Off), index(Ctx, Off, CO),
    lanes_read(W, Name, CO, C).
 
@@ -1532,17 +1532,17 @@ panel_tiles(k_first, _, NS, Count) => Count = NS.
 % block of rows, and K-only reads with the outer ones.
 pack_panel(Ctx, I-Mb-Ip-Ii1, _, K-Kb-Kk, KC, MCT, _, inner, tile(R, A, Ii, T, k_last, Name, _)) -->
    { A == I }, !,
-   { core2:place(R, N, Subs), subst([I-(Mb + Ip), Ii-Ii1, K-(Kb + Kk)], Subs, Subs1), global(Ctx, N, Subs1, Element),
+   { core:place(R, N, Subs), subst([I-(Mb + Ip), Ii-Ii1, K-(Kb + Kk)], Subs, Subs1), global(Ctx, N, Subs1, Element),
      index(Ctx, (Ip*KC + Kk)*T + Ii1, Idx), pack_order(Ctx, N, Subs, K, k-KC, ii-T, Inner, Outer) },
    fmt("  for (int ip = 0; ip < ~d; ip++) ~w ~w ~w[~w] = ~w;\n", [MCT, Outer, Inner, Name, Idx, Element]).
 pack_panel(Ctx, _, J-Start-Jp-Jj1, K-Kb-Kk, KC, _, NS, outer, tile(R, A, Jj, T, k_first, Name, _)) -->
    { A == J }, !,
-   { core2:place(R, N, Subs), subst([J-(Start + Jp), Jj-Jj1, K-(Kb + Kk)], Subs, Subs1), global(Ctx, N, Subs1, Element),
+   { core:place(R, N, Subs), subst([J-(Start + Jp), Jj-Jj1, K-(Kb + Kk)], Subs, Subs1), global(Ctx, N, Subs1, Element),
      index(Ctx, (Jp*KC + Kk)*T + Jj1, Idx), pack_order(Ctx, N, Subs, K, k-KC, jj-T, Inner, Outer) },
    fmt("  for (int jp = 0; jp < ~d; jp++) ~w ~w ~w[~w] = ~w;\n", [NS, Outer, Inner, Name, Idx, Element]).
 pack_panel(Ctx, _, _, K-Kb-Kk, KC, _, _, outer, tile(R, A, _, _, _, Name, _)) -->
    { A == none }, !,
-   { core2:place(R, N, Subs), subst([K-(Kb + Kk)], Subs, Subs1), global(Ctx, N, Subs1, Element) },
+   { core:place(R, N, Subs), subst([K-(Kb + Kk)], Subs, Subs1), global(Ctx, N, Subs1, Element) },
    fmt("  for (int k = 0; k < ~d; k++) ~w[k] = ~w;\n", [KC, Name, Element]).
 pack_panel(_, _, _, _, _, _, _, _, _) --> [].
 
@@ -1869,10 +1869,10 @@ loops(Ctx, [I:E | Axes], Eqs) -->
 % folds the place P = N[Ts] by the monoid Op with X, the place free of the loop indices and X
 % not reading N: the loops accumulate in a register, the place loaded before and stored after.
 register_fold(Axes, P, V, N, Ts, Op, X) :-
-   core2:place(P, N, Ts),
+   core:place(P, N, Ts),
    V =.. [Op, R, X],
    monoid(Op, _),
-   core2:place(R, N1, Ts1), N1 == N, Ts1 == Ts,
+   core:place(R, N1, Ts1), N1 == N, Ts1 == Ts,
    maplist(arg(1), Axes, Is),
    \+ ( member(I, Is), mentions(Ts, I) ),
    names(X, Ns),
@@ -1906,7 +1906,7 @@ vectorizable(Ctx, V, Eqs) :-
    forall(member(Eq, Eqs), vectorizable_eq(Ctx, V, Eq)).
 
 vectorizable_eq(Ctx, V, P := Val) :-
-   core2:place(P, N, Ts),
+   core:place(P, N, Ts),
    get_dict(atomics, Ctx, Atomics), \+ ( member(N1-_, Atomics), N1 == N ),
    access(Ctx, N, Ts, _-Off),
    stride(V, Off, 1),
@@ -1919,7 +1919,7 @@ vectorizable_eq(Ctx, V, copy(_, N, S)) :-
 % the lane index V itself is the vector of lane numbers, and a comparison or a selection on
 % it is lane-wise.
 lanes(_, _, X), var(X), \+ is_name(X) => true.
-lanes(Ctx, V, R), core2:place(R, N, Ts) => access(Ctx, N, Ts, _-Off), stride(V, Off, S), memberchk(S, [0, 1]).
+lanes(Ctx, V, R), core:place(R, N, Ts) => access(Ctx, N, Ts, _-Off), stride(V, Off, S), memberchk(S, [0, 1]).
 lanes(_, _, X), number(X) => true.
 lanes(Ctx, V, E), E =.. [Op | As], memberchk(Op-_, [(+)-2, (-)-2, (*)-2, (/)-2, (-)-1, max-2, min-2, exp-1, sqrt-1, log-1,
                                                     (<)-2, (=<)-2, (=:=)-2, where-3]) =>
@@ -1930,7 +1930,7 @@ lanes(_, _, _) => fail.
 stride(V, Off, S) :-
    term_variables(Off, Vs),
    maplist([X, X:1]>>true, Vs, Scope),
-   catch(core2:form(Scope, Off, 1, 0-[], _-Pairs), error(_, _), fail),
+   catch(core:form(Scope, Off, 1, 0-[], _-Pairs), error(_, _), fail),
    \+ ( member(Key-_, Pairs), nonvar(Key) ),      % a remainder has no stride
    foldl(coef(V), Pairs, 0, S).
 
@@ -1946,12 +1946,12 @@ statement(Ctx, copy(Way, N, S)) -->
      way(Way, Global, Private, From, To), load(Ctx, From, R), store(Ctx, To, R, C) },
    fmt("  ~w\n", [C]).
 statement(Ctx, P := V) -->
-   { core2:place(P, N, Ts), get_dict(atomics, Ctx, Atomics), member(N1-Op, Atomics), N1 == N, !,
+   { core:place(P, N, Ts), get_dict(atomics, Ctx, Atomics), member(N1-Op, Atomics), N1 == N, !,
      V =.. [Op, _, E], value(Ctx, E, R), access(Ctx, N, Ts, Name-Off), index(Ctx, Off, CO),
      ctype(N, T), atomic_function(Op, T, F) },
    fmt("  ~w(&~w[~w], ~w);\n", [F, Name, CO, R]).
 statement(Ctx, P := V) -->
-   { core2:place(P, N, Ts), access(Ctx, N, Ts, Access), value(Ctx, V, R), store(Ctx, Access, R, C) },
+   { core:place(P, N, Ts), access(Ctx, N, Ts, Access), value(Ctx, V, R), store(Ctx, Access, R, C) },
    fmt("  ~w\n", [C]).
 
 atomic_function(+, float, F) => F = atomic_add_float.
@@ -2024,7 +2024,7 @@ offset(Ts, Shape, Off) :-
 % index(+Ctx, +E, -C) and value(+Ctx, +E, -C): E as a C int, or a C float.
 index(Ctx, V, C), var(V) => var_name(Ctx, V, C).
 index(_, N, C), integer(N) => C = N.
-index(Ctx, R, C), core2:place(R, N, Ts) => place(Ctx, N, Ts, P), format(atom(C), "(int)~w", [P]).
+index(Ctx, R, C), core:place(R, N, Ts) => place(Ctx, N, Ts, P), format(atom(C), "(int)~w", [P]).
 index(Ctx, E, C), E =.. [Op, A, B], c_int_op(Op, COp) =>
    index(Ctx, A, CA), index(Ctx, B, CB), format(atom(C), "(~w ~w ~w)", [CA, COp, CB]).
 index(Ctx, where(I, T, E), C) =>
@@ -2044,7 +2044,7 @@ value(_, N, C), number(N), N =:= -inf => C = '-INFINITY'.
 value(_, N, C), number(N) => F is float(N), format(atom(C), "~wf", [F]).
 value(Ctx, R, C), get_dict(stage, Ctx, Tiles), member(tile(R1, _, _, _, _, Name, Index), Tiles), R1 == R =>
    load(Ctx, Name-Index, C).
-value(Ctx, R, C), core2:place(R, N, Ts) => place(Ctx, N, Ts, C).
+value(Ctx, R, C), core:place(R, N, Ts) => place(Ctx, N, Ts, C).
 value(Ctx, where(I, T, E), C), get_dict(vec, Ctx, L), L \== none =>
    get_dict(vector, Ctx, W), maplist(value(Ctx), [I, T, E], [CI, CT, CE]),
    format(atom(C), "(~w ? (float~d)(~w) : (float~d)(~w))", [CI, W, CT, W, CE]).
@@ -2056,7 +2056,7 @@ value(Ctx, X + A*B, C), has_read(A*B), kind_of(X + A*B, 2) =>
    maplist(value(Ctx), [A, B, X], [CA, CB, CX]), format(atom(C), "fma(~w, ~w, ~w)", [CA, CB, CX]).
 value(Ctx, E, C), E =.. [Op, A, B], memberchk(Op, [+, -, *, <, =<, =:=]) =>
    maplist(value(Ctx), [A, B], [CA, CB]), c_op(Op, COp), format(atom(C), "(~w ~w ~w)", [CA, COp, CB]).
-value(Ctx, E, C), E =.. [Op, A, B], c_int_op(Op, COp), core2:int_op(Op) =>
+value(Ctx, E, C), E =.. [Op, A, B], c_int_op(Op, COp), core:int_op(Op) =>
    maplist(value(Ctx), [A, B], [CA, CB]), format(atom(C), "(~w ~w ~w)", [CA, COp, CB]).
 value(Ctx, A / B, C) =>
    maplist(value(Ctx), [A, B], [CA, CB]), format(atom(C), "((float)~w / ~w)", [CA, CB]).
@@ -2071,7 +2071,7 @@ value(Ctx, bits(A), C) =>
 % has_read(+E): E reads a place, so fma applies when E is a float.
 has_read(E) :-
    sub_term(T, E),
-   core2:place(T, N, _),
+   core:place(T, N, _),
    is_name(N),
    !.
 
@@ -2257,7 +2257,7 @@ run_step(Queue, Program, Buffers, Env, Kernel) =>
 % device/4 and built/4 memoise under a mutex, so that tests may run concurrently; the
 % queue is in order, so kernels and reads of different threads interleave safely.
 device(Name, Device, Context, Queue) :-
-   with_mutex(compile2, device_(Name, Device, Context, Queue)).
+   with_mutex(compile, device_(Name, Device, Context, Queue)).
 
 device_(Name, Device, Context, Queue), device_state(Name, D, C, Q) =>
    Device = D, Context = C, Queue = Q.
@@ -2268,7 +2268,7 @@ device_(Name, Device, Context, Queue) =>
    assertz(device_state(Name, Device, Context, Queue)).
 
 built(Context, Device, Source, Program) :-
-   with_mutex(compile2, built_(Context, Device, Source, Program)).
+   with_mutex(compile, built_(Context, Device, Source, Program)).
 
 built_(Context, _, Source, Program), program_state(Context, Source, P) => Program = P.
 built_(Context, Device, Source, Program) =>

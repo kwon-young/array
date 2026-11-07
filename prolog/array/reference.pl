@@ -3,13 +3,13 @@
 :- use_module(library(lists)).
 :- use_module(library(pairs)).
 :- use_module(library(filesex)).
-:- use_module(core2).
+:- use_module(core).
 :- use_module(buffer).
 
 /** <module> The reference evaluation of a program
 
 evaluate/4 runs the boxes of a program in Prolog, exactly, on data(...) terms: the semantics of
-compile2:eval/3. The boxes are compiled to one clause before they run: an axis is a failure
+compile:eval/3. The boxes are compiled to one clause before they run: an axis is a failure
 driven loop over between/3, an element N[Ts] is arg/3 or nb_setarg/3 of N's term at an offset
 whose strides are numbers, and an expression is one is/2, but for a where/3, which runs one
 branch only, and a comparison, which is 1 or 0.
@@ -18,7 +18,7 @@ With the flag eval_cache set, the elements of the output are kept on disk, under
 the compiled clause, the initial terms of the names and the Prolog version: a program evaluated
 once on some data is never evaluated again, in this process or the next. The clause holds every
 extent, stride and bound as a number, so that it is all of the program the evaluation depends
-on. The directory is the flag eval_cache_directory, by default core2_eval under
+on. The directory is the flag eval_cache_directory, by default array_eval under
 $XDG_CACHE_HOME or ~/.cache; deleting it is always safe. A file is written under a temporary
 name then renamed, so that concurrent writers, threads or processes, leave a whole file.
 */
@@ -65,10 +65,10 @@ cache_file(Key, File) :-
 
 cache_directory(Dir), current_prolog_flag(eval_cache_directory, D), D \== '' => Dir = D.
 cache_directory(Dir), getenv('XDG_CACHE_HOME', Home), Home \== '' =>
-   directory_file_path(Home, core2_eval, Dir).
+   directory_file_path(Home, array_eval, Dir).
 cache_directory(Dir) =>
    expand_file_name('~/.cache', [Home]),
-   directory_file_path(Home, core2_eval, Dir).
+   directory_file_path(Home, array_eval, Dir).
 
 % run(+Code, +I, +Terms, -Values): the clause run on Terms, Values the elements of the Ith.
 % The clause is one of code/1, local to the thread, for as long as it runs.
@@ -101,12 +101,12 @@ list_conj([G | Gs], Conj) => Conj = (G, Conj1), list_conj(Gs, Conj1).
 box(Ctx, Idx, over([], Eqs)) -->
    foldl(box(Ctx, Idx), Eqs).
 box(Ctx, Idx, over([I:E | Axes], Eqs)) -->
-   { compile2:extent(E, N), Last is N-1,
+   { compile:extent(E, N), Last is N-1,
      phrase(box(Ctx, [I-V | Idx], over(Axes, Eqs)), Goals),
      list_conj(Goals, Inner) },
    [\+ ( between(0, Last, V), \+ Inner )].
 box(Ctx, Idx, P := E) -->
-   { core2:place(P, N, Ts) },
+   { core:place(P, N, Ts) },
    element(Ctx, Idx, N, Ts, Term, Arg),
    expr(Ctx, Idx, E, X),
    [Y is X, nb_setarg(Arg, Term, Y)].
@@ -116,7 +116,7 @@ box(Ctx, Idx, P := E) -->
 element(Ctx, Idx, N, Ts, Term, Arg) -->
    { member(N1-Term, Ctx), N1 == N, !,
      shape(N, Shape),
-     maplist(compile2:extent, Shape, Ms) },
+     maplist(compile:extent, Shape, Ms) },
    offset(Ts, Ms, Ctx, Idx, 0, Off),
    arg_index(Off, Arg).
 
@@ -137,7 +137,7 @@ plus_times(Off0, M, X, Off) => Off = Off0*M + X.
 expr(_, Idx, V, X), var(V), member(I-X0, Idx), I == V ==> { X = X0 }.
 expr(Ctx, Idx, V, X), var(V) ==> read(Ctx, Idx, V, [], X).
 expr(_, _, N, X), number(N) ==> { X = N }.
-expr(Ctx, Idx, R, X), core2:place(R, N, Ts) ==> read(Ctx, Idx, N, Ts, X).
+expr(Ctx, Idx, R, X), core:place(R, N, Ts) ==> read(Ctx, Idx, N, Ts, X).
 expr(Ctx, Idx, where(C, T, E), X) ==>
    expr(Ctx, Idx, C, B),
    { branch(Ctx, Idx, T, X, Then), branch(Ctx, Idx, E, X, Else) },

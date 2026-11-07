@@ -1,7 +1,6 @@
-:- use_module(core2).
-:- use_module(compile2).
-:- use_module(opencl).
-:- use_module(buffer).
+:- use_module(library(array)).
+:- use_module(library(array/opencl)).
+:- use_module(library(array/buffer)).
 
 % The GPU matmul kernel under the derived options, and variants of its source, each timed alone:
 % the staging alone, both without the barriers, and other unroll factors of the K block.
@@ -26,8 +25,8 @@ probe(Device, N, Options) :-
    matmul(A, B, C, N, N, N),
    kernels(C, Opts, [_, K]), source([K], Src),
    split_string(Src, "\n", "", Lines),
-   compile2:device(Device, Dev, Context, Queue),
-   compile2:work(K, Global, Local),
+   compile:device(Device, Dev, Context, Queue),
+   compile:work(K, Global, Local),
    maplist([X, X-[]]>>true, [A, B, C], _),
    N2 is N*N, Bytes is 4*N2,
    maplist([_, Mem]>>cl_buffer(Context, Bytes, Mem), [A, B, C], Mems),
@@ -52,7 +51,7 @@ report(Device, N, Options) :-
    opencl_device(Device, Dev), device_options(Dev, Derived), merge_options(Options, Derived, Opts),
    matmul(_, _, C, N, N, N),
    kernels(C, Opts, [_, K]), source([K], Src),
-   compile2:device(Device, Dev, Context, _),
+   compile:device(Device, Dev, Context, _),
    cl_program(Context, Dev, Src, "-cl-nv-verbose", Program),
    cl_program_log(Program, Dev, Log), registers(Log, Regs), format("registers: ~w~n", [Regs]),
    cl_program_binary(Program, Ptx),

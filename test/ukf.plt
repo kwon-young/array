@@ -1,10 +1,9 @@
-:- module(ukf2_tests, []).
+:- module(ukf_tests, []).
 
-:- use_module(core2).
-:- use_module(compile2).
-:- use_module(ukf2).
-:- use_module(sort2).
-:- use_module(opencl, [opencl_device/2]).
+:- use_module(library(array)).
+:- use_module('../examples/ukf').
+:- use_module('../examples/sort').
+:- use_module(library(array/opencl), [opencl_device/2]).
 :- use_module(library(clpfd), [transpose/2]).
 
 % The references are evaluated once for every program and data, then read from the disk:
@@ -108,7 +107,7 @@ more_detections(Zdet, N-L, N-L1) :-
    ;  L1 = L
    ).
 
-:- begin_tests(ukf2).
+:- begin_tests(ukf).
 
 test(eval_matches_reference, [timeout(60), forall((fields(Fs), member(I-Name, Fs)))]) :-
    case(Dims, Crit, Data, In, Refs),
@@ -187,6 +186,6 @@ test(pairs_in_score_order, [timeout(300), forall(opencl_device(D, _))]) :-
 test(kernel_count, [timeout(60), true(Ns == [13, 15, 15])]) :-
    case(Dims, Crit, _, In, _),
    ukf_step(cv_range_model, Dims, Crit, In, out(_, _, _, _, Score, _, PPost, MuSel)),
-   maplist([Out, N]>>( kernels(Out, [], Plan), compile2:flat_plan(Plan, Flat), length(Flat, N) ), [Score, PPost, MuSel], Ns).
+   maplist([Out, N]>>( kernels(Out, [], Plan), compile:flat_plan(Plan, Flat), length(Flat, N) ), [Score, PPost, MuSel], Ns).
 
-:- end_tests(ukf2).
+:- end_tests(ukf).

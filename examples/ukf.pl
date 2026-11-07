@@ -1,6 +1,6 @@
-:- module(ukf2, [ukf_step/5, ukf_order/6, chol/4, cv_range_model/3]).
-:- use_module(core2).
-:- use_module(sort2).
+:- module(ukf, [ukf_step/5, ukf_order/6, chol/4, cv_range_model/3]).
+:- use_module(library(array)).
+:- use_module(sort).
 :- use_module(library(clpBNR)).
 
 /** <module> One step of an unscented Kalman filter, as boxes
@@ -29,7 +29,7 @@ for each state. N and M are the model's, ground; B and D may stay extent variabl
         and Keys[N] their scores, in that order, the pairs beyond the gate last by their
         infinite score, after them -1 under inf for the padding. Keys and Vals are names of
         N elements given to the run and overwritten, N a power of two at least B*D; Ks and
-        Ss the pass table of N, see sort2:pass_table/3.
+        Ss the pass table of N, see sorting:pass_table/3.
 */
 
 ukf_step(Model, dims(B, N, M, D), Crit, in(Mu, P, R, Zdet, Sel),

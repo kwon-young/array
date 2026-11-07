@@ -1,10 +1,10 @@
-:- module(compile2_tests, []).
+:- module(compile_tests, []).
 
-:- use_module(core2).
-:- use_module(compile2).
-:- use_module(opencl, [opencl_device/2, cl_device_info/3]).
+:- use_module(library(array)).
+:- use_module(library(array/compile)).
+:- use_module(library(array/opencl), [opencl_device/2, cl_device_info/3]).
 :- op(20, yf, []).
-:- use_module(bench2, [vit_block/6]).
+:- use_module('../examples/nn', [vit_block/6]).
 
 % The references are evaluated once for every program and data, then read from the disk:
 % see reference.pl.
@@ -64,7 +64,7 @@ blocked_cholesky(A, L, N, NB) :-
 % gelu(X) as x * sigmoid(1.702 x), with the ops the table has
 gelu(X, X * (1 / (1 + exp(-1.702 * X)))).
 
-:- begin_tests(compile2_basics).
+:- begin_tests(compile_basics).
 
 test(transpose, [timeout(30), true(V == [1.0, 4.0, 2.0, 5.0, 3.0, 6.0])]) :-
    shape(Y, [2, 3]),
@@ -109,9 +109,9 @@ test(source_is_printed, [timeout(30)]) :-
    once(sub_string(Src, _, _, _, "float r_")),
    shape(A, _), shape(B, _).
 
-:- end_tests(compile2_basics).
+:- end_tests(compile_basics).
 
-:- begin_tests(compile2_groups).
+:- begin_tests(compile_groups).
 
 test(softmax_is_one_kernel_of_one_group, [timeout(30), forall(opencl_device(D, _))]) :-
    shape(X, [4]),
@@ -159,9 +159,9 @@ test(small_output_reduction_goes_to_groups_large_to_items, [timeout(30)]) :-
    matmul(A2, B2, C2, 4, 12, 8), kernels(C2, [], [K2]), get_dict(kind, K2, groups), shape(A2, _), shape(B2, _),
    kernels(C2, [items(16)], K2s), maplist([K]>>get_dict(kind, K, items), K2s).
 
-:- end_tests(compile2_groups).
+:- end_tests(compile_groups).
 
-:- begin_tests(compile2_staging).
+:- begin_tests(compile_staging).
 
 test(matmul_staged_in_local_memory_and_vectorised, [timeout(60), forall(opencl_device(D, _))]) :-
    matmul(A, B, C, 64, 96, 64),
@@ -236,9 +236,9 @@ test(attention_matmuls_stage_per_head, [timeout(90), forall(opencl_device(D, _))
    eval(Sc, [Q-Qs, Kt-Ks], Ref1), run(Sc, [Q-Qs, Kt-Ks], V1, [device(D) | Opts]), near(Ref1, V1),
    eval(O, [P-Qs, V-Ks], Ref2), run(O, [P-Qs, V-Ks], V2, [device(D) | Opts]), near(Ref2, V2).
 
-:- end_tests(compile2_staging).
+:- end_tests(compile_staging).
 
-:- begin_tests(compile2_cholesky).
+:- begin_tests(compile_cholesky).
 
 test(cholesky_is_one_sweep_kernel, [timeout(300), forall(opencl_device(D, _))]) :-
    cholesky(A, L, 64),
@@ -317,9 +317,9 @@ test(chain_reads_its_own_row_only, [timeout(300), forall(opencl_device(D, _))]) 
    numlist(1, 256, Ns), maplist([N, V]>>(V is (N mod 5) - 2), Ns, Xs), maplist([N, V]>>(V is (N mod 3) - 1), Ns, Ys),
    eval(H, [X-Xs, Y-Ys], Ref), run(H, [X-Xs, Y-Ys], Vals, [device(D), lanes(1)]), near(Ref, Vals).
 
-:- end_tests(compile2_cholesky).
+:- end_tests(compile_cholesky).
 
-:- begin_tests(compile2_scatter).
+:- begin_tests(compile_scatter).
 
 test(scatter_add_is_atomic, [timeout(120), forall(opencl_device(D, _))]) :-
    shape(Idx, [4096]), elements(Idx, 0-15), shape(W, [4096]), shape(H, [16]),
@@ -343,9 +343,9 @@ test(embedding_backward_scatters_rows, [timeout(120), forall(opencl_device(D, _)
    eval(E, [Idx-Is, G-Gs], Ref), run(E, [Idx-Is, G-Gs], V, [device(D)]),
    near(Ref, V).
 
-:- end_tests(compile2_scatter).
+:- end_tests(compile_scatter).
 
-:- begin_tests(compile2_fusion).
+:- begin_tests(compile_fusion).
 
 test(matmul_with_epilogue_is_one_kernel, [timeout(120), forall(opencl_device(D, _))]) :-
    shape(X, [64, 96]), shape(W, [96, 64]), shape(B, [64]), shape(R, [64, 64]), shape(C, [64, 64]), shape(Y, [64, 64]),
@@ -390,16 +390,16 @@ test(vit_block_is_nine_kernels, [timeout(120), forall(opencl_device(D, _))]) :-
    kernels(Y, Opts, Ks), length(Ks, 9),
    include([K]>>get_dict(kind, K, groups), Ks, Gs), length(Gs, 3),
    include([K]>>(get_dict(stage, K, stage(_, _, _)), get_dict(pre, K, [_])), Ks, Ms), length(Ms, 6),
-   compile2:program(Y, Boxes), bench2:names(Boxes, Names),
-   include([N]>>(N \== Y, compile2:boxes_of(N, [])), Names, Inputs),
-   maplist([N, N-Vs]>>( shape(N, Sh), compile2:size(Sh, Len), numlist(1, Len, Is),
+   compile:program(Y, Boxes), compile:names(Boxes, Names),
+   include([N]>>(N \== Y, compile:boxes_of(N, [])), Names, Inputs),
+   maplist([N, N-Vs]>>( shape(N, Sh), compile:size(Sh, Len), numlist(1, Len, Is),
                         maplist([I, V]>>(V is ((I * 7) mod 23) / 23 - 0.5), Is, Vs) ), Inputs, Data),
    eval(Y, Data, Ref), run(Y, Data, V, [device(D) | Opts]),
    near(Ref, V), shape(X, _).
 
-:- end_tests(compile2_fusion).
+:- end_tests(compile_fusion).
 
-:- begin_tests(compile2_kinds).
+:- begin_tests(compile_kinds).
 
 % A count is an int: an int reduction on the device, read back as integers.
 test(int_count_reduction, [timeout(120), forall(opencl_device(D, _))]) :-
@@ -439,9 +439,9 @@ test(kinds_coerce_data, [timeout(120), forall(opencl_device(D, _))]) :-
    eval(Y, Data, Ref), run(Y, Data, V, [device(D)]),
    kind(Y, float), near([0.5, 1.0, 1.5, 2.0, 2.0, 1.5, 1.0, 0.5], Ref), near(Ref, V).
 
-:- end_tests(compile2_kinds).
+:- end_tests(compile_kinds).
 
-:- begin_tests(compile2_hull).
+:- begin_tests(compile_hull).
 
 % A gather through xor, the stride of a bitonic pass, against the Prolog evaluation.
 test(xor_gather, [timeout(120), forall(opencl_device(D, _))]) :-
@@ -477,9 +477,9 @@ test(non_affine_read_in_a_staged_matmul, [timeout(120), forall(opencl_device(D, 
    eval(C, [A-As, B-Bs], Ref), run(C, [A-As, B-Bs], V, [device(D)]),
    near(Ref, V).
 
-:- end_tests(compile2_hull).
+:- end_tests(compile_hull).
 
-:- begin_tests(compile2_symbolic).
+:- begin_tests(compile_symbolic).
 
 % An unknown extent is a kernel parameter: one source and one program for every size, and a
 % run binds the extents from its data in a scope undone after it.
@@ -491,10 +491,10 @@ test(one_program_for_every_size, [timeout(120), forall(opencl_device(D, _))]) :-
           ( numlist(1, Size, Xs), eval(Y, [X-Xs], Ref), run(Y, [X-Xs], V, [device(D)]), near(Ref, V) )),
    % the program run builds, by its source, not a count of every program: other units build
    % theirs concurrently
-   compile2:device(D, Device, Context, _), compile2:device_options(Device, Derived),
+   compile:device(D, Device, Context, _), compile:device_options(Device, Derived),
    merge_options([device(D)], Derived, Options),
    kernels(Y, Options, RunKs), source(RunKs, RunSrc),
-   aggregate_all(count, compile2:program_state(Context, RunSrc, _), 1),
+   aggregate_all(count, compile:program_state(Context, RunSrc, _), 1),
    var(N).
 
 % A reduction in groups over an unknown row length, the rows counted by another input.
@@ -546,9 +546,9 @@ test(undetermined_extent, [timeout(120), throws(error(existence_error(extent_val
    over([I:N], [Y[I] := X[I, 0]]),
    numlist(1, 12, Xs), run(Y, [X-Xs], _, []).
 
-:- end_tests(compile2_symbolic).
+:- end_tests(compile_symbolic).
 
-:- begin_tests(compile2_permutation).
+:- begin_tests(compile_permutation).
 
 % A scatter through a permutation keeps its axis parallel: a kernel of work items, no atomics.
 test(scatter_through_a_permutation_is_parallel, [timeout(120), forall(opencl_device(D, _))]) :-
@@ -566,9 +566,9 @@ test(bits_of_floats, [timeout(120), forall(opencl_device(D, _))]) :-
    eval(B, [X-Xs], Ref), run(B, [X-Xs], V, [device(D)]),
    Ref == [1065353216, -1073741824, 1056964608, 0], V == Ref.
 
-:- end_tests(compile2_permutation).
+:- end_tests(compile_permutation).
 
-:- begin_tests(compile2_alloc).
+:- begin_tests(compile_alloc).
 
 % A name lives from the first kernel mentioning it to the last, and across the whole of a
 % host loop it is mentioned in.
@@ -586,7 +586,7 @@ test(loop_names_live_across_the_loop, [timeout(60)]) :-
 % are apart.
 test(packing_reaches_the_peak, [timeout(10), true(Bytes == 250)]) :-
    Bufs = [buffer(1, 0, 2, 100, _), buffer(2, 1, 3, 100, _), buffer(3, 2, 4, 100, _), buffer(4, 0, 4, 50, _)],
-   compile2:packing(Bufs, 50, 250, Bytes),
+   compile:packing(Bufs, 50, 250, Bytes),
    forall(( member(buffer(I, S1, E1, Z1, O1), Bufs), member(buffer(J, S2, E2, Z2, O2), Bufs), I < J, S1 < E2, S2 < E1 ),
           ( O1 + Z1 =< O2 ; O2 + Z2 =< O1 )).
 
@@ -596,20 +596,20 @@ test(vit_intermediates_share_an_arena, [timeout(120), forall(opencl_device(D, De
    S = 16, Dm = 32, H = 2, F = 64, Opts = [tile([8, 8]), group(2), stage(8), local(32), items(8), lanes(2)],
    vit_block(X, Y, S, Dm, H, F),
    kernels(Y, Opts, Ks),
-   compile2:device(D, Dev, Context, Queue),
+   compile:device(D, Dev, Context, Queue),
    allocate(Context, Queue, Dev, Ks, Y, [], Opts, Alloc),
    alloc{buffers: Buffers, arena: Arena, bytes: B, apart: Ap, peak: Pk} :< Alloc,
    Arena \== none, Pk =< B, B < Ap,
-   length(Buffers, NB), compile2:flat_plan(Ks, Flat),
+   length(Buffers, NB), compile:flat_plan(Ks, Flat),
    foldl([K, Ns0, Ns]>>(get_dict(names, K, N1), append(Ns0, N1, Ns)), Flat, [], Names0),
    sort(Names0, Names), length(Names, NB),
-   compile2:program(Y, Boxes), bench2:names(Boxes, Names1),
-   include([N]>>(N \== Y, compile2:boxes_of(N, [])), Names1, Inputs),
-   maplist([N, N-Vs]>>( shape(N, Sh), compile2:size(Sh, Len), numlist(1, Len, Is),
+   compile:program(Y, Boxes), compile:names(Boxes, Names1),
+   include([N]>>(N \== Y, compile:boxes_of(N, [])), Names1, Inputs),
+   maplist([N, N-Vs]>>( shape(N, Sh), compile:size(Sh, Len), numlist(1, Len, Is),
                         maplist([I, V]>>(V is ((I * 7) mod 23) / 23 - 0.5), Is, Vs) ), Inputs, Data),
    eval(Y, Data, Ref),
    run(Y, Data, V1, [device(D), alloc(arena) | Opts]), near(Ref, V1),
    run(Y, Data, V2, [device(D), alloc(separate) | Opts]), near(Ref, V2),
    shape(X, _).
 
-:- end_tests(compile2_alloc).
+:- end_tests(compile_alloc).
