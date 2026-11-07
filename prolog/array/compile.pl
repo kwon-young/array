@@ -6,7 +6,7 @@
 :- use_module(buffer).
 :- use_module(minimalloc).
 :- use_module(reference).
-:- discontiguous items_code/6.
+:- discontiguous items_code/6, chains/8, kernel_source/3.
 
 % The pipeline, from the boxes of core to OpenCL:
 %   program:  the boxes an output depends on, each after the boxes it reads;
